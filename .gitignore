@@ -1,0 +1,64 @@
+# Build artefacts
+build/
+build-*/
+out/
+cmake-build-*/
+
+# CMake user files
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+Makefile
+
+# Compiled object / binary outputs
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+ntm-server
+ntm-client
+ntm-monitor
+
+# Local IP database cache (downloaded at runtime)
+*.tsv
+*.tsv.gz
+ip2asn-*.tsv*
+
+# Local config / secrets (the .example files are tracked, real configs are not)
+*.conf
+allowed_clients.txt
+allowed_monitors.txt
+*_key.pem
+*_cert.pem
+*.pem
+identity_*
+
+# Editor / IDE noise
+.vscode/
+.idea/
+.cache/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Coverage / profiling
+*.gcno
+*.gcda
+*.gcov
+coverage/
+*.profraw
+*.profdata
+
+# Cursor agent local working files
+.cursor/
+
+# Misc OS noise
+Thumbs.db

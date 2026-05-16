@@ -1,0 +1,19 @@
+# Example allowlist for ntm-server monitor authentication (Ed25519)
+#
+# Used when starting ntm-server with:
+#   --monitor-allowed-keys /path/to/allowed_monitors.txt
+#
+# Format is identical to allowed_clients.txt:
+# - One 64-character hex public key per line (32 bytes).
+# - Blank lines are allowed.
+# - Lines starting with '#' are comments.
+#
+# Generate a keypair on the monitoring host:
+#   openssl genpkey -algorithm ED25519 -out monitor_private.pem
+#
+# Derive the public key hex line to paste here:
+#   openssl pkey -in monitor_private.pem -pubout -outform DER | tail -c 32 | xxd -p -c 0
+
+# monitor-host-01
+cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+

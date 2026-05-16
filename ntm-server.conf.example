@@ -1,0 +1,93 @@
+# ntm-server: single config file (key=value, # comment)
+# Usage: ntm-server --config /path/to/this/file
+# All keys are optional; defaults apply when omitted or when not using --config.
+# Command-line options (--port, --monitor-port, --allowed-keys, --cert, --key, --require-tls) override these when set.
+
+# Listen port (1-65535). Default 5555.
+# port=5555
+
+# Monitor port (1-65535). Used by standalone monitoring process that sends IFACE_SUMMARY. Default 5556.
+# monitor_port=5556
+
+# Monitor bind address (IPv4). Default 127.0.0.1 (local-only).
+# Set to empty or 0.0.0.0 to listen on all interfaces (not recommended).
+# monitor_bind=127.0.0.1
+
+# Path to file with allowed Ed25519 public keys (one 64-char hex line per client). Empty = no auth.
+# allowed_keys=/path/to/allowed_clients.txt
+
+# Path to file with allowed Ed25519 public keys for monitor connections (one 64-char hex line per monitor).
+# Empty = no monitor auth (not recommended if monitor_bind is not 127.0.0.1).
+# monitor_allowed_keys=/path/to/allowed_monitors.txt
+
+# TLS: server certificate and private key (PEM). Omit or leave empty for plain TCP.
+# cert=/path/to/server_cert.pem
+# key=/path/to/server_key.pem
+
+# Require TLS for all connections: true/yes/1 or false/no/0. Default false.
+# require_tls=false
+
+# Require TLS for monitor connections: true/yes/1 or false/no/0. Default false.
+# require_tls_monitor=false
+
+# Monitor endpoint limits.
+# Max IFACE_SUMMARY requests per second per connection (1-1000). Default 5.
+# max_monitor_summaries_per_second_per_connection=5
+#
+# Cap IFACE lines returned in IFACE_SUMMARY (1000-2000000). Default 200000.
+# max_iface_lines_in_summary=200000
+#
+# Cap total IFACE_SUMMARY response size in bytes (4096-33554432). Default 4194304.
+# When exceeded, server returns TRUNCATED then END.
+# max_summary_bytes=4194304
+
+# Rolling aggregation window in days (1-365). When window+1 days exist, only the oldest day is dropped.
+aggregation_window_days=7
+
+# IP -> Country / ASN database (replaces libmaxminddb / GeoLite2).
+# Data source: iptoasn.com (CC0 public domain). The file is the gzipped TSV
+# combined v4+v6 dump containing range_start, range_end, ASN, country code and
+# AS description. The server keeps a local cache at ip_db_path and automatically
+# re-downloads it every ip_db_update_interval_days if ip_db_auto_update=true.
+# The local cache directory will be created if it does not exist (assuming the
+# server user has write permission).
+ip_db_path=/var/lib/ntm-server/ip2asn-combined.tsv.gz
+ip_db_url=https://iptoasn.com/data/ip2asn-combined.tsv.gz
+ip_db_update_interval_days=7
+ip_db_auto_update=true
+
+# Per-connection receive buffer cap in bytes; connection closed if exceeded (4096-16M).
+max_recv_buffer_bytes=1048576
+
+# Per (client|iface) per day: max flow entries; evict smallest by bytes when over (100-1000000).
+max_flow_entries_per_key=100000
+max_entity_flow_entries_per_key=100000
+
+# Per client: hard cap on the number of distinct iface names accepted. New ifaces
+# beyond this count are rejected and counted; the cap persists across the rolling
+# window so a client cannot drain its quota at midnight (1-100000).
+max_ifaces_per_client=256
+
+# IFACE_SUMMARY response: max ENTITY lines returned (100-1000000).
+max_entity_lines_in_summary=50000
+
+# Stderr printer: skip per-interface flow/entity detail when snapshot has more than this many entries (1000-2000000).
+max_snapshot_entries_for_print=200000
+
+# D line field max length: iface (8-256), src_ip/dst_ip (15-64). Lines with longer fields are rejected.
+max_iface_len=64
+max_ip_len=50
+
+# Connection limits: global concurrent connections (10-100000), per-IP concurrent (1-1000).
+max_concurrent_connections=1000
+max_connections_per_ip=20
+
+# Monitor connection limits (separate from client ingestion). Defaults: 200 and 20.
+# max_concurrent_monitor_connections=200
+# max_monitor_connections_per_ip=20
+
+# Idle timeout: close connection after this many seconds without receiving data (10-86400).
+idle_timeout_seconds=300
+
+# Per-connection D line rate limit: max D lines processed per second; excess dropped (100-1000000).
+max_d_lines_per_second_per_connection=20000

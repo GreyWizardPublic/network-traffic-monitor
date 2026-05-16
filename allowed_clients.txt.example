@@ -1,0 +1,19 @@
+# Example allowlist for ntm-server client authentication (Ed25519)
+#
+# Format:
+# - One 64-character hex public key per line (32 bytes).
+# - Blank lines are allowed.
+# - Lines starting with '#' are comments.
+#
+# Generate a keypair on the client:
+#   openssl genpkey -algorithm ED25519 -out client_private.pem
+#
+# Derive the public key hex line to paste here:
+#   openssl pkey -in client_private.pem -pubout -outform DER | tail -c 32 | xxd -p -c 0
+
+# sensor-01
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+# sensor-02
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+

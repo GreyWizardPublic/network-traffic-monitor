@@ -1,0 +1,22 @@
+# ntm-client: single config file (key=value, # comment)
+# Usage: ntm-client --config /path/to/this/file
+# All keys are optional; defaults apply when omitted or when not using --config.
+# Command-line options (--server, --port, --identity, --ca, --server-cert, etc.) override these when set.
+
+# Server host to connect to. Default 127.0.0.1.
+server=127.0.0.1
+
+# Server port (1-65535). Default 5555.
+port=5555
+
+# Path to Ed25519 client private key PEM (for authentication). Omit or leave empty for no auth.
+# identity=/path/to/client_private.pem
+
+# TLS: path to CA bundle (PEM) to verify server certificate. Omit or leave empty to skip CA verification (or use server_cert).
+# ca=/path/to/ca.pem
+
+# TLS: path to server certificate (PEM) for pinning. Omit or leave empty to use CA or plain TCP.
+# server_cert=/path/to/server_cert.pem
+
+# Send buffer size in bytes; clamped to 4096-2097152. Default 524288.
+send_buffer_bytes=524288
