@@ -1,0 +1,78 @@
+# ntm-server systemd service unit example
+#
+# Installation:
+#   sudo cp ntm-server.service.example /etc/systemd/system/ntm-server.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now ntm-server
+#
+# Prerequisites:
+#   - Binary installed at /usr/local/bin/ntm-server
+#   - Config file at /etc/ntmserver/ntm-server.conf
+#   - Dedicated unprivileged user and group created:
+#       sudo useradd -r -s /sbin/nologin -d /var/lib/ntmserver ntmserver
+#   - Directories created and ownership set:
+#       sudo mkdir -p /etc/ntmserver /var/lib/ntmserver
+#       sudo chown -R ntmserver:ntmserver /etc/ntmserver /var/lib/ntmserver
+#       sudo chmod 640 /etc/ntmserver/server_key.pem
+#
+# See SERVER_DEPLOYMENT.md for full setup instructions.
+
+[Unit]
+Description=Network Monitor Server Daemon
+After=network.target
+
+[Service]
+User=ntmserver
+Group=ntmserver
+
+ExecStart=/usr/local/bin/ntm-server --config /etc/ntmserver/ntm-server.conf
+
+# Uncomment if the server needs raw packet capture capabilities on the ingestion
+# host itself (not normally required; ntm-client handles capture on client machines).
+#AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+#CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+
+ReadWritePaths=/var/lib/ntmserver
+WorkingDirectory=/var/lib/ntmserver
+RuntimeDirectory=ntmserver
+StateDirectory=ntmserver
+LogsDirectory=ntmserver
+
+Restart=always
+
+# ── Security hardening ────────────────────────────────────────────────────────
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+# MemoryDenyWriteExecute must NOT be enabled. OpenSSL uses mprotect() internally
+# for hardware-accelerated ciphers (AES-NI etc.), which this option blocks with
+# EPERM. That causes the HTTPS SSL context to fail initialisation and the web
+# dashboard to be silently disabled while the ingestion port continues running.
+# MemoryDenyWriteExecute=true   # <-- do not uncomment
+
+PrivateDevices=true
+
+# PrivateUsers must NOT be enabled. It creates a user namespace that interferes
+# with OpenSSL privilege checks and socket operations, producing the same silent
+# dashboard failure as MemoryDenyWriteExecute. It is also redundant here because
+# the service already runs as the unprivileged dedicated user ntmserver.
+# PrivateUsers=true   # <-- do not uncomment
+
+ProtectProc=invisible
+ProcSubset=pid
+
+# Restrict the service to the socket address families it actually needs.
+# This provides equivalent attack-surface reduction to PrivateUsers without
+# breaking TLS.
+RestrictAddressFamilies=AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

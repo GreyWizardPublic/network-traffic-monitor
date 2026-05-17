@@ -230,7 +230,23 @@ sudo tail -f /var/log/daemon.log    # traditional syslog
 
 ## 9. systemd service unit
 
-Create `/etc/systemd/system/ntm-server.service`:
+An annotated example unit file is provided at `ntm-server.service.example` in the project
+root. Copy and adapt it:
+
+```bash
+sudo cp ntm-server.service.example /etc/systemd/system/ntm-server.service
+```
+
+The example below documents the key options. Two common hardening options —
+`MemoryDenyWriteExecute` and `PrivateUsers` — are explicitly **not** enabled because both
+silently break HTTPS: OpenSSL's TLS implementation uses `mprotect()` internally for
+hardware-accelerated ciphers (AES-NI etc.), which `MemoryDenyWriteExecute` blocks with
+`EPERM`, causing the SSL context to fail initialisation and the web dashboard to be disabled
+while the ingestion port continues running. `PrivateUsers` causes the same failure via user
+namespace interference with OpenSSL socket operations. `RestrictAddressFamilies` is used
+instead to provide equivalent attack-surface reduction without breaking TLS.
+
+Full contents of `/etc/systemd/system/ntm-server.service`:
 
 ```ini
 [Unit]
