@@ -387,40 +387,60 @@ The server enforces protocol and resource limits to reduce abuse and DoS:
 
 ## Multi-LAN deployments
 
-When multiple `ntm-client` instances run on physically **separate LANs** that happen
-to share overlapping RFC 1918 address space (e.g. both networks use `192.168.1.x`),
-the server correctly distinguishes devices across networks without any additional
-configuration.
+When multiple `ntm-client` instances run across different networks, the server uses
+each client's **external (WAN) IP address** to group them into physical LANs.
+Two clients that share the same external IP are considered co-located on the same
+physical network; clients with different external IPs are treated as separate LANs
+even if their RFC 1918 address spaces overlap.
 
-### How client identification works
+### How LAN grouping works
 
-After authentication each client announces all its interface addresses to the server
-with `A ip\n` protocol lines. The server registers every announced IP → stable client
-ID mapping. At ingest time:
+On connect (and on every network change), each client:
+
+1. Queries its external IP via a plain HTTP GET to a configurable URL
+   (default: `http://checkip.amazonaws.com/`). If no LAN interface exists the check
+   is skipped; if the check fails the external IP is recorded as `null`.
+2. Sends an `X {ip|null}` announce line, followed by one `A ip` line per LAN
+   interface address.
+
+The server uses the external IP as a **scope** in entity keys for unidentified LAN
+devices:
 
 | Source/destination IP | Stored entity key |
 |---|---|
 | Client's own announced IP | 64-char hex client ID |
-| Unknown device on client's LAN | `@{reporterClientId}:{ip}` |
+| Unknown device on client's LAN | `@[{externalIp}]:{lanIp}` |
+| No internet reachable | `@[null]:{lanIp}` |
 | Public / external IP | ASN + organisation string |
 
-The `@reporter:ip` prefix makes each entity key globally unique: `@aabbcc...:192.168.1.20`
-and `@ddeeff...:192.168.1.20` are separate keys even though the device IP is identical.
+Two clients behind the **same NAT** share the same external IP, so an unknown device
+seen by both generates identical keys and is merged automatically in traffic statistics.
+Two clients on **different LANs** have different external IPs, so `@[1.2.3.4]:192.168.1.20`
+and `@[5.6.7.8]:192.168.1.20` are kept separate even though the device IP is identical.
 
 ### Dashboard display
 
-- **Entity Summary tab** — unknown LAN devices from client A appear as `LAN (ClientA-name)`,
-  those from client B appear as `LAN (ClientB-name)`. Traffic attributed to a known
-  client's own IP shows the client nickname directly.
-- **LAN Detail tab** — lists every unidentified LAN device with its raw IP, a
-  **"Reported by"** column showing which NTM client observed it, and in/out byte totals.
-  Same IP on different physical LANs appears as separate rows with different reporters.
+- **Entity Summary tab** — unknown LAN devices appear as `LAN (x.x.x.x)` where
+  `x.x.x.x` is the shared external IP. If internet was unreachable they appear as
+  `LAN (no internet)`. Known client IPs show the client nickname directly.
+- **LAN Detail tab** — lists every unidentified LAN device with its raw IP, the
+  **"Reported by"** column showing the external IP scope, and in/out byte totals.
+  Devices behind the same NAT are merged into a single row regardless of how many
+  clients reported them.
 
-### Redundant reporters (same physical LAN, two clients)
+### Clients with no internet access
 
-If two NTM clients on the **same** physical network both observe the same unknown device,
-that device appears as two separate LAN Detail rows — one per reporting client. This is
-expected behaviour in redundant-monitoring setups.
+If `external_ip_url` is unreachable, the client sends `X null`. All devices seen
+through clients that cannot reach the internet share the `@[null]:ip` scope in
+traffic statistics and appear as `LAN (no internet)` in the dashboard.
+
+### Dynamic network changes
+
+`ntm-client` watches for interface changes (Linux: RTNETLINK; fallback: 30 s polling).
+On any change it immediately re-announces with a fresh external IP check. The server
+atomically resets the client's registry state on receipt of a new `X` line so that
+stale LAN IPs from a previous network (e.g. a Wi-Fi roam or VPN connect) are never
+misattributed.
 
 ## Limitations & Notes
 

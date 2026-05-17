@@ -139,19 +139,17 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
             if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
         return true;
     };
-    // Detects reporter-scoped LAN keys produced at ingest time: "@{64-hex}:{ip}".
-    // These encode which NTM client reported the traffic so that the same RFC 1918
-    // address on two physically separate LANs is never conflated in storage.
+    // Detects external-IP-scoped LAN keys produced at ingest time: "@[{scope}]:{ip}".
+    // scope is the client's public WAN IP (or "null" when unreachable).
+    // Clients behind the same NAT share the same scope → their unknown devices merge.
     auto parseReporterScoped = [](const std::string &s,
-                                   std::string *reporterHex = nullptr,
+                                   std::string *scope = nullptr,
                                    std::string *lanIp = nullptr) -> bool {
-        if (s.size() < 67 || s[0] != '@' || s[65] != ':') return false;
-        for (std::size_t i = 1; i <= 64; ++i) {
-            char c = s[i];
-            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
-        }
-        if (reporterHex) *reporterHex = s.substr(1, 64);
-        if (lanIp)       *lanIp       = s.substr(66);
+        if (s.size() < 5 || s[0] != '@' || s[1] != '[') return false;
+        auto cb = s.find(']', 2);
+        if (cb == std::string::npos || cb + 1 >= s.size() || s[cb + 1] != ':') return false;
+        if (scope) *scope  = s.substr(2, cb - 2);
+        if (lanIp) *lanIp  = s.substr(cb + 2);
         return true;
     };
     auto displayClient = [&nicknames, &isHexClientId](const std::string &s) -> std::string {
@@ -166,13 +164,12 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
             auto it = nicknames.find(s);
             return it != nicknames.end() ? it->second : s;
         }
-        // Reporter-scoped unknown LAN device: "@{reporterHex}:{ip}"
-        // Show as "LAN (ClientName)" so multi-LAN deployments can tell networks apart.
-        std::string reporterHex;
-        if (parseReporterScoped(s, &reporterHex)) {
-            auto it = nicknames.find(reporterHex);
-            std::string name = (it != nicknames.end()) ? it->second : reporterHex.substr(0, 8) + "...";
-            return "LAN (" + name + ")";
+        // External-IP-scoped unknown LAN device: "@[{scope}]:{ip}"
+        // scope is the shared WAN IP; "null" means no internet was reachable.
+        std::string scope;
+        if (parseReporterScoped(s, &scope)) {
+            if (scope == "null") return "LAN (no internet)";
+            return "LAN (" + scope + ")";
         }
         if (isLanIP(s)) return "Local Devices";
         return s;
@@ -335,11 +332,10 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
     for (const auto &r : lanRows)
     {
         if (!first) j += ',';
-        // Parse reporter-scoped key "@{hex}:{ip}" if present; fall back to raw IP.
-        std::string displayIp, reportedBy, reporterHex;
-        if (parseReporterScoped(r.ip, &reporterHex, &displayIp)) {
-            auto it = nicknames.find(reporterHex);
-            reportedBy = (it != nicknames.end()) ? it->second : reporterHex.substr(0, 8) + "...";
+        // Parse external-IP-scoped key "@[{scope}]:{ip}" if present; fall back to raw IP.
+        std::string displayIp, reportedBy, scope;
+        if (parseReporterScoped(r.ip, &scope, &displayIp)) {
+            reportedBy = (scope == "null") ? "no internet" : scope;
         } else {
             displayIp  = r.ip;
             reportedBy = "";

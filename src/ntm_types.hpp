@@ -52,22 +52,24 @@ inline bool isLanIP(const std::string &ip)
     return false;
 }
 
-// Shared registry: maps a client's LAN IP string to its Ed25519 hex client ID.
-// Written by connectionThread on each successful authentication; read by connectionThread
-// workers (via local snapshot) to resolve LAN IPs to stable client IDs at ingest time.
-// Entries are never removed so that old IPs continue resolving correctly across reconnects.
+// Shared registry: maps a client's LAN IP to its Ed25519 hex client ID, and tracks
+// each client's external (WAN) IP for LAN-group scoping of unknown LAN devices.
+// Written by connectionThread on auth and on X/A announce lines; read via local
+// snapshots in the data-processing hot path.
 struct ClientRegistry
 {
     mutable std::mutex mtx;
-    std::unordered_map<std::string, std::string> ipToClientId;
+    std::unordered_map<std::string, std::string> ipToClientId;      // LAN IP → hex clientId
+    std::unordered_map<std::string, std::string> clientToExternalIp; // hex clientId → external IP or "null"
 
-    // Remove all IP entries belonging to clientId (called on session end).
+    // Remove all entries for clientId (called on session end and on X-line re-announce).
     void removeClient(const std::string &clientId)
     {
         if (clientId.empty()) return;
         std::lock_guard<std::mutex> lk(mtx);
         for (auto it = ipToClientId.begin(); it != ipToClientId.end(); )
             it = (it->second == clientId) ? ipToClientId.erase(it) : std::next(it);
+        clientToExternalIp.erase(clientId);
     }
 };
 

@@ -934,7 +934,12 @@ void connectionThread(int clientFd,
     std::string buffer;
     buffer.reserve(4096);
 
-    std::size_t announcedCount = 0;  // number of A-line addresses registered this session
+    std::size_t announcedCount = 0;  // number of A-line addresses registered this announce round
+
+    // External IP scope for unknown LAN devices: set when the client sends an X line.
+    // Until then defaults to "null" (shows as "LAN (no internet)" in dashboard).
+    std::string localExternalIp = kExtIPNull;
+    std::int64_t lastXLineSec = -1;  // epoch-seconds of last accepted X line (rate-limit)
 
     // Local snapshot of the shared IP→clientId registry. Refreshed every 5 seconds
     // so we can resolve LAN IPs to stable hex client IDs in the hot data path without
@@ -975,6 +980,9 @@ void connectionThread(int clientFd,
         {
             std::lock_guard<std::mutex> lk(registry->mtx);
             localRegSnap = registry->ipToClientId;
+            auto eit = registry->clientToExternalIp.find(clientId);
+            if (eit != registry->clientToExternalIp.end())
+                localExternalIp = eit->second;
             lastRegRefresh = now;
         }
 
@@ -1016,7 +1024,56 @@ void connectionThread(int clientFd,
             std::string line = buffer.substr(pos, nl - pos);
             pos = nl + 1;
 
-            if (line.rfind(kAddrLinePrefix, 0) == 0)
+            if (line.rfind(kExtIPLinePrefix, 0) == 0)
+            {
+                // External IP announce: "X {ip|null}" — must arrive before A lines.
+                // Rate-limited to one accepted X per 30 s to resist replay / flood.
+                auto nowSecX = std::chrono::duration_cast<std::chrono::seconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count();
+                if (nowSecX - lastXLineSec >= 30)
+                {
+                    std::string extIp = line.substr(2);
+                    while (!extIp.empty() && (extIp.back() == '\r' || extIp.back() == ' '))
+                        extIp.pop_back();
+                    bool valid = (extIp == kExtIPNull);
+                    if (!valid)
+                    {
+                        struct in_addr a4{};
+                        struct in6_addr a6{};
+                        valid = (::inet_pton(AF_INET,  extIp.c_str(), &a4) == 1 ||
+                                 ::inet_pton(AF_INET6, extIp.c_str(), &a6) == 1);
+                    }
+                    if (valid && registry)
+                    {
+                        lastXLineSec = nowSecX;
+                        // Atomically reset client state: remove all stale IP mappings,
+                        // then re-register the TCP connection IP and new external IP scope.
+                        {
+                            std::lock_guard<std::mutex> lk(registry->mtx);
+                            for (auto it = registry->ipToClientId.begin();
+                                 it != registry->ipToClientId.end(); )
+                                it = (it->second == clientId)
+                                     ? registry->ipToClientId.erase(it)
+                                     : std::next(it);
+                            registry->clientToExternalIp.erase(clientId);
+                            if (!clientIp.empty())
+                                registry->ipToClientId[clientIp] = clientId;
+                            registry->clientToExternalIp[clientId] = extIp;
+                        }
+                        announcedCount = 0;
+                        {
+                            std::lock_guard<std::mutex> lk(registry->mtx);
+                            localRegSnap = registry->ipToClientId;
+                        }
+                        localExternalIp = extIp;
+                        lastRegRefresh = std::chrono::steady_clock::now();
+                        serverLog(LogLevel::Info,
+                                  "ntm-server: client %s external IP: %s",
+                                  clientId.c_str(), extIp.c_str());
+                    }
+                }
+            }
+            else if (line.rfind(kAddrLinePrefix, 0) == 0)
             {
                 // Address announce: "A ip_address" — register this LAN IP → clientId.
                 // The client sends one line per interface address right after auth.
@@ -1068,11 +1125,11 @@ void connectionThread(int clientFd,
                     // "@{reporterClientId}:{ip}" so that the same RFC 1918 address appearing
                     // on two different physical LANs is never conflated in TrafficStats.
                     // External IPs use the ASN entity resolver.
-                    auto entityForIp = [&resolver, &localRegSnap, &clientId](const std::string &ip) -> std::string {
+                    auto entityForIp = [&resolver, &localRegSnap, &localExternalIp](const std::string &ip) -> std::string {
                         if (isLanIP(ip)) {
                             auto it = localRegSnap.find(ip);
-                            if (it != localRegSnap.end()) return it->second; // known client → hex ID
-                            return "@" + clientId + ":" + ip;                 // unknown LAN → reporter-scoped key
+                            if (it != localRegSnap.end()) return it->second;
+                            return "@[" + localExternalIp + "]:" + ip;
                         }
                         return resolver ? resolver->entityFor(ip)
                                        : std::string(IPRangeResolver::kUnknownEntity);

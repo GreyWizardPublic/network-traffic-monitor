@@ -30,17 +30,28 @@ inline constexpr std::size_t kAuthSignPrefixV2Len = sizeof(kAuthSignPrefixV2) - 
 
 // Simple line-based data protocol:
 // "D iface src_ip dst_ip bytes\n"      — packet metadata (main data stream)
-// "A ip_address\n"                     — address announce: one LAN IP per line,
-//                                        sent by the client immediately after auth
-//                                        so the server can attribute traffic from
-//                                        all of the client's interfaces (IPv4 and
-//                                        IPv6) to this client's stable ID.
+// "X {ip|null}\n"                      — external (WAN) IP announce: sent once per
+//                                        announce round, BEFORE all A lines. ip is
+//                                        the client's public internet-facing IP as
+//                                        seen by an external check service, or the
+//                                        literal "null" when unreachable. Each X line
+//                                        atomically resets the client's registry state
+//                                        on the server (old LAN IPs discarded).
+//                                        Clients sharing the same external IP are
+//                                        considered on the same physical LAN.
+// "A ip_address\n"                     — LAN address announce: one line per interface
+//                                        address, sent after the X line. Allows the
+//                                        server to attribute traffic from all of the
+//                                        client's interfaces to this client's stable ID.
 //
+// Clients re-send X + A lines on any network change and every 6 hours.
 // Fields are separated by single spaces, no spaces inside fields.
-inline constexpr char kDataLinePrefix[] = "D ";
-inline constexpr char kAddrLinePrefix[] = "A ";
+inline constexpr char kExtIPLinePrefix[] = "X ";
+inline constexpr char kExtIPNull[]       = "null";   // sentinel: external IP unreachable
+inline constexpr char kDataLinePrefix[]  = "D ";
+inline constexpr char kAddrLinePrefix[]  = "A ";
 
-// Maximum address-announce lines the server will accept per session.
+// Maximum address-announce lines the server will accept per announce round.
 inline constexpr std::size_t kMaxAnnounceAddressesPerSession = 64;
 
 struct PacketMeta

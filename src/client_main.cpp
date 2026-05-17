@@ -136,6 +136,12 @@ int main(int argc, char *argv[])
                   << ")\n";
     }
 
-    return ntm::runClient(host, port, daemonMode, identityPath, tlsCaPath, tlsServerCertPath, opts.sendBufferBytes, opts.verbose);
+    // Copy CLI overrides back into opts so runClient sees the merged final config.
+    opts.server            = host;
+    opts.port              = port;
+    opts.identityPath      = identityPath;
+    opts.tlsCaPath         = tlsCaPath;
+    opts.tlsServerCertPath = tlsServerCertPath;
+    return ntm::runClient(daemonMode, opts);
 }
 

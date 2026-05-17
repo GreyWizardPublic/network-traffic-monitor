@@ -9,7 +9,11 @@
 
 #include <arpa/inet.h>
 #include <ifaddrs.h>
+#include <linux/netlink.h>
+#include <linux/rtnetlink.h>
+#include <netdb.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -365,6 +369,260 @@ inline constexpr std::size_t kSendBufferMinBytes = 4096;
 inline constexpr std::size_t kMaxConfigLineLen = 8192;
 inline constexpr std::size_t kMaxConfigValueLen = 2048;
 
+// ---------------------------------------------------------------------------
+// LAN address helpers (file-scope; shared by sendAnnounce and NetworkMonitor)
+// ---------------------------------------------------------------------------
+
+static bool isLanAddrV4(const struct in_addr &a)
+{
+    std::uint32_t n = ntohl(a.s_addr);
+    return ((n & 0xFF000000u) == 0x7F000000u) ||  // 127.0.0.0/8
+           ((n & 0xFF000000u) == 0x0A000000u) ||  // 10.0.0.0/8
+           ((n & 0xFFF00000u) == 0xAC100000u) ||  // 172.16.0.0/12
+           ((n & 0xFFFF0000u) == 0xC0A80000u);    // 192.168.0.0/16
+}
+
+static bool isLanAddrV6(const struct in6_addr &a)
+{
+    static const std::uint8_t lo6[16] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1};
+    if (std::memcmp(&a, lo6, 16) == 0) return true;       // ::1
+    if ((a.s6_addr[0] & 0xFEu) == 0xFCu) return true;    // fc00::/7 ULA
+    if (a.s6_addr[0] == 0xFEu &&
+        (a.s6_addr[1] & 0xC0u) == 0x80u) return true;    // fe80::/10 link-local
+    return false;
+}
+
+// Collect all LAN IPv4/IPv6 addresses from all interfaces. Returns an empty set on failure.
+static std::unordered_set<std::string> collectLanAddresses()
+{
+    std::unordered_set<std::string> result;
+    struct ifaddrs *ifap = nullptr;
+    if (::getifaddrs(&ifap) != 0) return result;
+    char buf[INET6_ADDRSTRLEN];
+    for (struct ifaddrs *ifa = ifap; ifa; ifa = ifa->ifa_next)
+    {
+        if (!ifa->ifa_addr) continue;
+        if (ifa->ifa_addr->sa_family == AF_INET)
+        {
+            auto *sa4 = reinterpret_cast<struct sockaddr_in *>(ifa->ifa_addr);
+            if (!isLanAddrV4(sa4->sin_addr)) continue;
+            if (!::inet_ntop(AF_INET, &sa4->sin_addr, buf, sizeof(buf))) continue;
+            result.insert(buf);
+        }
+        else if (ifa->ifa_addr->sa_family == AF_INET6)
+        {
+            auto *sa6 = reinterpret_cast<struct sockaddr_in6 *>(ifa->ifa_addr);
+            if (!isLanAddrV6(sa6->sin6_addr)) continue;
+            if (!::inet_ntop(AF_INET6, &sa6->sin6_addr, buf, sizeof(buf))) continue;
+            result.insert(buf);
+        }
+    }
+    ::freeifaddrs(ifap);
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// External IP resolver
+// ---------------------------------------------------------------------------
+
+// Query external (WAN) IP via a plain HTTP GET to url. Returns validated IP string
+// or empty string on any failure (timeout, parse error, non-IP response body).
+// Only plain HTTP is supported — no HTTPS dependency on the client binary.
+static std::string queryExternalIP(const std::string &url, unsigned timeoutMs)
+{
+    // Parse "http://host[:port]/path"
+    if (url.size() < 8 || url.substr(0, 7) != "http://") return {};
+    std::string rest = url.substr(7);
+    auto slashPos = rest.find('/');
+    std::string hostPort = (slashPos == std::string::npos) ? rest : rest.substr(0, slashPos);
+    std::string path     = (slashPos == std::string::npos) ? "/" : rest.substr(slashPos);
+
+    std::string host;
+    std::string portStr = "80";
+    auto colonPos = hostPort.rfind(':');
+    if (colonPos != std::string::npos) {
+        host    = hostPort.substr(0, colonPos);
+        portStr = hostPort.substr(colonPos + 1);
+    } else {
+        host = hostPort;
+    }
+    if (host.empty()) return {};
+
+    // DNS resolve
+    struct addrinfo hints{};
+    hints.ai_family   = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    struct addrinfo *res = nullptr;
+    if (::getaddrinfo(host.c_str(), portStr.c_str(), &hints, &res) != 0 || !res)
+        return {};
+
+    int fd = ::socket(res->ai_family, SOCK_STREAM, 0);
+    if (fd < 0) { ::freeaddrinfo(res); return {}; }
+
+    // Non-blocking connect with poll-based timeout
+    int flags = ::fcntl(fd, F_GETFL, 0);
+    ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    int cr = ::connect(fd, res->ai_addr, res->ai_addrlen);
+    ::freeaddrinfo(res);
+
+    if (cr != 0 && errno != EINPROGRESS) { ::close(fd); return {}; }
+    if (cr != 0)
+    {
+        struct pollfd pfd{fd, POLLOUT, 0};
+        int pr = ::poll(&pfd, 1, static_cast<int>(timeoutMs));
+        if (pr <= 0) { ::close(fd); return {}; }
+        int err = 0; socklen_t elen = sizeof(err);
+        ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &elen);
+        if (err != 0) { ::close(fd); return {}; }
+    }
+
+    // Restore blocking; set recv timeout
+    ::fcntl(fd, F_SETFL, flags);
+    struct timeval tv{ static_cast<time_t>(timeoutMs / 1000),
+                       static_cast<suseconds_t>((timeoutMs % 1000) * 1000) };
+    ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+    // Send HTTP/1.0 request (no keep-alive; server closes after response)
+    std::string req = "GET " + path + " HTTP/1.0\r\nHost: " + host + "\r\nConnection: close\r\n\r\n";
+    if (::send(fd, req.c_str(), req.size(), MSG_NOSIGNAL) < 0) { ::close(fd); return {}; }
+
+    // Read response (bounded to 4 KiB)
+    std::string response;
+    response.reserve(512);
+    char rbuf[512];
+    ssize_t n;
+    while ((n = ::recv(fd, rbuf, sizeof(rbuf), 0)) > 0)
+    {
+        response.append(rbuf, static_cast<std::size_t>(n));
+        if (response.size() > 4096) break;
+    }
+    ::close(fd);
+
+    // Extract body (after blank line)
+    auto pos = response.find("\r\n\r\n");
+    if (pos == std::string::npos) return {};
+    std::string body = response.substr(pos + 4);
+
+    // Trim whitespace
+    while (!body.empty() && (body.back() == '\r' || body.back() == '\n' ||
+                              body.back() == ' '  || body.back() == '\t'))
+        body.pop_back();
+    auto bstart = body.find_first_not_of(" \r\n\t");
+    if (bstart != std::string::npos && bstart > 0) body = body.substr(bstart);
+    // Trim a possible HTTP chunk-size prefix (some services return chunked encoding)
+    auto nl = body.find('\n');
+    if (nl != std::string::npos && nl < 8) body = body.substr(nl + 1);
+    while (!body.empty() && (body.back() == '\r' || body.back() == '\n' ||
+                              body.back() == ' '  || body.back() == '\t'))
+        body.pop_back();
+
+    // Validate as an IP address
+    struct in_addr a4; struct in6_addr a6;
+    if (::inet_pton(AF_INET,  body.c_str(), &a4) == 1 ||
+        ::inet_pton(AF_INET6, body.c_str(), &a6) == 1)
+        return body;
+    return {};
+}
+
+// ---------------------------------------------------------------------------
+// NetworkMonitor: watches for interface/address changes via RTNETLINK.
+// Sets an atomic flag that the connection loop polls to trigger re-announce.
+// Falls back to 30-second getifaddrs() polling if netlink is unavailable.
+// ---------------------------------------------------------------------------
+
+class NetworkMonitor
+{
+public:
+    NetworkMonitor() = default;
+    ~NetworkMonitor() { stop(); }
+
+    void start()
+    {
+        if (running_.exchange(true)) return;
+        worker_ = std::thread(&NetworkMonitor::monitorLoop, this);
+    }
+
+    void stop()
+    {
+        running_.store(false);
+        // monitorLoop polls with a 1-second timeout so it exits within ~1s.
+        if (worker_.joinable())
+            worker_.join();
+    }
+
+    // Returns true (and clears the flag) if a network change was detected since
+    // the last call. Safe to call from any thread.
+    bool checkAndClear() { return changed_.exchange(false); }
+
+private:
+    void monitorLoop()
+    {
+        try
+        {
+            int fd = ::socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_ROUTE);
+            if (fd < 0) { monitorLoopPoll(); return; }
+
+            struct sockaddr_nl sa{};
+            sa.nl_family = AF_NETLINK;
+            sa.nl_groups = RTMGRP_LINK | RTMGRP_IPV4_IFADDR | RTMGRP_IPV6_IFADDR;
+            if (::bind(fd, reinterpret_cast<struct sockaddr *>(&sa), sizeof(sa)) < 0)
+            {
+                ::close(fd);
+                monitorLoopPoll();
+                return;
+            }
+
+            char buf[4096];
+            while (running_.load())
+            {
+                struct pollfd pfd{fd, POLLIN, 0};
+                int pr = ::poll(&pfd, 1, 1000);
+                if (pr < 0) { if (errno == EINTR) continue; break; }
+                if (pr == 0) continue;  // timeout — re-check running_
+
+                ssize_t len = ::recv(fd, buf, sizeof(buf), MSG_DONTWAIT);
+                if (len < 0) continue;
+
+                for (auto *nh = reinterpret_cast<struct nlmsghdr *>(buf);
+                     len > 0 && NLMSG_OK(nh, static_cast<unsigned>(len));
+                     nh = NLMSG_NEXT(nh, len))
+                {
+                    if (nh->nlmsg_type == NLMSG_DONE) break;
+                    switch (nh->nlmsg_type)
+                    {
+                    case RTM_NEWADDR: case RTM_DELADDR:
+                    case RTM_NEWLINK: case RTM_DELLINK:
+                        changed_.store(true);
+                        break;
+                    default: break;
+                    }
+                }
+            }
+            ::close(fd);
+        }
+        catch (...) {}
+    }
+
+    // Fallback: poll getifaddrs() every 30 seconds for changes.
+    void monitorLoopPoll()
+    {
+        auto prevAddrs = collectLanAddresses();
+        while (running_.load())
+        {
+            for (int i = 0; i < 30 && running_.load(); ++i)
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            if (!running_.load()) break;
+            auto curr = collectLanAddresses();
+            if (curr != prevAddrs) { changed_.store(true); prevAddrs = std::move(curr); }
+        }
+    }
+
+    std::atomic<bool> running_{false};
+    std::atomic<bool> changed_{false};
+    std::thread worker_;
+};
+
 // Parse one key=value line; trim key and value. Returns true if key was recognized and out updated.
 // Value length is capped at kMaxConfigValueLen to bound memory.
 static bool parseConfigLine(const std::string &key, const std::string &val,
@@ -423,6 +681,22 @@ static bool parseConfigLine(const std::string &key, const std::string &val,
         out.verbose = (lower == "1" || lower == "true" || lower == "yes");
         return true;
     }
+    if (key == "external_ip_url")
+    {
+        if (!v.empty()) out.externalIpUrl = v;
+        return true;
+    }
+    if (key == "external_ip_timeout_ms")
+    {
+        try
+        {
+            unsigned long n = std::stoul(v);
+            if (n >= 500 && n <= 30000)
+                out.externalIpTimeoutMs = static_cast<unsigned>(n);
+        }
+        catch (const std::exception &) {}
+        return true;
+    }
     return false;
 }
 
@@ -466,9 +740,12 @@ class ClientConnection
 public:
     ClientConnection(std::string host, std::uint16_t port, std::string identityPath = {},
                     std::string tlsCaPath = {}, std::string tlsServerCertPath = {},
-                    std::size_t sendBufferBytes = 0)
+                    std::size_t sendBufferBytes = 0,
+                    std::string externalIpUrl = "http://checkip.amazonaws.com/",
+                    unsigned externalIpTimeoutMs = 5000)
         : host_(std::move(host)), port_(port), identityPath_(std::move(identityPath))
         , tlsCaPath_(std::move(tlsCaPath)), tlsServerCertPath_(std::move(tlsServerCertPath))
+        , externalIpUrl_(std::move(externalIpUrl)), externalIpTimeoutMs_(externalIpTimeoutMs)
     {
         std::size_t bufSize = (sendBufferBytes >= kSendBufferMinBytes && sendBufferBytes <= kMaxIOBytes)
             ? sendBufferBytes : kSendBufferDefaultBytes;
@@ -486,6 +763,7 @@ public:
         }
         runningSender_.store(true);
         senderThread_ = std::thread(&ClientConnection::senderLoop, this);
+        netMonitor_.start();
     }
 
     ~ClientConnection()
@@ -509,6 +787,7 @@ public:
 
     void close()
     {
+        netMonitor_.stop();
         runningSender_.store(false);
         queueCv_.notify_all();
         if (senderThread_.joinable())
@@ -559,7 +838,49 @@ private:
     std::string identityPath_;
     std::string tlsCaPath_;
     std::string tlsServerCertPath_;
+    std::string externalIpUrl_;
+    unsigned externalIpTimeoutMs_{5000};
+    std::int64_t lastReannounceTime_{0};  // epoch-seconds of last successful sendAnnounce()
     mutable std::string lastError_;
+
+    NetworkMonitor netMonitor_;
+
+    // Send the X (external IP) + A (LAN address) announce lines on an established connection.
+    // Skipped entirely if no LAN interfaces are found (e.g. mobile/public-only client).
+    // Returns false if any write fails.
+    bool sendAnnounce(SSL *ssl, int fd)
+    {
+        auto lanAddrs = collectLanAddresses();
+        if (lanAddrs.empty()) return true;  // no LAN → nothing to announce
+
+        std::string extIp = queryExternalIP(externalIpUrl_, externalIpTimeoutMs_);
+        std::string xLine = kExtIPLinePrefix;
+        xLine += extIp.empty() ? kExtIPNull : extIp;
+        xLine += '\n';
+        if (!writeExact(ssl, fd, xLine.data(), xLine.size())) return false;
+
+        for (const auto &ip : lanAddrs)
+        {
+            std::string aLine = kAddrLinePrefix;
+            aLine += ip;
+            aLine += '\n';
+            if (!writeExact(ssl, fd, aLine.data(), aLine.size())) return false;
+        }
+
+        lastReannounceTime_ = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (g_verbose)
+        {
+            const char *msg = extIp.empty()
+                ? "ntm-client: announced LAN addresses (external IP: null)"
+                : "ntm-client: announced LAN addresses";
+            if (g_daemon) syslog(LOG_INFO, "%s (ext=%s, lan_count=%zu)",
+                                 msg, extIp.empty() ? "null" : extIp.c_str(), lanAddrs.size());
+            else std::cerr << msg << " (ext=" << (extIp.empty() ? "null" : extIp)
+                           << ", lan_count=" << lanAddrs.size() << ")\n";
+        }
+        return true;
+    }
 
     void senderLoop()
     {
@@ -581,16 +902,33 @@ private:
                     toSend = contentEnd_;
                     contentEnd_ = 0;  // reset; new data will overwrite from start (no realloc)
                 }
-                if (toSend == 0)
+
+                // Check network change flag (cheap atomic, no lock needed here).
+                const bool netChanged = netMonitor_.checkAndClear();
+                if (toSend == 0 && !netChanged)
                     continue;
 
                 // toSend <= sendBuffer_.size() <= kMaxIOBytes, so single writeExact is valid
                 std::lock_guard<std::mutex> connLock(connectionMutex_);
                 if (fd_ < 0)
                 {
-                    if (!connectUnlocked())
+                    if (!connectUnlocked())  // connectUnlocked calls sendAnnounce()
                         continue;
                 }
+
+                // Re-announce on network change (30-second client-side cooldown).
+                if (fd_ >= 0 && netChanged)
+                {
+                    auto nowSec = std::chrono::duration_cast<std::chrono::seconds>(
+                        std::chrono::steady_clock::now().time_since_epoch()).count();
+                    if (nowSec - lastReannounceTime_ >= 30)
+                    {
+                        lastReannounceTime_ = nowSec;
+                        if (!sendAnnounce(ssl_, fd_))
+                            closeUnlocked();
+                    }
+                }
+
                 if (fd_ >= 0)
                 {
                     using Sec = std::chrono::seconds::rep;
@@ -600,7 +938,7 @@ private:
                     if (static_cast<std::uint64_t>(safeElapsed) >= kMaxSessionSeconds)
                         closeUnlocked();
                 }
-                if (fd_ >= 0 && !writeExact(ssl_, fd_, sendBuffer_.data(), toSend))
+                if (toSend > 0 && fd_ >= 0 && !writeExact(ssl_, fd_, sendBuffer_.data(), toSend))
                     closeUnlocked();
             }
             catch (const std::exception &e)
@@ -727,64 +1065,15 @@ private:
             return false;
         }
 
-        // Announce all local LAN IP addresses (IPv4 and IPv6, all interfaces) so
-        // that the server can attribute traffic from any of our interfaces to this
-        // client's stable ID — not just the TCP connection source address.
-        // One "A ip\n" line per address; non-fatal if enumeration or send fails.
+        // Send external IP + LAN address announce so the server can group clients
+        // behind the same NAT as one physical LAN and attribute all interface traffic
+        // to this client's stable ID. Non-fatal if no LAN interfaces are present.
+        if (!sendAnnounce(ssl, fd))
         {
-            // Inline LAN-check helpers (mirrors isLanIP in ntm_types.hpp).
-            auto isLanV4 = [](const struct in_addr &a) -> bool {
-                std::uint32_t n = ntohl(a.s_addr);
-                return ((n & 0xFF000000u) == 0x7F000000u) ||  // 127.0.0.0/8
-                       ((n & 0xFF000000u) == 0x0A000000u) ||  // 10.0.0.0/8
-                       ((n & 0xFFF00000u) == 0xAC100000u) ||  // 172.16.0.0/12
-                       ((n & 0xFFFF0000u) == 0xC0A80000u);    // 192.168.0.0/16
-            };
-            auto isLanV6 = [](const struct in6_addr &a) -> bool {
-                static const std::uint8_t lo6[16] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1};
-                if (std::memcmp(&a, lo6, 16) == 0) return true;       // ::1
-                if ((a.s6_addr[0] & 0xFEu) == 0xFCu) return true;    // fc00::/7 ULA
-                if (a.s6_addr[0] == 0xFEu &&
-                    (a.s6_addr[1] & 0xC0u) == 0x80u) return true;    // fe80::/10 link-local
-                return false;
-            };
-
-            struct ifaddrs *ifap = nullptr;
-            if (::getifaddrs(&ifap) == 0)
-            {
-                char ipBuf[INET6_ADDRSTRLEN];
-                std::unordered_set<std::string> seen;  // deduplicate across aliases
-                bool sendOk = true;
-                for (struct ifaddrs *ifa = ifap; ifa && sendOk; ifa = ifa->ifa_next)
-                {
-                    if (!ifa->ifa_addr) continue;
-                    std::string ip;
-                    if (ifa->ifa_addr->sa_family == AF_INET)
-                    {
-                        auto *sa4 = reinterpret_cast<struct sockaddr_in *>(ifa->ifa_addr);
-                        if (!isLanV4(sa4->sin_addr)) continue;
-                        if (!::inet_ntop(AF_INET, &sa4->sin_addr, ipBuf, sizeof(ipBuf))) continue;
-                        ip = ipBuf;
-                    }
-                    else if (ifa->ifa_addr->sa_family == AF_INET6)
-                    {
-                        auto *sa6 = reinterpret_cast<struct sockaddr_in6 *>(ifa->ifa_addr);
-                        if (!isLanV6(sa6->sin6_addr)) continue;
-                        if (!::inet_ntop(AF_INET6, &sa6->sin6_addr, ipBuf, sizeof(ipBuf))) continue;
-                        ip = ipBuf;
-                    }
-                    else continue;
-
-                    if (!ip.empty() && seen.insert(ip).second)
-                    {
-                        std::string line = "A ";
-                        line += ip;
-                        line += '\n';
-                        sendOk = writeExact(ssl, fd, line.data(), line.size());
-                    }
-                }
-                ::freeifaddrs(ifap);
-            }
+            if (ssl) { SSL_shutdown(ssl); SSL_free(ssl); }
+            ::close(fd);
+            lastError_ = "failed to send address announce";
+            return false;
         }
 
         fd_ = fd;
@@ -1139,16 +1428,9 @@ void daemonize()
     }
 }
 
-int runClient(const std::string &serverHost,
-              std::uint16_t serverPort,
-              bool daemonMode,
-              const std::string &identityPath,
-              const std::string &tlsCaPath,
-              const std::string &tlsServerCertPath,
-              std::size_t sendBufferBytes,
-              bool verbose)
+int runClient(bool daemonMode, const ClientConfig &config)
 {
-    g_verbose = verbose;
+    g_verbose = config.verbose;
     g_daemon = daemonMode;
     if (daemonMode)
     {
@@ -1158,21 +1440,24 @@ int runClient(const std::string &serverHost,
     std::signal(SIGINT, handleSignal);
     std::signal(SIGTERM, handleSignal);
 
-    const char *id = identityPath.empty() ? "(none)" : identityPath.c_str();
-    const char *ca = tlsCaPath.empty() ? "(none)" : tlsCaPath.c_str();
-    const char *sc = tlsServerCertPath.empty() ? "(none)" : tlsServerCertPath.c_str();
+    const char *id = config.identityPath.empty() ? "(none)" : config.identityPath.c_str();
+    const char *ca = config.tlsCaPath.empty() ? "(none)" : config.tlsCaPath.c_str();
+    const char *sc = config.tlsServerCertPath.empty() ? "(none)" : config.tlsServerCertPath.c_str();
     if (daemonMode)
     {
         syslog(LOG_INFO, "connecting to %s:%u (identity=%s, ca=%s, server-cert=%s)",
-               serverHost.c_str(), static_cast<unsigned>(serverPort), id, ca, sc);
+               config.server.c_str(), static_cast<unsigned>(config.port), id, ca, sc);
     }
     else
     {
-        std::cerr << "ntm-client: connecting to " << serverHost << ":" << serverPort
+        std::cerr << "ntm-client: connecting to " << config.server << ":" << config.port
                   << " (identity=" << id << ", ca=" << ca << ", server-cert=" << sc << ")\n";
     }
 
-    ClientConnection connection(serverHost, serverPort, identityPath, tlsCaPath, tlsServerCertPath, sendBufferBytes);
+    ClientConnection connection(config.server, config.port,
+                                config.identityPath, config.tlsCaPath, config.tlsServerCertPath,
+                                config.sendBufferBytes,
+                                config.externalIpUrl, config.externalIpTimeoutMs);
     if (!connection.connectOnce())
     {
         const std::string &err = connection.lastError();

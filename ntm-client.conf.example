@@ -20,3 +20,12 @@ port=5555
 
 # Send buffer size in bytes; clamped to 4096-2097152. Default 524288.
 send_buffer_bytes=524288
+
+# External IP check: used to group clients behind the same NAT as one physical LAN.
+# The client performs a plain HTTP GET to this URL and expects the response body to be
+# the client's public IPv4 or IPv6 address. Only queried when a LAN interface is present.
+# Default: http://checkip.amazonaws.com/
+# external_ip_url=http://checkip.amazonaws.com/
+
+# Timeout (ms) for the external IP HTTP request. Default 5000.
+# external_ip_timeout_ms=5000
