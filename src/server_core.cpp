@@ -93,6 +93,8 @@ struct ServerConfig
     std::size_t max_connections_per_ip{20};
     unsigned idle_timeout_seconds{300};
     unsigned max_d_lines_per_second_per_connection{20000};
+    // Admin API: path to plain-text password file. Empty = admin endpoints disabled.
+    std::string admin_password_file;
 };
 
 // Tracks concurrent connections per client IP to limit one host exhausting the connection pool.
@@ -504,6 +506,7 @@ static const std::set<std::string> &knownServerConfigKeys()
         "max_iface_len", "max_ip_len",
         "max_concurrent_connections", "max_connections_per_ip",
         "idle_timeout_seconds", "max_d_lines_per_second_per_connection",
+        "admin_password_file",
     };
     return keys;
 }
@@ -613,6 +616,10 @@ static ServerConfig loadServerConfig(const std::string &configPath, bool *ok = n
             {
                 u = std::stoul(val);
                 cfg.web_rate_limit_rpm = static_cast<unsigned>(std::min(100000ul, u));
+            }
+            else if (key == "admin_password_file")
+            {
+                cfg.admin_password_file = val;
             }
             else if (key == "aggregation_window_days")
             {
@@ -1377,6 +1384,40 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
     // read by the web thread at render time to resolve entity strings in the dashboard.
     auto clientRegistry = std::make_shared<ClientRegistry>();
 
+    // Load admin password from file (plain text, secured via filesystem permissions).
+    // If unconfigured or unreadable the admin web UI is silently disabled.
+    std::string adminPassword;
+    if (!config.admin_password_file.empty())
+    {
+        std::ifstream apf(config.admin_password_file);
+        if (!apf)
+        {
+            serverLog(LogLevel::Warn,
+                      "ntm-server: admin_password_file '%s' cannot be opened; admin UI disabled",
+                      config.admin_password_file.c_str());
+        }
+        else
+        {
+            std::getline(apf, adminPassword);
+            // Trim trailing CR/LF/spaces
+            while (!adminPassword.empty() &&
+                   (adminPassword.back() == '\r' || adminPassword.back() == '\n' ||
+                    adminPassword.back() == ' '))
+                adminPassword.pop_back();
+            if (adminPassword.empty())
+                serverLog(LogLevel::Warn,
+                          "ntm-server: admin_password_file '%s' is empty; admin UI disabled",
+                          config.admin_password_file.c_str());
+            else
+                serverLog(LogLevel::Warn, "ntm-server: admin UI enabled (password loaded from %s)",
+                          config.admin_password_file.c_str());
+        }
+    }
+    else
+    {
+        serverLog(LogLevel::Warn, "ntm-server: admin_password_file not set; admin UI disabled");
+    }
+
     TrafficStats stats(config.aggregation_window_days,
                        config.max_flow_entries_per_key,
                        config.max_entity_flow_entries_per_key,
@@ -1495,6 +1536,7 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                     webCfg.max_entity_lines = config.max_entity_lines_in_summary;
                     webCfg.client_nicknames = clientNicknames;
                     webCfg.registry         = clientRegistry;
+                    webCfg.admin_password   = adminPassword;
 
                     webThread = std::thread(webServerThread,
                                             std::ref(*webSvr),

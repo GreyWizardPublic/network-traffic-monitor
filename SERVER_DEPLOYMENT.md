@@ -183,6 +183,9 @@ allowed_keys    = /etc/ntm-server/allowed_clients.txt
 web_port        = 8443
 web_token       = change-me-to-a-strong-secret
 
+# ── Admin interface (optional) ────────────────────────────────────────────────
+# admin_password_file = /etc/ntm-server/admin_password   # uncomment to enable
+
 # ── Aggregation ───────────────────────────────────────────────────────────────
 aggregation_window_days = 7
 
@@ -356,6 +359,56 @@ Authorization: Bearer <your-token>
 > **Do not expose `web_port` to the internet.** The LAN filter is the only perimeter and there
 > is no brute-force protection on the token.
 
+### Admin interface and data purge
+
+The server exposes an optional admin page at `https://<server-ip>:8443/admin` that lets an
+operator select a client and permanently purge all its historical traffic data. The feature is
+disabled (the endpoint silently returns 404) unless an admin password file is configured.
+
+**Setting up the admin password:**
+
+```bash
+# 1. Write a strong password into the file (no quotes, just the password on one line)
+echo "your-strong-admin-password" | sudo tee /etc/ntm-server/admin_password > /dev/null
+
+# 2. Lock down permissions so only the service account can read it
+sudo chown ntm-server:ntm-server /etc/ntm-server/admin_password
+sudo chmod 600 /etc/ntm-server/admin_password
+```
+
+Add to the config file:
+
+```ini
+admin_password_file = /etc/ntm-server/admin_password
+```
+
+The server reads the first line of the file at startup, trims trailing whitespace, and stores
+it in memory for the life of the process. The file is not re-read while the server is running;
+restart the server to pick up a password change.
+
+> **Security warning — plain-text password storage**
+>
+> The admin password is stored **in plain text** inside the password file and is **solely
+> protected by Linux filesystem access rights** (`chmod 600` / `chown ntm-server`). If an
+> attacker gains read access to the file (e.g. through a backup leak, a misconfigured ACL, or
+> a privilege-escalation vulnerability), the password is directly exposed.
+>
+> This limitation is a known interim measure. Secure password storage (e.g. bcrypt hashing,
+> a secrets manager, or mutual-TLS client certificates for admin access) should be implemented
+> before deploying in a high-security or multi-operator environment.
+
+**Accessing the admin page:**
+
+1. Open `https://<server-ip>:8443/admin` in a browser (requires the same bearer token header
+   as the main dashboard if `web_token` is set).
+2. The page lists all clients that have data in the aggregation window.
+3. Click a client row to select it, then click **Purge selected client**.
+4. Enter the admin password in the confirmation panel and click **Confirm Purge**.
+5. On success, all data for that client is erased and accumulation restarts on next connection.
+
+**Rate limiting:** the `/api/admin/purge` endpoint has a separate, stricter rate limit of
+5 requests per minute per IP to slow brute-force password attempts.
+
 ---
 
 ## 12. Resource limits reference
@@ -398,6 +451,8 @@ closed and the client reconnects with fresh session keys.
 - [ ] TLS certificate expiry reminder set (self-signed default is 365 days)
 - [ ] `ip_db_auto_update=true` or a cron job in place to refresh the ASN database
 - [ ] systemd hardening options applied (`PrivateTmp`, `ProtectSystem`, `NoNewPrivileges`)
+- [ ] If admin interface is enabled: `admin_password` file is `chmod 600`, owned by service account, and contains a strong password
+- [ ] Admin password file is excluded from backups or backup ACLs are restricted (plain-text storage — see [Section 11 admin warning](#admin-interface-and-data-purge))
 
 ---
 

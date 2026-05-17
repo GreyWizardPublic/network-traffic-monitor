@@ -37,6 +37,9 @@ struct WebConfig
     // Shared registry mapping a client's LAN IP → display name, populated by each
     // connectionThread on authentication and read by buildSummaryJson per request.
     std::shared_ptr<ClientRegistry> registry;
+    // Admin purge password loaded from admin_password_file at startup.
+    // Empty string = admin endpoints disabled (silently return 404).
+    std::string admin_password;
 };
 
 // Thread function: registers HTTP routes on svr, then blocks in svr.listen().

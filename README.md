@@ -359,6 +359,22 @@ For production deployments:
 - **TLS certificate renewal:** Self-signed certificates expire (default 365 days).
   Set a calendar reminder to regenerate before expiry.
 
+> ### ⚠ Admin password stored in plain text — security limitation
+>
+> The optional admin data-purge feature (`admin_password_file` config key) stores the
+> admin password **as plain text** in a file on disk. Protection relies **solely on Linux
+> filesystem access rights** (`chmod 600` / `chown`) to prevent other users from reading
+> the file. If the file is exposed — through a backup leak, a misconfigured ACL, or a
+> privilege-escalation vulnerability — the password is directly visible to an attacker.
+>
+> **This is a known limitation of the current implementation.** Secure password storage
+> (e.g. bcrypt hashing, integration with a secrets manager, or mutual-TLS client
+> certificates for admin access) should be implemented in a future release before the
+> admin interface is used in a high-security or multi-operator environment.
+>
+> See the admin interface subsection of [`SERVER_DEPLOYMENT.md`](SERVER_DEPLOYMENT.md)
+> for setup instructions, hardening steps, and a full description of the limitation.
+
 The server enforces protocol and resource limits to reduce abuse and DoS:
 
 - **Protocol:** Maximum lengths for `D` line fields, per-connection receive buffer cap,

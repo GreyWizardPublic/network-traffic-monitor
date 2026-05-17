@@ -13,6 +13,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include <openssl/crypto.h>   // CRYPTO_memcmp
+
 namespace ntm
 {
 
@@ -66,6 +68,56 @@ static std::string jsonEsc(const std::string &s)
     }
     return o;
 }
+
+// Extract a string field value from a flat JSON object body.
+// Handles \" and \\ escapes. Returns empty string on parse failure.
+static std::string jsonGetString(const std::string &json, const std::string &key)
+{
+    const std::string needle = "\"" + key + "\"";
+    std::size_t pos = 0;
+    while (pos < json.size())
+    {
+        auto found = json.find(needle, pos);
+        if (found == std::string::npos) return {};
+        pos = found + needle.size();
+        while (pos < json.size() &&
+               (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\r' || json[pos] == '\n'))
+            ++pos;
+        if (pos >= json.size() || json[pos] != ':') continue; // false match inside a value
+        ++pos;
+        while (pos < json.size() &&
+               (json[pos] == ' ' || json[pos] == '\t' || json[pos] == '\r' || json[pos] == '\n'))
+            ++pos;
+        if (pos >= json.size() || json[pos] != '"') return {};
+        ++pos;
+        std::string result;
+        while (pos < json.size())
+        {
+            char c = json[pos++];
+            if (c == '"') return result;
+            if (c == '\\' && pos < json.size())
+            {
+                char e = json[pos++];
+                switch (e) {
+                    case '"':  result += '"';  break;
+                    case '\\': result += '\\'; break;
+                    case '/':  result += '/';  break;
+                    case 'n':  result += '\n'; break;
+                    case 'r':  result += '\r'; break;
+                    case 't':  result += '\t'; break;
+                    default:   result += e;    break;
+                }
+            }
+            else result += c;
+        }
+        return {};
+    }
+    return {};
+}
+
+// ---------------------------------------------------------------------------
+// Summary JSON builder
+// ---------------------------------------------------------------------------
 
 static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLines,
                                     const std::unordered_map<std::string, std::string> &nicknames,
@@ -304,10 +356,16 @@ tr:hover td{background:#171726}
 .tab{padding:4px 14px;cursor:pointer;border:1px solid #252535;border-bottom:none;border-radius:3px 3px 0 0;font-size:0.82em;color:#666;background:#111118;font-family:monospace;outline:none}
 .tab.active{color:#7af;background:#0e0e14;border-color:#3a3a5a}
 .tabpanel{border-top:1px solid #252535;padding-top:4px}
+.hdr{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px}
+.admin-lnk{font-size:0.78em;color:#7af;text-decoration:none;opacity:0.7}
+.admin-lnk:hover{opacity:1}
 </style>
 </head>
 <body>
-<h1>Network Traffic Monitor</h1>
+<div class="hdr">
+  <h1>Network Traffic Monitor</h1>
+  <a href="/admin" class="admin-lnk">Admin</a>
+</div>
 <div id="status"><span id="dot" class="dot ok"></span><span id="smsg">Loading&#8230;</span></div>
 <div class="meta">
   Window start: <span id="win">&#8212;</span> &nbsp;|&nbsp;
@@ -397,6 +455,209 @@ setInterval(refresh,POLL_MS);
 )HTML";
 
 // ---------------------------------------------------------------------------
+// Embedded admin HTML/CSS/JS
+// ---------------------------------------------------------------------------
+
+static const char kAdminHtml[] = R"HTML(<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NTM Admin</title>
+<style>
+*{box-sizing:border-box}
+body{font-family:monospace;background:#0e0e14;color:#ccc;margin:0;padding:16px}
+h1{font-size:1.05em;margin:0 0 4px;color:#7af}
+.back{font-size:0.78em;color:#7af;text-decoration:none;opacity:0.7}
+.back:hover{opacity:1}
+.hdr{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px}
+.section{color:#7af;font-size:0.82em;text-transform:uppercase;letter-spacing:.06em;margin:18px 0 6px}
+.sub{font-size:0.78em;color:#666;margin-bottom:10px}
+table{border-collapse:collapse;width:100%;font-size:0.82em;margin-bottom:4px}
+th{background:#161622;color:#888;text-align:left;padding:5px 10px;border-bottom:1px solid #252535;white-space:nowrap}
+td{padding:4px 10px;border-bottom:1px solid #1a1a28;white-space:nowrap}
+tr.selectable{cursor:pointer}
+tr.selectable:hover td{background:#171726}
+tr.selected td{background:#1a1a2e;color:#cce}
+tr.selected td:first-child::before{content:'▶ ';color:#7af}
+.panel{border:1px solid #3a3a5a;border-radius:4px;padding:16px;margin-top:14px;background:#0d0d1a}
+.warn{color:#c84;font-size:0.88em;margin-bottom:10px}
+.panel-title{font-size:0.9em;color:#cce;margin-bottom:10px}
+.lbl{font-size:0.82em;color:#888;margin-bottom:4px}
+.pwd-row{display:flex;align-items:center;gap:10px;margin-bottom:4px}
+input[type=password]{background:#111118;border:1px solid #3a3a5a;color:#ccc;padding:5px 8px;font-family:monospace;font-size:0.85em;border-radius:3px;width:280px;outline:none}
+input[type=password]:focus{border-color:#7af}
+.btn-row{display:flex;gap:10px;margin-top:14px}
+button{font-family:monospace;font-size:0.82em;padding:5px 14px;border-radius:3px;border:1px solid #3a3a5a;cursor:pointer;outline:none}
+.btn-cancel{background:#111118;color:#888}
+.btn-cancel:hover{color:#ccc}
+.btn-purge{background:#3a1010;color:#c84;border-color:#5a2020}
+.btn-purge:hover{background:#4a1818;color:#f96}
+.btn-purge:disabled{opacity:0.5;cursor:default}
+.err-msg{font-size:0.8em;color:#c44}
+.ok-panel{border:1px solid #2a5a2a;border-radius:4px;padding:16px;margin-top:14px;background:#0a150a}
+.ok-title{color:#4c4;font-size:0.9em;margin-bottom:6px}
+.ok-sub{font-size:0.8em;color:#666;margin-bottom:12px}
+.btn-back{background:#111118;color:#7af;border-color:#3a3a5a}
+.btn-back:hover{color:#adf}
+#msg{font-size:0.78em;color:#666;margin-top:6px}
+</style>
+</head>
+<body>
+<div class="hdr">
+  <h1>Network Traffic Monitor &mdash; Admin</h1>
+  <a href="/" class="back">&#8592; Back to Dashboard</a>
+</div>
+
+<div class="section">Manage Clients</div>
+<div class="sub" id="list_sub">Select a client to purge all its historical traffic data.</div>
+
+<table>
+  <thead><tr><th>Client</th><th>Interfaces</th><th>Packets</th><th>Bytes</th></tr></thead>
+  <tbody id="client_body"><tr><td colspan="4" style="color:#555">Loading&#8230;</td></tr></tbody>
+</table>
+
+<div id="confirm_panel" style="display:none" class="panel">
+  <div class="warn">&#9888;&nbsp; This permanently deletes all historical traffic records for this client.
+  Data will accumulate fresh from the next connection.</div>
+  <div class="panel-title">Purge all data for: <span id="selected_name" style="color:#7af"></span></div>
+  <div class="lbl">Admin password</div>
+  <div class="pwd-row">
+    <input type="password" id="pwd_field" placeholder="Enter admin password" autocomplete="off">
+    <span class="err-msg" id="pwd_error"></span>
+  </div>
+  <div class="btn-row">
+    <button class="btn-cancel" onclick="cancelSelect()">Cancel</button>
+    <button class="btn-purge" id="purge_btn" onclick="doPurge()">Purge Client Data</button>
+  </div>
+</div>
+
+<div id="result_panel" style="display:none" class="ok-panel">
+  <div class="ok-title">&#10003;&nbsp; <span id="result_client"></span> &mdash; data purged successfully.</div>
+  <div class="ok-sub">Data will accumulate fresh from the next client connection.</div>
+  <div class="btn-row">
+    <button class="btn-back" onclick="resetView()">Back to client list</button>
+  </div>
+</div>
+
+<div id="msg"></div>
+
+<script>
+function fmtB(b){
+  if(b<1024)return b+'B';
+  if(b<1048576)return(b/1024).toFixed(1)+'K';
+  if(b<1073741824)return(b/1048576).toFixed(1)+'M';
+  return(b/1073741824).toFixed(2)+'G';
+}
+function esc(s){
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+let selectedClient=null;
+
+async function loadClients(){
+  try{
+    const r=await fetch('/api/summary',{cache:'no-store'});
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const d=await r.json();
+    const clients={};
+    for(const x of (d.interfaces||[])){
+      const name=x.client||'(ip-auth)';
+      if(!clients[name])clients[name]={ifaces:[],packets:0,bytes:0};
+      clients[name].ifaces.push(x.iface);
+      clients[name].packets+=x.packets;
+      clients[name].bytes+=x.bytes;
+    }
+    const tbody=document.getElementById('client_body');
+    const names=Object.keys(clients);
+    if(!names.length){
+      tbody.innerHTML='<tr><td colspan="4" style="color:#555">No clients have recorded data yet</td></tr>';
+      return;
+    }
+    tbody.innerHTML=names.map(name=>{
+      const c=clients[name];
+      return`<tr class="selectable" data-client="${esc(name)}">
+        <td>${esc(name)}</td>
+        <td>${esc(c.ifaces.join(', '))}</td>
+        <td>${c.packets.toLocaleString()}</td>
+        <td>${fmtB(c.bytes)}</td></tr>`;
+    }).join('');
+    tbody.querySelectorAll('tr').forEach(tr=>{
+      tr.addEventListener('click',()=>selectClient(tr.dataset.client));
+    });
+    document.getElementById('msg').textContent='';
+  }catch(e){
+    document.getElementById('client_body').innerHTML=
+      '<tr><td colspan="4" style="color:#a33">Error loading clients: '+esc(e.message)+'</td></tr>';
+  }
+}
+
+function selectClient(name){
+  selectedClient=name;
+  document.querySelectorAll('#client_body tr').forEach(tr=>{
+    tr.className=tr.dataset.client===name?'selectable selected':'selectable';
+  });
+  document.getElementById('selected_name').textContent=name;
+  document.getElementById('confirm_panel').style.display='';
+  document.getElementById('result_panel').style.display='none';
+  document.getElementById('pwd_field').value='';
+  document.getElementById('pwd_error').textContent='';
+  document.getElementById('purge_btn').disabled=false;
+  document.getElementById('purge_btn').textContent='Purge Client Data';
+  document.getElementById('pwd_field').focus();
+}
+
+function cancelSelect(){
+  selectedClient=null;
+  document.querySelectorAll('#client_body tr').forEach(tr=>tr.className='selectable');
+  document.getElementById('confirm_panel').style.display='none';
+}
+
+async function doPurge(){
+  const pwd=document.getElementById('pwd_field').value;
+  if(!pwd){document.getElementById('pwd_error').textContent='Password required';return;}
+  const btn=document.getElementById('purge_btn');
+  btn.disabled=true;btn.textContent='Purging…';
+  document.getElementById('pwd_error').textContent='';
+  try{
+    const r=await fetch('/api/admin/purge',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({password:pwd,client:selectedClient})
+    });
+    const d=await r.json();
+    if(r.ok&&d.ok){
+      document.getElementById('confirm_panel').style.display='none';
+      document.getElementById('result_client').textContent=selectedClient;
+      document.getElementById('result_panel').style.display='';
+      loadClients();
+    }else{
+      document.getElementById('pwd_error').textContent=
+        r.status===401?'✗ Incorrect password':
+        r.status===404?'✗ Client not found':
+        '✗ '+(d.error||'Unknown error');
+      btn.disabled=false;btn.textContent='Purge Client Data';
+    }
+  }catch(e){
+    document.getElementById('pwd_error').textContent='✗ Request failed: '+e.message;
+    btn.disabled=false;btn.textContent='Purge Client Data';
+  }
+}
+
+function resetView(){
+  selectedClient=null;
+  document.getElementById('result_panel').style.display='none';
+  document.getElementById('confirm_panel').style.display='none';
+  document.querySelectorAll('#client_body tr').forEach(tr=>tr.className='selectable');
+  loadClients();
+}
+
+loadClients();
+</script>
+</body>
+</html>
+)HTML";
+
+// ---------------------------------------------------------------------------
 // Web server thread
 // ---------------------------------------------------------------------------
 
@@ -405,6 +666,8 @@ void webServerThread(httplib::SSLServer &svr,
                      const WebConfig &config)
 {
     WebRateLimiter rateLimiter(config.rate_limit_rpm);
+    // Separate, much stricter limiter for the admin purge endpoint.
+    WebRateLimiter adminRateLimiter(5);
 
     // Pre-routing: LAN check, rate limit, optional bearer token.
     svr.set_pre_routing_handler(
@@ -448,10 +711,18 @@ void webServerThread(httplib::SSLServer &svr,
             return httplib::Server::HandlerResponse::Unhandled;
         });
 
-    // GET / — embedded dashboard HTML
+    // GET / — embedded monitoring dashboard HTML
     svr.Get("/", [](const httplib::Request &, httplib::Response &res) {
         res.set_content(kDashboardHtml, "text/html; charset=utf-8");
     });
+
+    // GET /admin — embedded admin page (only registered when admin password is configured)
+    if (!config.admin_password.empty())
+    {
+        svr.Get("/admin", [](const httplib::Request &, httplib::Response &res) {
+            res.set_content(kAdminHtml, "text/html; charset=utf-8");
+        });
+    }
 
     // GET /api/summary — JSON snapshot of aggregated traffic
     svr.Get("/api/summary",
@@ -462,6 +733,94 @@ void webServerThread(httplib::SSLServer &svr,
                                              config.registry),
                             "application/json");
         });
+
+    // POST /api/admin/purge — erase one client's data (only registered when password is set)
+    if (!config.admin_password.empty())
+    {
+        svr.Post("/api/admin/purge",
+            [&stats, &config, &adminRateLimiter](const httplib::Request &req,
+                                                  httplib::Response &res)
+            {
+                const std::string &ip = req.remote_addr;
+
+                // Strict per-IP rate limit for the admin endpoint.
+                if (!adminRateLimiter.tryAcquire(ip))
+                {
+                    res.status = 429;
+                    res.set_header("Retry-After", "60");
+                    res.set_content("{\"error\":\"rate limit exceeded\"}\n", "application/json");
+                    return;
+                }
+
+                // Parse JSON body for password and client fields.
+                const std::string &body = req.body;
+                std::string password = jsonGetString(body, "password");
+                std::string clientName = jsonGetString(body, "client");
+
+                if (password.empty() || clientName.empty())
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"bad request: password and client required\"}\n",
+                                    "application/json");
+                    return;
+                }
+
+                // Constant-time password comparison to prevent timing side-channels.
+                const std::string &stored = config.admin_password;
+                bool pwdOk = (password.size() == stored.size()) &&
+                             (CRYPTO_memcmp(password.data(), stored.data(), stored.size()) == 0);
+                if (!pwdOk)
+                {
+                    serverLog(LogLevel::Warn,
+                              "ntm-server: admin purge REJECTED from %s (wrong password, client='%s')",
+                              ip.c_str(), clientName.c_str());
+                    res.status = 401;
+                    res.set_content("{\"error\":\"unauthorized\"}\n", "application/json");
+                    return;
+                }
+
+                // Resolve display name → hex client ID.
+                // Try nickname reverse lookup first, then accept a raw 64-char hex ID directly.
+                std::string hexId;
+                for (const auto &kv : config.client_nicknames)
+                {
+                    if (kv.second == clientName) { hexId = kv.first; break; }
+                }
+                if (hexId.empty() && clientName.size() == 64)
+                {
+                    bool allHex = true;
+                    for (char c : clientName)
+                        if (!((c>='0'&&c<='9')||(c>='a'&&c<='f'))) { allHex=false; break; }
+                    if (allHex) hexId = clientName;
+                }
+                // Also accept display name that equals the hex ID (no nickname configured).
+                if (hexId.empty())
+                {
+                    for (const auto &kv : config.client_nicknames)
+                        if (kv.first == clientName) { hexId = kv.first; break; }
+                }
+                if (hexId.empty())
+                {
+                    serverLog(LogLevel::Warn,
+                              "ntm-server: admin purge from %s: client '%s' not found",
+                              ip.c_str(), clientName.c_str());
+                    res.status = 404;
+                    res.set_content("{\"error\":\"client not found\"}\n", "application/json");
+                    return;
+                }
+
+                bool hadData = stats.purgeClient(hexId);
+                serverLog(LogLevel::Warn,
+                          "ntm-server: admin purge from %s: client '%s' (id=%s) purged (%s)",
+                          ip.c_str(), clientName.c_str(), hexId.c_str(),
+                          hadData ? "data erased" : "no data was present");
+
+                std::string resp = "{\"ok\":true,\"client_id\":\"";
+                resp += jsonEsc(hexId);
+                resp += "\",\"message\":\"client data purged\"}\n";
+                res.set_content(resp, "application/json");
+            });
+    }
 
     // All other paths → 404
     svr.set_error_handler([](const httplib::Request &, httplib::Response &res) {

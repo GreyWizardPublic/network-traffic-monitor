@@ -279,6 +279,30 @@ public:
         return it == ifaceRejectCount_.end() ? 0u : it->second;
     }
 
+    // Erase all historical data for one client across every day bucket.
+    // Returns true if any data was present. Safe to call concurrently with addPacket/snapshot.
+    bool purgeClient(const std::string &clientId)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const std::string prefix = clientId + "|";
+        bool found = false;
+        for (const auto &b : dayBuckets_)
+        {
+            for (const auto &kv : b.totals)
+            {
+                if (kv.first.size() >= prefix.size() &&
+                    kv.first.compare(0, prefix.size(), prefix) == 0)
+                {
+                    found = true;
+                    break;
+                }
+            }
+            if (found) break;
+        }
+        resetClientUnlocked(clientId);
+        return found;
+    }
+
     void snapshot(InterfaceTotals &totalsOut,
                   InterfaceFlows &flowsOut,
                   InterfaceCountryFlows &countryFlowsOut,
