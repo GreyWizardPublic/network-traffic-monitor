@@ -72,19 +72,25 @@ This produces two binaries in `build/`:
 `ntm-server` includes an embedded HTTPS web dashboard. Open it in any browser
 on your LAN — no extra software required.
 
-> **Security limitation — LAN use only (current version)**
+> ### ⚠ Current limitation: no per-user authentication
 >
-> The web dashboard enforces a hard LAN-only IP filter: only connections from
-> RFC 1918 private address ranges (`10.x.x.x`, `172.16–31.x.x`, `192.168.x.x`)
-> and loopback are accepted. Public internet IPs are rejected at the application
-> layer regardless of the server's bind address.
+> The web dashboard currently has **no login, no password, and no bearer-token
+> requirement**. Any device on your LAN that can reach the server on the web
+> port (default `8443`) can view the dashboard.
 >
-> **Do not expose `ntm-server` directly to the internet** in its current form.
-> Even with HTTPS and a bearer token, the filter is not user-configurable and
-> there is no brute-force protection on the token. A future version will add
-> configurable CIDR allowlists and optional mutual-TLS client authentication
-> for internet-facing deployments. For now, keep `ntm-server` inside your LAN
-> or behind a VPN.
+> The only access control in place is:
+> - **HTTPS** — encrypted transport, prevents passive eavesdropping.
+> - **LAN-only IP filter** — connections from RFC 1918 private address ranges
+>   (`10.x.x.x`, `172.16–31.x.x`, `192.168.x.x`) and loopback only; all public
+>   internet IPs are rejected at the application layer regardless of bind address.
+>
+> **Planned enhancement:** per-user authentication (configurable bearer tokens,
+> and optionally mutual-TLS client certificates) will be added in a future release.
+> Until then, treat the dashboard as LAN-visible information.
+>
+> **Do not expose `ntm-server` directly to the internet.** The LAN-only filter
+> is not user-configurable in this version; there is no brute-force protection.
+> Keep the server inside your LAN or behind a VPN.
 
 ### Setting up TLS for the web dashboard
 
@@ -160,30 +166,23 @@ The page auto-refreshes every 30 seconds and shows:
 - **Interfaces** table — per-client, per-interface packet and byte totals over the aggregation window.
 - **Entity flows** table — top (src ASN, dst ASN) pairs sorted by bytes, showing the autonomous systems your traffic passes through.
 
-### Optional bearer token
+### Bearer token (optional, not required)
 
-For additional access control on a shared LAN, set a static bearer token:
+A static bearer token can be configured as an extra layer of access control,
+though this is **not required** in the current version:
 
 ```ini
 # ntm-server.conf
 web_token = your-secret-token-here
 ```
 
-or pass it on the CLI:
+When set, every web request must include `Authorization: Bearer <token>` or
+it receives `HTTP 401`. The `web_token` key is empty by default — the dashboard
+is open to all LAN IPs without a token.
 
-```bash
-./ntm-server --web-token your-secret-token-here ...
-```
-
-All web requests must then include:
-
-```
-Authorization: Bearer your-secret-token-here
-```
-
-Standard browser access will prompt for a token through the `401` response;
-most browsers will show a generic authentication dialog or you can configure
-a browser extension (e.g. ModHeader) to inject the header automatically.
+> **Note:** Full per-user authentication is a planned future enhancement.
+> The bearer-token option is a stopgap for environments where a single shared
+> secret is sufficient.
 
 ### Rate limiting
 
@@ -343,10 +342,11 @@ For production deployments:
   Use `--require-tls` to refuse plain-TCP ingestion connections.
 - **Use Ed25519 auth:** Start the server with `--allowed-keys` and the client with
   `--identity` so only known clients can submit data.
-- **Web dashboard — LAN only:** The dashboard hard-enforces RFC 1918 source-IP
-  filtering. Additionally, configure a `web_token` on any LAN where other users
-  share the same network segment. Do **not** expose port `web_port` to the internet
-  (see the limitation notice in [Web Dashboard](#web-dashboard)).
+- **Web dashboard — LAN only, no user auth (current version):** The dashboard
+  hard-enforces RFC 1918 source-IP filtering and requires HTTPS, but currently
+  has **no per-user authentication**. Any LAN device can view it. Do **not**
+  expose port `web_port` to the internet. See the limitation notice in
+  [Web Dashboard](#web-dashboard); per-user auth is planned for a future release.
 - **TLS certificate renewal:** Self-signed certificates expire (default 365 days).
   Set a calendar reminder to regenerate before expiry.
 
@@ -362,9 +362,11 @@ The server enforces protocol and resource limits to reduce abuse and DoS:
 
 ## Limitations & Notes
 
-- **LAN-only web dashboard:** The current version does not support internet-facing
-  deployment of the web dashboard. See the notice in [Web Dashboard](#web-dashboard).
-  Planned for a future version: configurable CIDR allowlists, mutual-TLS client auth.
+- **Web dashboard — no per-user authentication (current version):** The web dashboard
+  is accessible to any device on the LAN without a login or password. The only
+  access controls are HTTPS and the hard RFC 1918 IP filter. Internet-facing
+  deployment is not supported. Planned for a future version: per-user authentication
+  (bearer tokens enforced, mutual-TLS client certificates, configurable CIDR allowlists).
 - **Encryption on ingestion port:** Use `--cert`/`--key` on the server and `--ca` or
   `--server-cert` on the client for encrypted traffic. Sessions are limited to 6 hours.
 - This is a **live monitor**; it does not persist historical data to disk.
