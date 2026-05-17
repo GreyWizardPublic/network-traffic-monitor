@@ -432,18 +432,14 @@ bool loadClientConfig(const std::string &configPath, ClientConfig &out)
     std::ifstream f(configPath);
     if (!f)
         return false;
-    char lineBuf[kMaxConfigLineLen + 1];
-    while (f.get(lineBuf, sizeof(lineBuf), '\n'))
+    std::string line;
+    while (std::getline(f, line))
     {
-        std::streamsize n = f.gcount();
-        if (n <= 0)
-            continue;
-        std::string line(lineBuf, static_cast<std::size_t>(n));
-        if (n == static_cast<std::streamsize>(kMaxConfigLineLen) && f.peek() != '\n' && f.peek() != std::char_traits<char>::eof())
-            f.ignore((std::numeric_limits<std::streamsize>::max)(), '\n');
-        if (f.peek() == '\n')
-            f.ignore(1);
-        while (!line.empty() && (line.back() == '\r' || line.back() == '\n'))
+        // Cap oversized lines to bound memory use from malformed files.
+        if (line.size() > kMaxConfigLineLen)
+            line.resize(kMaxConfigLineLen);
+        // Strip trailing \r for Windows-style (CRLF) line endings.
+        if (!line.empty() && line.back() == '\r')
             line.pop_back();
         std::size_t start = line.find_first_not_of(" \t");
         if (start == std::string::npos || line[start] == '#')
