@@ -53,8 +53,8 @@ A minimal production layout:
 /usr/local/bin/ntm-client          # binary
 /etc/ntmclient/
     ntm-client.conf                # config file
-    client_private.pem             # Ed25519 private key (chmod 600)
-    server_cert.pem                # server certificate for pinning (optional)
+    client_private.pem             # Ed25519 private key (chmod 600) — mandatory
+    server_cert.pem                # server certificate for TLS verification — mandatory
 ```
 
 ```bash
@@ -105,9 +105,9 @@ is the approach used in `ntm-client.service.example` — see Section 10.
 
 ## 5. Ed25519 identity key
 
-If the server is configured with `--allowed-keys`, the client must present an Ed25519 private
-key to authenticate. Without it, the server either rejects the connection or (if running
-without `--allowed-keys`) identifies the client by TCP peer address.
+An Ed25519 identity key is **mandatory**. The server always requires client authentication and
+will reject any connection where the client does not present a valid private key whose public
+key is listed in the server's `allowed_clients.txt`.
 
 ### Generate a private key (run on the client machine)
 
@@ -147,8 +147,9 @@ sudo chown ntmclient:ntmclient /etc/ntmclient/client_private.pem
 
 ## 6. TLS server verification
 
-The client supports two mutually exclusive modes for verifying the server's TLS certificate.
-Without either, the client connects over **plain TCP** (not recommended for production).
+TLS verification is **mandatory**. The server always requires TLS and will reject plain TCP
+connections, so the client must be configured with one of the two verification modes below.
+Without either, the client attempts plain TCP and the server immediately drops the connection.
 
 ### Mode A — CA bundle verification (`--ca`)
 
@@ -215,13 +216,16 @@ server = 192.168.1.10
 # Server ingestion port (1-65535). Default 5555.
 port = 5555
 
-# Ed25519 private key for authentication. Leave empty for no auth.
+# Ed25519 private key for authentication. MANDATORY — server rejects connections without it.
 identity = /etc/ntmclient/client_private.pem
 
-# TLS: CA bundle to verify the server certificate. Choose one of ca or server_cert.
+# TLS verification. MANDATORY — server always requires TLS; plain TCP is rejected.
+# Choose one of ca or server_cert (not both).
+#
+# CA bundle to verify the server certificate (use for CA-signed certs):
 # ca = /etc/ntmclient/server_cert.pem
-
-# TLS: server certificate for SHA-256 fingerprint pinning. Choose one of ca or server_cert.
+#
+# Server certificate for SHA-256 fingerprint pinning (use for self-signed certs):
 server_cert = /etc/ntmclient/server_cert.pem
 
 # Send buffer in bytes (4096-2097152). Default 524288 (512 KiB).
@@ -246,9 +250,13 @@ sudo ntm-client \
 Expected output on stderr:
 - Config values loaded (server, port, identity, TLS options).
 - `ntm-client: connected to <server>:<port> (TLS, session max 6h)` on successful connect.
+  If you see `(plain)` instead of `(TLS, ...)`, TLS is not configured on the client —
+  the server will drop the connection. Ensure `server_cert` or `ca` is set in the config.
 - One line per discovered interface that has addresses — sniffers start silently.
 
 If the identity key permissions are too open you will see a warning; fix with `chmod 600`.
+If the server rejects the connection, confirm the client's public key is in the server's
+`allowed_clients.txt` and that TLS verification is configured correctly.
 
 Press `Ctrl+C` to stop (sends `SIGINT`; the client stops all sniffers and closes the
 connection cleanly). If no errors appear, proceed to daemon mode.
@@ -360,10 +368,9 @@ the connection with fresh session keys. This matches the server-side session lim
 
 ## 12. Security hardening checklist
 
-- [ ] TLS enabled: `server_cert` or `ca` set (use `--server-cert` for pinning or `--ca` for
-  CA verification)
-- [ ] Ed25519 auth enabled: `identity` set and matching public key added to server's
-  `allowed_clients.txt`
+- [ ] TLS configured: `server_cert` or `ca` set (mandatory — server rejects plain TCP)
+- [ ] Ed25519 identity configured: `identity` set and matching public key added to server's
+  `allowed_clients.txt` (mandatory — server rejects unauthenticated connections)
 - [ ] Identity key permissions are `600` (owner-read-only)
 - [ ] Identity key is owned by the service user (`ntmclient`)
 - [ ] Client runs as a dedicated unprivileged user with only `CAP_NET_RAW` and
@@ -386,10 +393,11 @@ the connection with fresh session keys. This matches the server-side session lim
 - Confirm at least one interface has an IP address assigned: `ip addr show`.
 
 **`TLS handshake failed`**
-- The server may not have TLS configured (`--cert`/`--key` not set on server).
 - The server certificate CN or SAN does not match the `--server` value — regenerate the
   cert with the correct `-subj "/CN=<server-ip-or-hostname>"`.
 - For pinning (`--server-cert`): the pinned file does not match the server's current cert.
+- Confirm neither `ca` nor `server_cert` is accidentally omitted from the client config;
+  without one of them the client connects plain TCP and the server immediately drops it.
 
 **`server rejected authentication`**
 - The client's public key is not in the server's `allowed_clients.txt`.

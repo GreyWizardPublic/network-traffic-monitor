@@ -73,7 +73,8 @@ sudo mkdir -p /etc/ntm-server /var/lib/ntm-server
 ## 4. TLS certificate
 
 The **same cert/key pair** is used for both the client data-ingestion port and the HTTPS web
-dashboard. Without them, the web dashboard is disabled and ingestion runs over plain TCP.
+dashboard. Both are mandatory — the server refuses to start without a valid cert/key pair, and
+plain TCP connections on the ingestion port are always refused.
 
 ### Option A — Self-signed (typical LAN deployment)
 
@@ -113,8 +114,9 @@ No browser import step required when using a public CA.
 
 ## 5. Ed25519 client keys
 
-When `allowed_keys` is configured, only clients that sign the handshake with a listed key can
-connect. Without it, the server identifies clients by TCP peer address (no authentication).
+`allowed_keys` is mandatory — the server refuses to start without it. Every connecting client
+must sign the handshake with an Ed25519 private key whose public key is listed in the file.
+Connections from clients not on the list are rejected after the TLS handshake completes.
 
 ### Generate a keypair (run on each client machine)
 
@@ -196,10 +198,13 @@ sudo ntm-server \
 ```
 
 Expected startup output on stderr:
-- Confirmation that the TLS cert/key loaded successfully.
-- Number of allowed keys loaded (if `allowed_keys` is set).
+- Confirmation that the TLS cert/key loaded successfully and plain TCP is refused.
+- Number of allowed Ed25519 keys loaded.
 - IP database loaded, or a download triggered if the cache file is missing.
 - Listening ports for ingestion and the web dashboard.
+
+If `cert`, `key`, or `allowed_keys` are missing the server exits immediately with an error
+before opening any port.
 
 Open `https://<server-ip>:8443` in a browser on the same LAN to confirm the dashboard loads,
 then press `Ctrl+C` to stop. If no errors appear, proceed to daemon mode.
@@ -326,7 +331,7 @@ The page auto-refreshes every 30 seconds and shows:
 
 | Control | Status |
 |---|---|
-| HTTPS (TLS) | Always enforced when cert/key are configured |
+| HTTPS (TLS) | Always enforced (mandatory — server refuses to start without cert/key) |
 | RFC 1918 LAN-only IP filter | Always enforced (hard-coded, not configurable) |
 | Bearer token (`web_token`) | Optional; strongly recommended |
 | Per-user login / password | Not yet implemented (planned) |
@@ -406,7 +411,9 @@ closed and the client reconnects with fresh session keys.
 **Clients connect but no traffic appears in the dashboard**
 - Run the server with `--verbose` in the foreground to see per-connection events.
 - Confirm the client is targeting the correct `--server` and `--port`.
-- If `require_tls=true`, clients must be started with `--ca` or `--server-cert`.
+- The server always requires TLS — clients must be started with `--ca` or `--server-cert`.
+- The server always requires Ed25519 auth — clients must be started with `--identity` and
+  their public key must be present in `allowed_clients.txt`.
 
 **IP database fails to download on first start**
 - Manually download the file and place it at `ip_db_path` (see [Section 10](#10-ip--asn-database)).
