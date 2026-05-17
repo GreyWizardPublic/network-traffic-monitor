@@ -897,11 +897,19 @@ void connectionThread(int clientFd,
     if (!writeExact(ssl, clientFd, &ok, 1))
         return;
 
-    // Register this client's LAN IP → hex clientId in the shared registry.
-    // All connectionThread workers snapshot this at ingest time so that packets
-    // whose src/dst IP belongs to a known client are stored under the stable hex ID
-    // rather than the raw IP. Entries are never removed — old IPs remain resolvable
-    // across reconnects without any retroactive data mutation.
+    // RAII guard: on any exit from this scope (normal, idle timeout, exception),
+    // remove all registry entries that belong to this session so that a freshly
+    // assigned DHCP address is never misattributed to a stale client ID.
+    struct RegistryCleanup
+    {
+        std::shared_ptr<ClientRegistry> reg;
+        std::string id;   // copy of clientId
+        ~RegistryCleanup() { if (reg) reg->removeClient(id); }
+    } regCleanup{registry, clientId};
+
+    // Register this client's TCP connection IP → hex clientId in the shared registry.
+    // Additional interface addresses (IPv4 + IPv6) are registered when the client
+    // sends "A ip\n" announce lines immediately after auth.
     if (registry && !clientIp.empty())
     {
         std::lock_guard<std::mutex> lk(registry->mtx);
@@ -925,6 +933,8 @@ void connectionThread(int clientFd,
 
     std::string buffer;
     buffer.reserve(4096);
+
+    std::size_t announcedCount = 0;  // number of A-line addresses registered this session
 
     // Local snapshot of the shared IP→clientId registry. Refreshed every 5 seconds
     // so we can resolve LAN IPs to stable hex client IDs in the hot data path without
@@ -1006,7 +1016,31 @@ void connectionThread(int clientFd,
             std::string line = buffer.substr(pos, nl - pos);
             pos = nl + 1;
 
-            if (line.rfind(kDataLinePrefix, 0) == 0)
+            if (line.rfind(kAddrLinePrefix, 0) == 0)
+            {
+                // Address announce: "A ip_address" — register this LAN IP → clientId.
+                // The client sends one line per interface address right after auth.
+                // Silently drop if: over per-session cap, not a LAN IP, or too long.
+                if (announcedCount < kMaxAnnounceAddressesPerSession && registry)
+                {
+                    std::string ip = line.substr(2);
+                    while (!ip.empty() && (ip.back() == '\r' || ip.back() == ' '))
+                        ip.pop_back();
+                    if (!ip.empty() && ip.size() <= config.max_ip_len && isLanIP(ip))
+                    {
+                        {
+                            std::lock_guard<std::mutex> lk(registry->mtx);
+                            registry->ipToClientId[ip] = clientId;
+                        }
+                        localRegSnap[ip] = clientId;
+                        ++announcedCount;
+                        serverLog(LogLevel::Info,
+                                  "ntm-server: client %s announced address %s",
+                                  clientId.c_str(), ip.c_str());
+                    }
+                }
+            }
+            else if (line.rfind(kDataLinePrefix, 0) == 0)
             {
                 PacketMeta meta;
                 if (parseDataLine(line.substr(2), meta, config.max_iface_len, config.max_ip_len))

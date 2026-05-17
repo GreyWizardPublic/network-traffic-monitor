@@ -8,6 +8,7 @@
 #include <pcap/pcap.h>
 
 #include <arpa/inet.h>
+#include <ifaddrs.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -724,6 +725,66 @@ private:
             }
             ::close(fd);
             return false;
+        }
+
+        // Announce all local LAN IP addresses (IPv4 and IPv6, all interfaces) so
+        // that the server can attribute traffic from any of our interfaces to this
+        // client's stable ID — not just the TCP connection source address.
+        // One "A ip\n" line per address; non-fatal if enumeration or send fails.
+        {
+            // Inline LAN-check helpers (mirrors isLanIP in ntm_types.hpp).
+            auto isLanV4 = [](const struct in_addr &a) -> bool {
+                std::uint32_t n = ntohl(a.s_addr);
+                return ((n & 0xFF000000u) == 0x7F000000u) ||  // 127.0.0.0/8
+                       ((n & 0xFF000000u) == 0x0A000000u) ||  // 10.0.0.0/8
+                       ((n & 0xFFF00000u) == 0xAC100000u) ||  // 172.16.0.0/12
+                       ((n & 0xFFFF0000u) == 0xC0A80000u);    // 192.168.0.0/16
+            };
+            auto isLanV6 = [](const struct in6_addr &a) -> bool {
+                static const std::uint8_t lo6[16] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1};
+                if (std::memcmp(&a, lo6, 16) == 0) return true;       // ::1
+                if ((a.s6_addr[0] & 0xFEu) == 0xFCu) return true;    // fc00::/7 ULA
+                if (a.s6_addr[0] == 0xFEu &&
+                    (a.s6_addr[1] & 0xC0u) == 0x80u) return true;    // fe80::/10 link-local
+                return false;
+            };
+
+            struct ifaddrs *ifap = nullptr;
+            if (::getifaddrs(&ifap) == 0)
+            {
+                char ipBuf[INET6_ADDRSTRLEN];
+                std::unordered_set<std::string> seen;  // deduplicate across aliases
+                bool sendOk = true;
+                for (struct ifaddrs *ifa = ifap; ifa && sendOk; ifa = ifa->ifa_next)
+                {
+                    if (!ifa->ifa_addr) continue;
+                    std::string ip;
+                    if (ifa->ifa_addr->sa_family == AF_INET)
+                    {
+                        auto *sa4 = reinterpret_cast<struct sockaddr_in *>(ifa->ifa_addr);
+                        if (!isLanV4(sa4->sin_addr)) continue;
+                        if (!::inet_ntop(AF_INET, &sa4->sin_addr, ipBuf, sizeof(ipBuf))) continue;
+                        ip = ipBuf;
+                    }
+                    else if (ifa->ifa_addr->sa_family == AF_INET6)
+                    {
+                        auto *sa6 = reinterpret_cast<struct sockaddr_in6 *>(ifa->ifa_addr);
+                        if (!isLanV6(sa6->sin6_addr)) continue;
+                        if (!::inet_ntop(AF_INET6, &sa6->sin6_addr, ipBuf, sizeof(ipBuf))) continue;
+                        ip = ipBuf;
+                    }
+                    else continue;
+
+                    if (!ip.empty() && seen.insert(ip).second)
+                    {
+                        std::string line = "A ";
+                        line += ip;
+                        line += '\n';
+                        sendOk = writeExact(ssl, fd, line.data(), line.size());
+                    }
+                }
+                ::freeifaddrs(ifap);
+            }
         }
 
         fd_ = fd;

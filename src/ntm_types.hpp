@@ -60,6 +60,15 @@ struct ClientRegistry
 {
     mutable std::mutex mtx;
     std::unordered_map<std::string, std::string> ipToClientId;
+
+    // Remove all IP entries belonging to clientId (called on session end).
+    void removeClient(const std::string &clientId)
+    {
+        if (clientId.empty()) return;
+        std::lock_guard<std::mutex> lk(mtx);
+        for (auto it = ipToClientId.begin(); it != ipToClientId.end(); )
+            it = (it->second == clientId) ? ipToClientId.erase(it) : std::next(it);
+    }
 };
 
 inline constexpr unsigned kAggregationWindowDaysDefault = 7;
