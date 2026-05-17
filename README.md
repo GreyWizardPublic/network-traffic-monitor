@@ -6,6 +6,9 @@ A self-hosted, multi-client network traffic aggregation system written in C++17.
 See [`LICENSE`](LICENSE) for project source license (GPL-3.0-or-later) and
 [`LICENSES.md`](LICENSES.md) for third-party / system / data licenses.
 
+For a full step-by-step production deployment guide (TLS, Ed25519 auth, systemd, hardening),
+see [`SERVER_DEPLOYMENT.md`](SERVER_DEPLOYMENT.md).
+
 Headless, extensible **client–server network traffic monitor** written in **C++**.
 
 - **Client (`ntm-client`)**: runs on devices, captures packets via `libpcap`, and sends **metadata only** to the server.
