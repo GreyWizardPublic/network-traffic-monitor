@@ -1397,7 +1397,13 @@ static void webServerThread(httplib::SSLServer &svr,
             }
             // Security headers on every response.
             res.set_header("X-Content-Type-Options", "nosniff");
-            res.set_header("Content-Security-Policy", "default-src 'self'");
+            // The dashboard page uses inline <style> and <script> blocks, so
+            // script-src and style-src must permit 'unsafe-inline'. All other
+            // fetch directives remain restricted to same-origin.
+            res.set_header("Content-Security-Policy",
+                           "default-src 'self'; "
+                           "script-src 'self' 'unsafe-inline'; "
+                           "style-src 'self' 'unsafe-inline'");
             return httplib::Server::HandlerResponse::Unhandled;
         });
 
