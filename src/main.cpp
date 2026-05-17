@@ -1433,7 +1433,6 @@ void connectionThread(int clientFd,
                       PerIPConnectionLimiter &perIPLimiter,
                       const ServerConfig &config,
                       SSL_CTX *sslCtx,
-                      bool requireTlsForThisPort,
                       std::shared_ptr<std::atomic<bool>> doneFlag)
 {
     // H1: signal completion to the accept-loop reaper so it can join() and remove the
@@ -1490,7 +1489,7 @@ void connectionThread(int clientFd,
     try
     {
 
-    if (requireTlsForThisPort && !sslCtx)
+    if (!sslCtx)
     {
         return;
     }
@@ -1532,27 +1531,20 @@ void connectionThread(int clientFd,
     const auto sessionStart = std::chrono::steady_clock::now();
 
     std::string clientId;
-    if (!allowedKeys.empty())
+    if (allowedKeys.empty())
     {
-        clientId = verifyClientAuth(ssl, clientFd, allowedKeys);
-        if (clientId.empty())
-        {
-            std::uint8_t reject = 0x01;
-            writeExact(ssl, clientFd, &reject, 1);
-            return;
-        }
-        std::uint8_t ok = 0x00;
-        if (!writeExact(ssl, clientFd, &ok, 1))
-            return;
+        return;
     }
-    else
+    clientId = verifyClientAuth(ssl, clientFd, allowedKeys);
+    if (clientId.empty())
     {
-        // M3: in unauthenticated mode key by IP only (not "ip:ephemeral_port") so
-        // reconnects from the same host aggregate into the same client ID. With
-        // NEW-H1 in place the server will only land here when the operator
-        // explicitly opts out of authentication.
-        clientId = clientIp.empty() ? peerAddr : clientIp;
+        std::uint8_t reject = 0x01;
+        writeExact(ssl, clientFd, &reject, 1);
+        return;
     }
+    std::uint8_t ok = 0x00;
+    if (!writeExact(ssl, clientFd, &ok, 1))
+        return;
 
     // Idle-recv-block fix: bound the per-recv blocking time so the loop can re-check
     // idle_timeout_seconds and g_running periodically. Without this, a peer that
@@ -1977,7 +1969,7 @@ void keyboardWatcherThread()
 int runServer(std::uint16_t port, bool daemonMode, bool verbose,
               const std::string &allowedKeysPath,
               const std::string &certPath, const std::string &keyPath,
-              const ServerConfig &config, bool requireTls)
+              const ServerConfig &config)
 {
     // H2: open syslog before daemonize() because daemonize closes stderr.
     g_verbose.store(verbose, std::memory_order_relaxed);
@@ -2006,20 +1998,14 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
             if (!g_daemon.load()) ERR_print_errors_fp(stderr);
             return 1;
         }
-        serverLog(LogLevel::Warn, "ntm-server: TLS enabled (session max %u hours)",
+        serverLog(LogLevel::Warn, "ntm-server: TLS enabled, plain TCP refused (session max %u hours)",
                   static_cast<unsigned>(kMaxSessionSeconds / 3600));
     }
     else
     {
-        serverLog(LogLevel::Warn, "ntm-server: no TLS (--cert/--key not set); connection not encrypted");
-    }
-    if (requireTls && !sslCtx)
-    {
-        serverLog(LogLevel::Err, "ntm-server: TLS required but TLS not configured; use --cert and --key");
+        serverLog(LogLevel::Err, "ntm-server: TLS is mandatory; set cert and key in config or via --cert/--key");
         return 1;
     }
-    if (requireTls)
-        serverLog(LogLevel::Warn, "ntm-server: TLS required (plain TCP rejected)");
 
     // NEW-H1: fail-closed authentication.
     // If the operator configured an allowed-keys file, refuse to start with zero
@@ -2042,9 +2028,11 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
     }
     else
     {
-        serverLog(LogLevel::Warn,
-                  "ntm-server: NO CLIENT AUTHENTICATION configured (allowed_keys not set); "
-                  "any reachable host can submit data");
+        serverLog(LogLevel::Err,
+                  "ntm-server: client authentication is mandatory; "
+                  "set allowed_keys in config or via --allowed-keys");
+        if (sslCtx) SSL_CTX_free(sslCtx);
+        return 1;
     }
 
     TrafficStats stats(config.aggregation_window_days,
@@ -2344,7 +2332,6 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                           std::ref(perIPLimiter),
                           std::cref(config),
                           sslCtx,
-                          requireTls,
                           doneFlag);
             // From here on, t is a live joinable thread. The only ops left are
             // noexcept (shared_ptr move, thread move, vector push into reserved
@@ -2453,12 +2440,12 @@ int main(int argc, char *argv[])
         if (arg == "--help" || arg == "-h")
         {
             std::cout <<
-                "Usage: ntm-server [--daemon] [--verbose] [--require-tls] [--port N]\n"
+                "Usage: ntm-server [--daemon] [--verbose] [--port N]\n"
                 "                  [--allowed-keys FILE] [--cert PEM] [--key PEM]\n"
                 "                  [--web-port N] [--web-bind IP] [--web-token TOKEN]\n"
                 "                  [--config FILE]\n"
-                "  Options can be set in config file (key=value); command-line overrides config.\n"
-                "  Web dashboard (HTTPS) requires --cert and --key.\n";
+                "  TLS (--cert/--key) and client authentication (--allowed-keys) are mandatory.\n"
+                "  Options can be set in config file (key=value); command-line overrides config.\n";
             return 0;
         }
     }
@@ -2484,7 +2471,6 @@ int main(int argc, char *argv[])
     std::string allowedKeysPath = config.allowed_keys;
     std::string certPath = config.cert;
     std::string keyPath = config.key;
-    bool requireTls = config.require_tls;
     if (!verbose) verbose = config.verbose;
 
     for (int i = 1; i < argc; ++i)
@@ -2494,8 +2480,6 @@ int main(int argc, char *argv[])
             daemonMode = true;
         else if (arg == "--verbose")
             verbose = true;
-        else if (arg == "--require-tls")
-            requireTls = true;
         else if (arg == "--port" && i + 1 < argc)
         {
             if (!parsePortArg("--port", argv[++i], port))
@@ -2528,6 +2512,6 @@ int main(int argc, char *argv[])
     }
 
     return ntm::runServer(port, daemonMode, verbose, allowedKeysPath,
-                          certPath, keyPath, config, requireTls);
+                          certPath, keyPath, config);
 }
 

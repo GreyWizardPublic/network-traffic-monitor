@@ -11,17 +11,18 @@
 # Bind address for the client ingestion port. Empty = 0.0.0.0 (all interfaces).
 # client_bind=
 
-# Path to file with allowed Ed25519 public keys (one 64-char hex line per client). Empty = no auth.
-# allowed_keys=/path/to/allowed_clients.txt
+# Path to file with allowed Ed25519 public keys (one 64-char hex line per client).
+# MANDATORY: the server refuses to start if this is not set or the file contains no valid keys.
+allowed_keys=/etc/ntm-server/allowed_clients.txt
 
 # TLS: server certificate and private key (PEM) shared by the ingestion port and the
-# HTTPS web dashboard. Omit or leave empty for plain TCP on the ingestion port and to
-# disable the web dashboard.
-# cert=/etc/ntm-server/server_cert.pem
-# key=/etc/ntm-server/server_key.pem
+# HTTPS web dashboard.
+# MANDATORY: the server refuses to start without a valid cert/key pair.
+# Plain TCP connections are always refused.
+cert=/etc/ntm-server/server_cert.pem
+key=/etc/ntm-server/server_key.pem
 
-# Require TLS for all ingestion connections: true/yes/1 or false/no/0. Default false.
-# require_tls=false
+# require_tls: obsolete. TLS is now always enforced and this option is ignored.
 
 # ── HTTPS web dashboard ──────────────────────────────────────────────────────
 #

@@ -161,10 +161,10 @@ Minimal production config (all other keys use built-in defaults):
 # /etc/ntm-server/ntm-server.conf
 
 # ── Data ingestion ────────────────────────────────────────────────────────────
+# cert, key, and allowed_keys are all mandatory — the server refuses to start without them.
 port            = 5555
 cert            = /etc/ntm-server/server_cert.pem
 key             = /etc/ntm-server/server_key.pem
-require_tls     = true
 allowed_keys    = /etc/ntm-server/allowed_clients.txt
 
 # ── Web dashboard ─────────────────────────────────────────────────────────────
@@ -372,8 +372,9 @@ closed and the client reconnects with fresh session keys.
 
 ## 13. Security hardening checklist
 
-- [ ] TLS enabled: `cert` and `key` set, `require_tls=true`
-- [ ] Ed25519 auth enabled: `allowed_keys` set, each client started with `--identity`
+- [ ] TLS configured: `cert` and `key` set (mandatory — server refuses to start without them)
+- [ ] Ed25519 auth configured: `allowed_keys` set (mandatory — server refuses to start without it)
+- [ ] Each client started with `--identity` matching a key in `allowed_clients.txt`
 - [ ] `web_token` set to a strong random secret
 - [ ] Server binary runs as a dedicated unprivileged user (`ntm-server`)
 - [ ] `server_key.pem` permissions are `640` (owner `ntm-server`, group `ntm-server`)
@@ -387,8 +388,13 @@ closed and the client reconnects with fresh session keys.
 
 ## 14. Troubleshooting
 
+**Server refuses to start**
+- `cert` and `key` are mandatory — the server exits with an error if either is missing.
+- `allowed_keys` is mandatory — the server exits with an error if not set or the file contains
+  no valid keys. Check the path and file contents.
+
 **Web dashboard does not load**
-- Confirm `cert` and `key` are both set in config; the dashboard is disabled without them.
+- Confirm `cert` and `key` are correctly set and the files are readable by the service user.
 - Use `https://` not `http://` in the browser address bar.
 - For self-signed certs, import or accept the certificate in the browser first.
 
