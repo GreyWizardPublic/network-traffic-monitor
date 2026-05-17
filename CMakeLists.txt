@@ -11,7 +11,8 @@ find_package(Threads REQUIRED)
 find_library(PCAP_LIBRARY pcap REQUIRED)
 
 add_executable(ntm-server
-    src/main.cpp
+    src/server_core.cpp
+    src/web_dashboard.cpp
 )
 
 add_executable(ntm-client

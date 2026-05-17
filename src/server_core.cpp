@@ -3,7 +3,9 @@
 // by interface, IP pair, and country pair.
 
 #include "proto_client_server.hpp"
-#include "httplib.h"
+#include "ntm_types.hpp"
+#include "web_dashboard.hpp"
+// httplib.h comes transitively via web_dashboard.hpp
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -54,47 +56,6 @@
 namespace ntm
 {
 
-// Server aggregation: rolling window by day (configurable). Default days if not in config.
-inline constexpr unsigned kAggregationWindowDaysDefault = 7;
-
-// H2: process-wide logging mode set in main()/runServer().
-// In daemon mode, log lines go to syslog (stderr is /dev/null after daemonize()).
-// In foreground mode, log lines go to stderr.
-// g_verbose enables non-essential ("info") log lines.
-inline std::atomic<bool> g_daemon{false};
-inline std::atomic<bool> g_verbose{false};
-
-enum class LogLevel { Info, Warn, Err };
-
-// Single logging path: syslog (daemon) or stderr (foreground). Use printf-style format.
-inline void serverLog(LogLevel lvl, const char *fmt, ...)
-{
-    if (lvl == LogLevel::Info && !g_verbose.load(std::memory_order_relaxed))
-        return;
-
-    char buf[1024];
-    va_list ap;
-    va_start(ap, fmt);
-    int n = std::vsnprintf(buf, sizeof(buf), fmt, ap);
-    va_end(ap);
-    if (n < 0)
-        return;
-
-    if (g_daemon.load(std::memory_order_relaxed))
-    {
-        int prio = (lvl == LogLevel::Err) ? LOG_ERR
-                 : (lvl == LogLevel::Warn) ? LOG_WARNING
-                 : LOG_INFO;
-        syslog(prio, "%s", buf);
-    }
-    else
-    {
-        std::cerr << buf;
-        if (n > 0 && buf[n - 1] != '\n')
-            std::cerr << '\n';
-    }
-}
-
 // Server boundary limits and startup paths: defaults when not set in config (see docs and ntm-server.conf.example).
 struct ServerConfig
 {
@@ -115,18 +76,14 @@ struct ServerConfig
     unsigned aggregation_window_days{kAggregationWindowDaysDefault};
     std::size_t max_recv_buffer_bytes{1024 * 1024};  // 1 MiB
 
-    // IPRangeResolver / IPDataUpdater configuration (replaces libmaxminddb).
-    // The local cache file is the gzipped TSV pulled from iptoasn.com; the
-    // background updater re-downloads it every ip_db_update_interval_days.
+    // IPRangeResolver / IPDataUpdater configuration.
     std::string ip_db_path{"/var/lib/ntm-server/ip2asn-combined.tsv.gz"};
     std::string ip_db_url{"https://iptoasn.com/data/ip2asn-combined.tsv.gz"};
     unsigned ip_db_update_interval_days{7};
     bool ip_db_auto_update{true};
     std::size_t max_flow_entries_per_key{100000};
     std::size_t max_entity_flow_entries_per_key{100000};
-    // UB-1: hard cap on distinct iface names per client. Prevents an authenticated
-    // (or otherwise accepted) client from growing TrafficStats without bound by
-    // submitting D-lines with arbitrarily many fake iface names.
+    // UB-1: hard cap on distinct iface names per client.
     std::size_t max_ifaces_per_client{256};
     std::size_t max_entity_lines_in_summary{50000};
     std::size_t max_snapshot_entries_for_print{200000};
@@ -179,337 +136,6 @@ private:
     std::unordered_map<std::string, unsigned> counts_;
 };
 
-struct FlowKey
-{
-    std::string src;
-    std::string dst;
-
-    bool operator==(const FlowKey &other) const noexcept
-    {
-        return src == other.src && dst == other.dst;
-    }
-};
-
-struct FlowKeyHash
-{
-    std::size_t operator()(const FlowKey &k) const noexcept
-    {
-        std::hash<std::string> h;
-        return (h(k.src) * 1315423911u) ^ h(k.dst);
-    }
-};
-
-struct Counter
-{
-    std::uint64_t packets{0};
-    std::uint64_t bytes{0};
-};
-
-// Per-(src,dst) flow statistics including basic timing to estimate how often
-// two endpoints communicate over the aggregation window.
-struct FlowStats
-{
-    std::uint64_t packets{0};
-    std::uint64_t bytes{0};
-    // First and last observation time for this flow in epoch seconds.
-    // -1 means "not yet seen".
-    std::int64_t firstSeenSec{-1};
-    std::int64_t lastSeenSec{-1};
-};
-
-using InterfaceTotals = std::unordered_map<std::string, Counter>;
-using FlowMap = std::unordered_map<FlowKey, FlowStats, FlowKeyHash>;
-using InterfaceFlows = std::unordered_map<std::string, FlowMap>;
-using CountryFlowMap = std::unordered_map<FlowKey, Counter, FlowKeyHash>;
-using InterfaceCountryFlows = std::unordered_map<std::string, CountryFlowMap>;
-using EntityFlowMap = std::unordered_map<FlowKey, Counter, FlowKeyHash>;
-using InterfaceEntityFlows = std::unordered_map<std::string, EntityFlowMap>;
-
-struct DayBucket
-{
-    std::int64_t dayIndex{0};
-    InterfaceTotals totals;
-    InterfaceFlows flows;
-    InterfaceCountryFlows countryFlows;
-    InterfaceEntityFlows entityFlows;
-};
-
-class TrafficStats
-{
-public:
-    using InterfaceTotals = ntm::InterfaceTotals;
-    using FlowMap = ntm::FlowMap;
-    using InterfaceFlows = ntm::InterfaceFlows;
-    using InterfaceCountryFlows = ntm::InterfaceCountryFlows;
-    using InterfaceEntityFlows = ntm::InterfaceEntityFlows;
-    using TimePoint = std::chrono::system_clock::time_point;
-
-    explicit TrafficStats(unsigned windowDays,
-                         std::size_t maxFlowEntriesPerKey = 100000,
-                         std::size_t maxEntityFlowEntriesPerKey = 100000,
-                         std::size_t maxIfacesPerClient = 256)
-        : windowDays_(windowDays > 0 ? windowDays : kAggregationWindowDaysDefault)
-        , maxFlowEntriesPerKey_(maxFlowEntriesPerKey > 0 ? maxFlowEntriesPerKey : 1)
-        , maxEntityFlowEntriesPerKey_(maxEntityFlowEntriesPerKey > 0 ? maxEntityFlowEntriesPerKey : 1)
-        , maxIfacesPerClient_(maxIfacesPerClient > 0 ? maxIfacesPerClient : 1)
-    {
-    }
-
-    // Aggregation window start (midnight UTC of oldest day in the rolling window).
-    TimePoint getAggregationWindowStart() const
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (dayBuckets_.empty())
-            return std::chrono::system_clock::now();
-        return TimePoint(std::chrono::seconds(dayBuckets_.front().dayIndex * 86400));
-    }
-
-    // UB-1: result of addPacket() so the caller can rate-limit operator warnings
-    // when a client tries to register more than maxIfacesPerClient_ interfaces.
-    enum class AddResult { Accepted, IfaceCapExceeded };
-
-    // Rolling window: stats tracked by day; when window + 1 days exist, only the oldest day is dropped.
-    AddResult addPacket(const std::string &clientId,
-                        const std::string &iface,
-                        const std::string &src,
-                        const std::string &dst,
-                        const std::string &srcCountry,
-                        const std::string &dstCountry,
-                        const std::string &srcEntity,
-                        const std::string &dstEntity,
-                        std::uint32_t length)
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        const auto now = std::chrono::system_clock::now();
-        const auto epochSec = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
-        const std::int64_t dayIndex = (epochSec >= 0) ? (epochSec / 86400) : ((epochSec - 86399) / 86400);
-        const std::string ciKey = clientId + "|" + iface;
-        const FlowKey flowKey{src, dst};
-        const FlowKey countryKey{srcCountry, dstCountry};
-        const FlowKey entityKey{srcEntity, dstEntity};
-
-        // UB-1: enforce per-client iface cardinality cap BEFORE touching any map
-        // that would otherwise allocate a new entry. We use clientIfaces_ as the
-        // source of truth (it persists across day-bucket rollovers so a malicious
-        // client can't just wait for midnight to reset the cap).
-        auto &ifaceSet = clientIfaces_[clientId];
-        const bool isNewIface = (ifaceSet.find(iface) == ifaceSet.end());
-        if (isNewIface && ifaceSet.size() >= maxIfacesPerClient_)
-        {
-            // Throttle the rejection counter and let the caller decide when to log.
-            ++ifaceRejectCount_[clientId];
-            return AddResult::IfaceCapExceeded;
-        }
-        if (isNewIface)
-            ifaceSet.insert(iface);
-
-        if (dayBuckets_.empty() || dayBuckets_.back().dayIndex != dayIndex)
-            dayBuckets_.push_back(DayBucket{dayIndex, {}, {}, {}, {}});
-
-        DayBucket &bucket = dayBuckets_.back();
-        auto &total = bucket.totals[ciKey];
-        auto &flowMap = bucket.flows[ciKey];
-        auto &entityFlowMap = bucket.entityFlows[ciKey];
-        if (flowMap.size() >= maxFlowEntriesPerKey_ && flowMap.find(flowKey) == flowMap.end())
-        {
-            auto it = std::min_element(flowMap.begin(), flowMap.end(),
-                [](const auto &a, const auto &b) { return a.second.bytes < b.second.bytes; });
-            if (it != flowMap.end())
-                flowMap.erase(it);
-        }
-        if (entityFlowMap.size() >= maxEntityFlowEntriesPerKey_ && entityFlowMap.find(entityKey) == entityFlowMap.end())
-        {
-            auto it = std::min_element(entityFlowMap.begin(), entityFlowMap.end(),
-                [](const auto &a, const auto &b) { return a.second.bytes < b.second.bytes; });
-            if (it != entityFlowMap.end())
-                entityFlowMap.erase(it);
-        }
-        auto &flowCounter = flowMap[flowKey];
-        auto &countryCounter = bucket.countryFlows[ciKey][countryKey];
-        auto &entityCounter = entityFlowMap[entityKey];
-
-        if (wouldOverflow(total.packets, 1u, total.bytes, length) ||
-            wouldOverflow(flowCounter.packets, 1u, flowCounter.bytes, length) ||
-            wouldOverflow(countryCounter.packets, 1u, countryCounter.bytes, length) ||
-            wouldOverflow(entityCounter.packets, 1u, entityCounter.bytes, length))
-        {
-            resetClientUnlocked(clientId);
-            total = bucket.totals[ciKey];
-            flowMap = bucket.flows[ciKey];
-            entityFlowMap = bucket.entityFlows[ciKey];
-            flowCounter = flowMap[flowKey];
-            countryCounter = bucket.countryFlows[ciKey][countryKey];
-            entityCounter = entityFlowMap[entityKey];
-        }
-
-        // Update per-flow counters and basic timing to capture how often
-        // this source and destination communicate within the aggregation window.
-        if (flowCounter.firstSeenSec < 0)
-        {
-            flowCounter.firstSeenSec = epochSec;
-        }
-        flowCounter.lastSeenSec = epochSec;
-
-        total.packets += 1;
-        total.bytes += length;
-        flowCounter.packets += 1;
-        flowCounter.bytes += length;
-        countryCounter.packets += 1;
-        countryCounter.bytes += length;
-        entityCounter.packets += 1;
-        entityCounter.bytes += length;
-
-        while (dayBuckets_.size() > windowDays_)
-            dayBuckets_.pop_front();
-        return AddResult::Accepted;
-    }
-
-    // UB-1: lookup the rejection counter for one client (used by the connection
-    // worker to log only occasionally, not on every dropped D-line). The counter is
-    // never reset; the absolute number is fine for monitoring.
-    std::uint64_t getIfaceRejectCount(const std::string &clientId) const
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto it = ifaceRejectCount_.find(clientId);
-        return it == ifaceRejectCount_.end() ? 0u : it->second;
-    }
-
-    void snapshot(InterfaceTotals &totalsOut,
-                  InterfaceFlows &flowsOut,
-                  InterfaceCountryFlows &countryFlowsOut,
-                  InterfaceEntityFlows &entityFlowsOut,
-                  TimePoint *windowStartOut = nullptr)
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        totalsOut.clear();
-        flowsOut.clear();
-        countryFlowsOut.clear();
-        entityFlowsOut.clear();
-        for (const DayBucket &b : dayBuckets_)
-        {
-            for (const auto &kv : b.totals)
-            {
-                auto &c = totalsOut[kv.first];
-                c.packets += kv.second.packets;
-                c.bytes += kv.second.bytes;
-            }
-            for (const auto &kv : b.flows)
-            {
-                for (const auto &fk : kv.second)
-                {
-                    auto &c = flowsOut[kv.first][fk.first];
-                    c.packets += fk.second.packets;
-                    c.bytes += fk.second.bytes;
-                    if (fk.second.firstSeenSec >= 0)
-                    {
-                        if (c.firstSeenSec < 0 || fk.second.firstSeenSec < c.firstSeenSec)
-                            c.firstSeenSec = fk.second.firstSeenSec;
-                    }
-                    if (fk.second.lastSeenSec >= 0)
-                    {
-                        if (c.lastSeenSec < 0 || fk.second.lastSeenSec > c.lastSeenSec)
-                            c.lastSeenSec = fk.second.lastSeenSec;
-                    }
-                }
-            }
-            for (const auto &kv : b.countryFlows)
-            {
-                for (const auto &ck : kv.second)
-                {
-                    auto &c = countryFlowsOut[kv.first][ck.first];
-                    c.packets += ck.second.packets;
-                    c.bytes += ck.second.bytes;
-                }
-            }
-            for (const auto &kv : b.entityFlows)
-            {
-                for (const auto &ek : kv.second)
-                {
-                    auto &c = entityFlowsOut[kv.first][ek.first];
-                    c.packets += ek.second.packets;
-                    c.bytes += ek.second.bytes;
-                }
-            }
-        }
-        if (windowStartOut && !dayBuckets_.empty())
-            *windowStartOut = TimePoint(std::chrono::seconds(dayBuckets_.front().dayIndex * 86400));
-        else if (windowStartOut)
-            *windowStartOut = std::chrono::system_clock::now();
-    }
-
-private:
-    static bool wouldOverflow(std::uint64_t packets, std::uint64_t addPackets,
-                              std::uint64_t bytes, std::uint64_t addBytes)
-    {
-        return (addPackets > 0 && packets > UINT64_MAX - addPackets) ||
-               (addBytes > 0 && bytes > UINT64_MAX - addBytes);
-    }
-
-    // Remove all statistics for this client from every day bucket (clean reset for overflow).
-    void resetClientUnlocked(const std::string &clientId)
-    {
-        const std::string prefix = clientId + "|";
-        for (DayBucket &b : dayBuckets_)
-        {
-            for (auto it = b.totals.begin(); it != b.totals.end(); )
-            {
-                if (it->first.size() >= prefix.size() && it->first.compare(0, prefix.size(), prefix) == 0)
-                    it = b.totals.erase(it);
-                else
-                    ++it;
-            }
-            for (auto it = b.flows.begin(); it != b.flows.end(); )
-            {
-                if (it->first.size() >= prefix.size() && it->first.compare(0, prefix.size(), prefix) == 0)
-                    it = b.flows.erase(it);
-                else
-                    ++it;
-            }
-            for (auto it = b.countryFlows.begin(); it != b.countryFlows.end(); )
-            {
-                if (it->first.size() >= prefix.size() && it->first.compare(0, prefix.size(), prefix) == 0)
-                    it = b.countryFlows.erase(it);
-                else
-                    ++it;
-            }
-            for (auto it = b.entityFlows.begin(); it != b.entityFlows.end(); )
-            {
-                if (it->first.size() >= prefix.size() && it->first.compare(0, prefix.size(), prefix) == 0)
-                    it = b.entityFlows.erase(it);
-                else
-                    ++it;
-            }
-        }
-        // UB-1: reset the per-client iface bookkeeping too, otherwise the cap would
-        // count rejected/cleared interfaces forever even though their stats are gone.
-        clientIfaces_.erase(clientId);
-        ifaceRejectCount_.erase(clientId);
-    }
-
-    mutable std::mutex mutex_;
-    unsigned windowDays_;
-    std::size_t maxFlowEntriesPerKey_;
-    std::size_t maxEntityFlowEntriesPerKey_;
-    std::size_t maxIfacesPerClient_;
-    std::deque<DayBucket> dayBuckets_;
-
-    // UB-1: track per-client iface cardinality across the rolling window. We do not
-    // remove a client's entry until the rolling window has aged out the last bucket
-    // that referenced it (see snapshot/reset). The key is the clientId itself; the
-    // value is the set of iface names the client has registered. Bounded per client
-    // by maxIfacesPerClient_; bounded across clients by allowed_keys cardinality (or
-    // by per-IP / global connection limits in unauth mode).
-    std::unordered_map<std::string, std::unordered_set<std::string>> clientIfaces_;
-    // Per-(clientId,iface) counter of rejections; rate-limited via a logger threshold.
-    std::unordered_map<std::string, std::uint64_t> ifaceRejectCount_;
-};
-
-// NOTE: GeoIPResolver and EntityResolver have been replaced by the unified
-// IPRangeResolver + IPDataUpdater pair (see src/ip_range_resolver.hpp). The
-// new implementation uses iptoasn.com's CC0 ip2asn-combined.tsv.gz instead of
-// MaxMind's GeoLite2 MMDB files, and auto-refreshes the local cache every 7
-// days by default. libmaxminddb is no longer a dependency.
-
 static std::atomic<bool> g_running{true};
 
 void handleSignal(int)
@@ -549,8 +175,7 @@ void daemonize()
     }
 
     umask(0);
-    // NEW-N6: report (but don't fatally fail on) chdir/dup2 errors. The daemon can
-    // continue if these fail, but operators want a clue in the journal.
+    // NEW-N6: report (but don't fatally fail on) chdir/dup2 errors.
     if (chdir("/") != 0)
     {
         serverLog(LogLevel::Warn, "ntm-server: chdir(\"/\") failed: %s", std::strerror(errno));
@@ -645,6 +270,7 @@ static bool allowedKeysContains(const AllowedKeysSet &keys, const std::string &n
     }
     return found != 0u;
 }
+
 static AllowedKeysSet loadAllowedKeys(const std::string &path)
 {
     AllowedKeysSet out;
@@ -702,7 +328,6 @@ static AllowedKeysSet loadAllowedKeys(const std::string &path)
     }
     return out;
 }
-
 
 // Read exactly n bytes via SSL_read (or recv if ssl is null). Returns true if read succeeded.
 static bool readExact(SSL *ssl, int fd, void *buf, std::size_t n)
@@ -876,8 +501,6 @@ static ServerConfig loadServerConfig(const std::string &configPath, bool *ok = n
         if (kKnown.find(key) == kKnown.end())
         {
             // NEW-N8: surface unknown keys so a typo (e.g. "alowed_keys") doesn't go silent.
-            // We can't use serverLog here yet (g_daemon may not be set during initial main()
-            // parse), so route through stderr; it gets captured by systemd in foreground.
             std::cerr << "ntm-server: " << configPath << " line " << lineNo
                       << ": unknown config key '" << key << "' (ignored)\n";
             continue;
@@ -1094,341 +717,6 @@ std::string formatBytes(std::uint64_t bytes)
     return oss.str();
 }
 
-// ---------------------------------------------------------------------------
-// Web dashboard helpers
-// ---------------------------------------------------------------------------
-
-// Returns true if ip (IPv4 or IPv6 string) is in RFC 1918 / loopback / ULA /
-// link-local space.  Non-parseable strings return false (reject).
-static bool isLanIP(const std::string &ip)
-{
-    struct in_addr a4;
-    if (::inet_pton(AF_INET, ip.c_str(), &a4) == 1)
-    {
-        std::uint32_t a = ntohl(a4.s_addr);
-        if ((a & 0xFF000000u) == 0x7F000000u) return true; // 127.0.0.0/8
-        if ((a & 0xFF000000u) == 0x0A000000u) return true; // 10.0.0.0/8
-        if ((a & 0xFFF00000u) == 0xAC100000u) return true; // 172.16.0.0/12
-        if ((a & 0xFFFF0000u) == 0xC0A80000u) return true; // 192.168.0.0/16
-        return false;
-    }
-    struct in6_addr a6;
-    if (::inet_pton(AF_INET6, ip.c_str(), &a6) == 1)
-    {
-        static const std::uint8_t lo6[16] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1};
-        if (std::memcmp(&a6, lo6, 16) == 0) return true;       // ::1
-        if ((a6.s6_addr[0] & 0xFEu) == 0xFCu) return true;    // fc00::/7 ULA
-        if (a6.s6_addr[0] == 0xFEu &&
-            (a6.s6_addr[1] & 0xC0u) == 0x80u) return true;    // fe80::/10 link-local
-        return false;
-    }
-    return false;
-}
-
-// Per-IP sliding-window rate limiter for the web port.
-class WebRateLimiter
-{
-public:
-    explicit WebRateLimiter(unsigned rpm) : rpm_(rpm) {}
-
-    // Returns true if the request is allowed, false if over limit.
-    bool tryAcquire(const std::string &ip)
-    {
-        if (rpm_ == 0) return true;
-        std::lock_guard<std::mutex> lk(mtx_);
-        auto &dq = map_[ip];
-        const auto now = std::chrono::steady_clock::now();
-        while (!dq.empty() &&
-               std::chrono::duration_cast<std::chrono::seconds>(now - dq.front()).count() >= 60)
-            dq.pop_front();
-        if (dq.size() >= rpm_) return false;
-        dq.push_back(now);
-        return true;
-    }
-
-private:
-    unsigned rpm_;
-    std::mutex mtx_;
-    std::unordered_map<std::string, std::deque<std::chrono::steady_clock::time_point>> map_;
-};
-
-// Escape a string for embedding in a JSON value (returned without surrounding quotes).
-static std::string jsonEsc(const std::string &s)
-{
-    std::string o;
-    o.reserve(s.size() + 4);
-    for (unsigned char c : s)
-    {
-        if      (c == '"')  o += "\\\"";
-        else if (c == '\\') o += "\\\\";
-        else if (c == '\n') o += "\\n";
-        else if (c == '\r') o += "\\r";
-        else if (c == '\t') o += "\\t";
-        else if (c < 0x20)  ; // drop other control chars
-        else                o += static_cast<char>(c);
-    }
-    return o;
-}
-
-static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLines)
-{
-    TrafficStats::InterfaceTotals totals;
-    TrafficStats::InterfaceFlows flows;
-    TrafficStats::InterfaceCountryFlows countryFlows;
-    TrafficStats::InterfaceEntityFlows entityFlows;
-    TrafficStats::TimePoint windowStart;
-    stats.snapshot(totals, flows, countryFlows, entityFlows, &windowStart);
-
-    const auto windowEpoch = std::chrono::duration_cast<std::chrono::seconds>(
-        windowStart.time_since_epoch()).count();
-    const auto nowEpoch = std::chrono::duration_cast<std::chrono::seconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
-
-    std::string j;
-    j.reserve(4096);
-    j += "{\n  \"window_start\": ";
-    j += std::to_string(windowEpoch);
-    j += ",\n  \"generated_at\": ";
-    j += std::to_string(nowEpoch);
-
-    // Interfaces
-    j += ",\n  \"interfaces\": [";
-    bool first = true;
-    for (const auto &kv : totals)
-    {
-        auto sep = kv.first.find('|');
-        std::string client = sep == std::string::npos ? std::string{} : kv.first.substr(0, sep);
-        std::string iface  = sep == std::string::npos ? kv.first : kv.first.substr(sep + 1);
-        if (!first) j += ',';
-        j += "\n    {\"client\":\"";
-        j += jsonEsc(client);
-        j += "\",\"iface\":\"";
-        j += jsonEsc(iface);
-        j += "\",\"packets\":";
-        j += std::to_string(kv.second.packets);
-        j += ",\"bytes\":";
-        j += std::to_string(kv.second.bytes);
-        j += '}';
-        first = false;
-    }
-    j += "\n  ]";
-
-    // Entities — collect all rows, sort by bytes descending, truncate
-    struct EntityRow
-    {
-        std::string client, iface, srcEntity, dstEntity;
-        std::uint64_t packets{0}, bytes{0};
-    };
-    std::vector<EntityRow> rows;
-    for (const auto &kv : entityFlows)
-    {
-        auto sep = kv.first.find('|');
-        std::string client = sep == std::string::npos ? std::string{} : kv.first.substr(0, sep);
-        std::string iface  = sep == std::string::npos ? kv.first : kv.first.substr(sep + 1);
-        for (const auto &ek : kv.second)
-            rows.push_back({client, iface, ek.first.src, ek.first.dst,
-                            ek.second.packets, ek.second.bytes});
-    }
-    std::sort(rows.begin(), rows.end(),
-              [](const EntityRow &a, const EntityRow &b) { return a.bytes > b.bytes; });
-    bool truncated = false;
-    if (maxEntityLines > 0 && rows.size() > maxEntityLines)
-    {
-        rows.resize(maxEntityLines);
-        truncated = true;
-    }
-
-    j += ",\n  \"entities\": [";
-    first = true;
-    for (const auto &r : rows)
-    {
-        if (!first) j += ',';
-        j += "\n    {\"client\":\"";
-        j += jsonEsc(r.client);
-        j += "\",\"iface\":\"";
-        j += jsonEsc(r.iface);
-        j += "\",\"packets\":";
-        j += std::to_string(r.packets);
-        j += ",\"bytes\":";
-        j += std::to_string(r.bytes);
-        j += ",\"src_entity\":\"";
-        j += jsonEsc(r.srcEntity);
-        j += "\",\"dst_entity\":\"";
-        j += jsonEsc(r.dstEntity);
-        j += "\"}";
-        first = false;
-    }
-    j += "\n  ]";
-    j += ",\n  \"truncated\": ";
-    j += truncated ? "true" : "false";
-    j += "\n}\n";
-    return j;
-}
-
-// Self-contained HTML dashboard served at GET /.
-static const char kDashboardHtml[] = R"HTML(<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Network Traffic Monitor</title>
-<style>
-*{box-sizing:border-box}
-body{font-family:monospace;background:#0e0e14;color:#ccc;margin:0;padding:16px}
-h1{font-size:1.05em;margin:0 0 4px;color:#7af}
-.meta{font-size:0.78em;color:#666;margin-bottom:14px}
-.section{color:#7af;font-size:0.82em;text-transform:uppercase;letter-spacing:.06em;margin:18px 0 4px}
-table{border-collapse:collapse;width:100%;font-size:0.82em;margin-bottom:4px}
-th{background:#161622;color:#888;text-align:left;padding:5px 10px;border-bottom:1px solid #252535;white-space:nowrap}
-td{padding:3px 10px;border-bottom:1px solid #1a1a28;white-space:nowrap}
-tr:hover td{background:#171726}
-.note{font-size:0.75em;color:#666;margin-top:2px}
-#status{font-size:0.75em;margin-bottom:10px}
-.dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;vertical-align:middle}
-.ok{background:#3a3}
-.err{background:#a33}
-.trunc{color:#a80;font-style:italic;font-size:0.8em;padding:4px 10px}
-</style>
-</head>
-<body>
-<h1>Network Traffic Monitor</h1>
-<div id="status"><span id="dot" class="dot ok"></span><span id="smsg">Loading&#8230;</span></div>
-<div class="meta">
-  Window start: <span id="win">&#8212;</span> &nbsp;|&nbsp;
-  Updated: <span id="gen">&#8212;</span> &nbsp;|&nbsp;
-  Auto-refresh: 30 s
-</div>
-
-<div class="section">Interfaces</div>
-<table><thead><tr><th>Client</th><th>Interface</th><th>Packets</th><th>Bytes</th></tr></thead>
-<tbody id="iface_body"></tbody></table>
-<div class="note" id="iface_note"></div>
-
-<div class="section">Entity Flows <span style="color:#555;font-size:0.85em">(sorted by bytes, top results)</span></div>
-<table><thead><tr><th>Client</th><th>Interface</th><th>Src Entity</th><th>Dst Entity</th><th>Packets</th><th>Bytes</th></tr></thead>
-<tbody id="entity_body"></tbody></table>
-<div class="note" id="entity_note"></div>
-
-<script>
-const POLL_MS=30000;
-function fmtB(b){
-  if(b<1024)return b+'B';
-  if(b<1048576)return(b/1024).toFixed(1)+'K';
-  if(b<1073741824)return(b/1048576).toFixed(1)+'M';
-  return(b/1073741824).toFixed(2)+'G';
-}
-function fmtT(ep){return ep?new Date(ep*1000).toLocaleString():'—';}
-function esc(s){
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
-function row(cells){return'<tr>'+cells.map(c=>'<td>'+esc(c)+'</td>').join('')+'</tr>';}
-async function refresh(){
-  try{
-    const r=await fetch('/api/summary',{cache:'no-store'});
-    if(!r.ok)throw new Error('HTTP '+r.status);
-    const d=await r.json();
-    document.getElementById('win').textContent=fmtT(d.window_start);
-    document.getElementById('gen').textContent=fmtT(d.generated_at);
-    const ifaces=d.interfaces||[];
-    document.getElementById('iface_body').innerHTML=
-      ifaces.length?ifaces.map(x=>row([x.client||'(ip-auth)',x.iface,
-        x.packets.toLocaleString(),fmtB(x.bytes)])).join('')
-      :'<tr><td colspan="4" style="color:#555">No data yet</td></tr>';
-    document.getElementById('iface_note').textContent='';
-    const ents=d.entities||[];
-    document.getElementById('entity_body').innerHTML=
-      ents.length?ents.map(x=>row([x.client||'(ip-auth)',x.iface,
-        x.src_entity,x.dst_entity,x.packets.toLocaleString(),fmtB(x.bytes)])).join('')
-      :'<tr><td colspan="6" style="color:#555">No data yet</td></tr>';
-    document.getElementById('entity_note').textContent=
-      d.truncated?'Results truncated to server limit.':'';
-    setS(true,'OK — '+new Date().toLocaleTimeString());
-  }catch(e){setS(false,'Error: '+e.message);}
-}
-function setS(ok,m){
-  document.getElementById('dot').className='dot '+(ok?'ok':'err');
-  document.getElementById('smsg').textContent=m;
-}
-refresh();
-setInterval(refresh,POLL_MS);
-</script>
-</body>
-</html>
-)HTML";
-
-// Run the HTTPS web dashboard in a background thread.
-// Blocks until svr.stop() is called (or cert/key setup fails).
-static void webServerThread(httplib::SSLServer &svr,
-                            TrafficStats &stats,
-                            const ServerConfig &config)
-{
-    WebRateLimiter rateLimiter(config.web_rate_limit_rpm);
-
-    // Pre-routing: LAN check, rate limit, optional bearer token.
-    svr.set_pre_routing_handler(
-        [&](const httplib::Request &req, httplib::Response &res) -> httplib::Server::HandlerResponse
-        {
-            const std::string &ip = req.remote_addr;
-            if (!isLanIP(ip))
-            {
-                res.status = 403;
-                res.set_content("{\"error\":\"forbidden: LAN clients only\"}\n",
-                                "application/json");
-                return httplib::Server::HandlerResponse::Handled;
-            }
-            if (!rateLimiter.tryAcquire(ip))
-            {
-                res.status = 429;
-                res.set_header("Retry-After", "60");
-                res.set_content("{\"error\":\"rate limit exceeded\"}\n", "application/json");
-                return httplib::Server::HandlerResponse::Handled;
-            }
-            if (!config.web_token.empty())
-            {
-                auto auth = req.get_header_value("Authorization");
-                const std::string expected = "Bearer " + config.web_token;
-                if (auth != expected)
-                {
-                    res.status = 401;
-                    res.set_header("WWW-Authenticate", "Bearer realm=\"ntm\"");
-                    res.set_content("{\"error\":\"unauthorized\"}\n", "application/json");
-                    return httplib::Server::HandlerResponse::Handled;
-                }
-            }
-            // Security headers on every response.
-            res.set_header("X-Content-Type-Options", "nosniff");
-            // The dashboard page uses inline <style> and <script> blocks, so
-            // script-src and style-src must permit 'unsafe-inline'. All other
-            // fetch directives remain restricted to same-origin.
-            res.set_header("Content-Security-Policy",
-                           "default-src 'self'; "
-                           "script-src 'self' 'unsafe-inline'; "
-                           "style-src 'self' 'unsafe-inline'");
-            return httplib::Server::HandlerResponse::Unhandled;
-        });
-
-    // GET / — embedded dashboard HTML
-    svr.Get("/", [](const httplib::Request &, httplib::Response &res) {
-        res.set_content(kDashboardHtml, "text/html; charset=utf-8");
-    });
-
-    // GET /api/summary — JSON snapshot
-    svr.Get("/api/summary",
-        [&stats, &config](const httplib::Request &, httplib::Response &res) {
-            res.set_header("Cache-Control", "no-store");
-            res.set_content(buildSummaryJson(stats, config.max_entity_lines_in_summary),
-                            "application/json");
-        });
-
-    // All other paths → 404
-    svr.set_error_handler([](const httplib::Request &, httplib::Response &res) {
-        if (res.status == 404)
-            res.set_content("{\"error\":\"not found\"}\n", "application/json");
-    });
-
-    svr.listen(config.web_bind, static_cast<int>(config.web_port));
-}
-
 void connectionThread(int clientFd,
                       std::string peerAddr,
                       std::string clientIp,
@@ -1553,15 +841,11 @@ void connectionThread(int clientFd,
         return;
 
     // Idle-recv-block fix: bound the per-recv blocking time so the loop can re-check
-    // idle_timeout_seconds and g_running periodically. Without this, a peer that
-    // completes auth and then goes silent indefinitely holds a worker thread + slot
-    // until the kernel drops the TCP connection (~2h with default keepalives), and
-    // server shutdown stalls waiting for those workers to join.
+    // idle_timeout_seconds and g_running periodically.
     {
         unsigned pollSecs = config.idle_timeout_seconds;
         if (pollSecs == 0 || pollSecs > 30) pollSecs = 30;
-        // NEW-N5: explicitly fail this connection if we cannot install the timeout,
-        // because the read loop cannot honor idle_timeout_seconds without it.
+        // NEW-N5: explicitly fail this connection if we cannot install the timeout.
         if (!setSocketTimeout(clientFd, pollSecs))
         {
             serverLog(LogLevel::Err,
@@ -1578,8 +862,7 @@ void connectionThread(int clientFd,
     std::int64_t lastDLineSecond = -1;
     std::size_t dLineCountThisSecond = 0;
     // UB-1: per-connection counter of D-lines dropped because the client has
-    // exceeded its iface cap. Used to log only on power-of-two crossings so a
-    // misbehaving client cannot spam syslog.
+    // exceeded its iface cap. Logged only on power-of-two crossings.
     std::uint64_t ifaceRejectedInThisSession = 0;
 
     char recvBuf[4096];
@@ -1603,9 +886,6 @@ void connectionThread(int clientFd,
         if (n <= 0)
         {
             // Distinguish recv timeout (re-check idle / g_running) from real error/close.
-            // Both plain recv (returns -1, errno=EAGAIN) and SSL_read (returns -1 with
-            // SSL_ERROR_WANT_READ) report "would block" on RCVTIMEO expiry. Anything
-            // else is a true close/error and we exit the loop.
             if (n < 0)
             {
                 if (!ssl && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))
@@ -1653,9 +933,7 @@ void connectionThread(int clientFd,
                         continue;  // rate limit: drop this line
                     // Grab a fresh snapshot of the resolver per D-line. The
                     // shared_ptr load is mutex-protected but cheap; this gives
-                    // long-lived connections the benefit of background DB updates
-                    // without restarting. If no DB is loaded yet (e.g. first
-                    // startup is still downloading), all lookups return "??".
+                    // long-lived connections the benefit of background DB updates.
                     auto resolver = ipDataUpdater.get();
                     std::string srcCountry = resolver ? resolver->countryFor(meta.srcIp)
                                                       : std::string(IPRangeResolver::kUnknownCountry);
@@ -1667,9 +945,8 @@ void connectionThread(int clientFd,
                                                       : std::string(IPRangeResolver::kUnknownEntity);
                     auto addRes = stats.addPacket(clientId, meta.iface, meta.srcIp, meta.dstIp,
                                                   srcCountry, dstCountry, srcEntity, dstEntity, meta.bytes);
-                    // UB-1: rate-limit operator visibility into iface-cap rejections.
-                    // We log once per power-of-two crossing per connection so a
-                    // misbehaving client surfaces but cannot spam syslog.
+                    // UB-1: log on power-of-two crossings so a misbehaving client
+                    // surfaces but cannot spam syslog.
                     if (addRes == TrafficStats::AddResult::IfaceCapExceeded)
                     {
                         ++ifaceRejectedInThisSession;
@@ -1707,16 +984,12 @@ void connectionThread(int clientFd,
 
 void statsPrinterThread(TrafficStats &stats, std::size_t maxSnapshotEntriesForPrint)
 {
-    // NEW-N3: wrap each iteration so a transient bad_alloc (e.g. snapshot copy of
-    // very large maps) doesn't kill the entire daemon via std::terminate. We also
-    // wrap the outer loop so the thread itself never escapes with an exception.
+    // NEW-N3: wrap each iteration so a transient bad_alloc doesn't kill the entire daemon.
     while (g_running.load())
     {
         try
         {
-        // UE-2 (extra): chunk the inter-iteration sleep so g_running is checked
-        // frequently. Previously a 5s sleep_for delayed graceful shutdown by up
-        // to 5s after SIGINT/SIGTERM.
+        // UE-2 (extra): chunk the inter-iteration sleep so g_running is checked frequently.
         for (int i = 0; i < 20; ++i)
         {
             if (!g_running.load()) break;
@@ -1725,9 +998,7 @@ void statsPrinterThread(TrafficStats &stats, std::size_t maxSnapshotEntriesForPr
         if (!g_running.load())
             break;
 
-        // H2: in daemon mode we suppress the detailed periodic printout (stderr is /dev/null
-        // and syslog is not the right channel for high-frequency multi-line dumps).
-        // A separate concise periodic info line via serverLog is emitted instead.
+        // H2: in daemon mode suppress the detailed periodic printout.
         if (g_daemon.load(std::memory_order_relaxed) && !g_verbose.load(std::memory_order_relaxed))
         {
             TrafficStats::InterfaceTotals totalsQuick;
@@ -1766,10 +1037,7 @@ void statsPrinterThread(TrafficStats &stats, std::size_t maxSnapshotEntriesForPr
             totalEntityEntries += kv.second.size();
         const bool skipDetail = (totalFlowEntries + totalEntityEntries) > maxSnapshotEntriesForPrint;
 
-        // NEW-M2: route detailed verbose stats through one sink so daemon+verbose mode
-        // actually reaches syslog. Foreground writes directly to stderr; daemon writes
-        // to an ostringstream that is later split by '\n' and emitted as multiple
-        // serverLog() calls (each line becomes one syslog entry).
+        // NEW-M2: route detailed verbose stats through one sink.
         const bool toSyslog = g_daemon.load(std::memory_order_relaxed);
         std::ostringstream daemonBuf;
         std::ostream &out = toSyslog
@@ -1909,8 +1177,6 @@ void statsPrinterThread(TrafficStats &stats, std::size_t maxSnapshotEntriesForPr
         catch (const std::exception &e)
         {
             serverLog(LogLevel::Err, "ntm-server: stats printer iteration exception: %s", e.what());
-            // UE-7: brief back-off after a caught exception to avoid syslog flooding
-            // if the failure mode is persistent (e.g. recurring bad_alloc).
             std::this_thread::sleep_for(std::chrono::seconds(1));
         }
         catch (...)
@@ -1923,11 +1189,7 @@ void statsPrinterThread(TrafficStats &stats, std::size_t maxSnapshotEntriesForPr
 
 void keyboardWatcherThread()
 {
-    // UE-2: poll stdin with a small timeout so the watcher checks g_running
-    // periodically. Previously this thread blocked in std::cin.get() until EOF
-    // or a key press, which caused graceful shutdown (Ctrl+C in foreground) to
-    // hang at join() until the user typed something or closed the terminal.
-    // NEW-N1: defensive try/catch so any unexpected exception cannot kill the daemon.
+    // UE-2: poll stdin with a small timeout so the watcher checks g_running periodically.
     try
     {
         constexpr int kPollIntervalMs = 250;
@@ -1939,25 +1201,23 @@ void keyboardWatcherThread()
             pfd.revents = 0;
             int pr = ::poll(&pfd, 1, kPollIntervalMs);
             if (pr == 0)
-                continue;  // timeout: re-check g_running
+                continue;
             if (pr < 0)
             {
                 if (errno == EINTR) continue;
-                // Unexpected poll error: log and back off briefly, but don't exit
-                // the thread because main() is waiting to join us.
                 serverLog(LogLevel::Warn, "ntm-server: stdin poll failed: %s",
                           std::strerror(errno));
                 std::this_thread::sleep_for(std::chrono::milliseconds(250));
                 continue;
             }
             if (pfd.revents & (POLLHUP | POLLNVAL))
-                break;  // stdin closed or invalid
+                break;
             if (!(pfd.revents & POLLIN))
                 continue;
             char c = 0;
             ssize_t n = ::read(STDIN_FILENO, &c, 1);
             if (n <= 0)
-                break;  // EOF or error: stop watching
+                break;
             if (c == 'q' || c == 'Q')
             {
                 serverLog(LogLevel::Warn, "ntm-server: received 'q' on stdin, shutting down...");
@@ -2014,10 +1274,6 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
     }
 
     // NEW-H1: fail-closed authentication.
-    // If the operator configured an allowed-keys file, refuse to start with zero
-    // valid keys loaded. Without this, a typo in the path or a corrupted file would
-    // silently downgrade the server to "no auth" because connectionThread treats an
-    // empty allow-list as "accept anyone".
     AllowedKeysSet allowedKeys = loadAllowedKeys(allowedKeysPath);
     if (!allowedKeysPath.empty())
     {
@@ -2046,8 +1302,7 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                        config.max_entity_flow_entries_per_key,
                        config.max_ifaces_per_client);
 
-    // IP-to-country/ASN resolver + background auto-updater. Replaces both the
-    // old GeoIPResolver and EntityResolver. Source: iptoasn.com (CC0).
+    // IP-to-country/ASN resolver + background auto-updater.
     IPDataUpdater::Config ipCfg;
     ipCfg.path = config.ip_db_path;
     ipCfg.url  = config.ip_db_url;
@@ -2060,9 +1315,6 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
         else if (prio == 6) lvl = LogLevel::Info;
         serverLog(lvl, "%s", msg.c_str());
     });
-    // Try to load the existing on-disk file synchronously so lookups work from
-    // line 1. If it's missing or stale, the updater's background thread will
-    // download a fresh copy shortly after start().
     ipDataUpdater.loadInitial();
     ipDataUpdater.start();
 
@@ -2080,9 +1332,6 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
         if (fd < 0)
             return -1;
         int opt = 1;
-        // UE-4: SO_REUSEADDR failure is not fatal but should be visible. Without
-        // it, a quick restart after Ctrl+C can hit TIME_WAIT and bind() will fail;
-        // operators benefit from knowing if the option didn't take effect.
         if (::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) != 0)
         {
             serverLog(LogLevel::Warn,
@@ -2130,7 +1379,8 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
     serverLog(LogLevel::Warn, "ntm-server listening on client port %u (%s)",
               static_cast<unsigned>(port), daemonMode ? "daemon mode" : "foreground mode");
 
-    // Start HTTPS web dashboard if web_port > 0 and TLS cert/key are configured.
+    // Start HTTPS web dashboard if web_port > 0.
+    // Build WebConfig from ServerConfig so the web side stays decoupled.
     std::unique_ptr<httplib::SSLServer> webSvr;
     std::thread webThread;
     if (config.web_port > 0)
@@ -2156,10 +1406,18 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                 }
                 else
                 {
+                    // Populate WebConfig: the web thread only gets the fields it actually uses.
+                    WebConfig webCfg;
+                    webCfg.port             = config.web_port;
+                    webCfg.bind             = config.web_bind;
+                    webCfg.token            = config.web_token;
+                    webCfg.rate_limit_rpm   = config.web_rate_limit_rpm;
+                    webCfg.max_entity_lines = config.max_entity_lines_in_summary;
+
                     webThread = std::thread(webServerThread,
                                             std::ref(*webSvr),
                                             std::ref(stats),
-                                            std::cref(config));
+                                            webCfg);
                     serverLog(LogLevel::Warn,
                               "ntm-server: HTTPS web dashboard on %s:%u (LAN-only, rate-limit %u rpm)",
                               config.web_bind.c_str(),
@@ -2192,9 +1450,7 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
         keyWatcher = std::thread(keyboardWatcherThread);
     }
 
-    // H1: self-pruning worker tracking. Each spawned thread sets its `done` flag
-    // when it exits; the accept loop joins+erases finished entries each iteration so
-    // the vector size never exceeds the number of currently-live connections.
+    // H1: self-pruning worker tracking.
     struct WorkerEntry
     {
         std::thread t;
@@ -2248,11 +1504,7 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
         int clientFd = ::accept(acceptFd, reinterpret_cast<sockaddr *>(&clientAddr), &len);
         if (clientFd < 0)
         {
-            // UE-1: triage accept() errors. EINTR / ECONNABORTED / EPROTO are
-            // transient and POSIX specifically calls them out as retry-the-call
-            // conditions. EMFILE / ENFILE are fd exhaustion: the daemon should
-            // not exit (operators frequently see EMFILE transiently under load),
-            // we back off briefly and continue. Anything else is treated as fatal.
+            // UE-1: triage accept() errors.
             const int e = errno;
             if (e == EINTR || e == ECONNABORTED || e == EPROTO)
                 continue;
@@ -2282,11 +1534,7 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
 
         char addrBuf[INET_ADDRSTRLEN]{};
         const char *ntop = ::inet_ntop(AF_INET, &clientAddr.sin_addr, addrBuf, sizeof(addrBuf));
-        // UE-3: if inet_ntop fails (essentially impossible for AF_INET, but POSIX
-        // permits it), refuse the connection rather than silently bypass the per-IP
-        // limiter. An empty IP string would also short-circuit tryAcquire("") to
-        // true, defeating the cap. Synthesize a safe fallback identifier from the
-        // raw sin_addr so the per-IP cap still works, and log loudly.
+        // UE-3: if inet_ntop fails, use a synthetic key so the per-IP cap still works.
         std::string clientIpStr;
         if (ntop)
         {
@@ -2294,8 +1542,6 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
         }
         else
         {
-            // Fall back to the raw u32 in network byte order as a string so the
-            // per-IP limiter sees a distinct, deterministic key per peer.
             std::uint32_t raw = clientAddr.sin_addr.s_addr;
             char fb[32];
             std::snprintf(fb, sizeof(fb), "raw:%u", static_cast<unsigned>(raw));
@@ -2317,12 +1563,7 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
         }
         activeConnections++;
 
-        // NEW-N2: spawn the worker exception-safely. If make_shared throws bad_alloc
-        // or std::thread() throws system_error (e.g. pthread EAGAIN), we must release
-        // everything acquired above (clientFd, per-IP slot, activeConnections counter).
-        // Otherwise a single resource-pressure event permanently leaks those slots.
-        // workers.push_back is bounded by reserve(max_concurrent_connections +
-        // max_concurrent_monitor_connections), so realistic OOM there is impossible.
+        // NEW-N2: spawn the worker exception-safely.
         try
         {
             std::shared_ptr<std::atomic<bool>> doneFlag =
@@ -2339,11 +1580,6 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                           std::cref(config),
                           sslCtx,
                           doneFlag);
-            // From here on, t is a live joinable thread. The only ops left are
-            // noexcept (shared_ptr move, thread move, vector push into reserved
-            // storage). If a future change makes push_back throwing again, detach
-            // the thread inside that branch to avoid std::terminate on temporary
-            // destruction.
             workers.push_back(WorkerEntry{std::move(t), std::move(doneFlag)});
         }
         catch (const std::exception &e)
@@ -2383,14 +1619,10 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
     }
     workers.clear();
 
-    // Stop the IP data updater BEFORE freeing SSL_CTX. The updater holds a
-    // libcurl handle (uses OpenSSL internally on most distros). Stopping it
-    // first guarantees it can't be in the middle of an SSL_read when SSL_CTX
-    // is torn down.
+    // Stop the IP data updater BEFORE freeing SSL_CTX.
     ipDataUpdater.stop();
 
-    // Free SSL_CTX after all workers have released their SSL objects so we don't
-    // tear down crypto state while a worker is still using it.
+    // Free SSL_CTX after all workers have released their SSL objects.
     if (sslCtx)
         SSL_CTX_free(sslCtx);
 
@@ -2409,7 +1641,6 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
 } // namespace ntm
 
 // H3: parse a TCP port from a CLI string; print error and return false on bad input.
-// Catches std::stoi exceptions so a typo like "--port abc" never aborts the process.
 static bool parsePortArg(const char *flag, const char *valStr, std::uint16_t &out)
 {
     try
@@ -2457,8 +1688,7 @@ int main(int argc, char *argv[])
     }
 
     // M7: load config exactly once and fail loudly if --config was given but the
-    // file could not be opened (avoids silently using defaults on a typo).
-    // NEW-N8: also warn if the file opened but contained zero recognized keys.
+    // file could not be opened.
     bool configOk = true;
     std::size_t recognizedKeys = 0;
     ntm::ServerConfig config = ntm::loadServerConfig(configPath, &configOk, &recognizedKeys);
@@ -2520,4 +1750,3 @@ int main(int argc, char *argv[])
     return ntm::runServer(port, daemonMode, verbose, allowedKeysPath,
                           certPath, keyPath, config);
 }
-
