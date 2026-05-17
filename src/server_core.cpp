@@ -1064,13 +1064,15 @@ void connectionThread(int clientFd,
                     std::string dstCountry = resolver ? resolver->countryFor(meta.dstIp)
                                                       : std::string(IPRangeResolver::kUnknownCountry);
                     // Entity resolution: for LAN IPs, look up the local registry snapshot
-                    // to get the stable hex client ID. Unknown LAN IPs fall back to raw IP.
+                    // to get the stable hex client ID. Unknown LAN IPs are stored as
+                    // "@{reporterClientId}:{ip}" so that the same RFC 1918 address appearing
+                    // on two different physical LANs is never conflated in TrafficStats.
                     // External IPs use the ASN entity resolver.
-                    auto entityForIp = [&resolver, &localRegSnap](const std::string &ip) -> std::string {
+                    auto entityForIp = [&resolver, &localRegSnap, &clientId](const std::string &ip) -> std::string {
                         if (isLanIP(ip)) {
                             auto it = localRegSnap.find(ip);
                             if (it != localRegSnap.end()) return it->second; // known client → hex ID
-                            return ip;                                         // unknown LAN → raw IP
+                            return "@" + clientId + ":" + ip;                 // unknown LAN → reporter-scoped key
                         }
                         return resolver ? resolver->entityFor(ip)
                                        : std::string(IPRangeResolver::kUnknownEntity);

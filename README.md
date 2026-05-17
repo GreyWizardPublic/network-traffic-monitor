@@ -385,6 +385,43 @@ The server enforces protocol and resource limits to reduce abuse and DoS:
   connections that send no data; session lifetime capped at 6 hours.
 - **Web dashboard:** Per-IP sliding-window rate limit (default 30 req/min).
 
+## Multi-LAN deployments
+
+When multiple `ntm-client` instances run on physically **separate LANs** that happen
+to share overlapping RFC 1918 address space (e.g. both networks use `192.168.1.x`),
+the server correctly distinguishes devices across networks without any additional
+configuration.
+
+### How client identification works
+
+After authentication each client announces all its interface addresses to the server
+with `A ip\n` protocol lines. The server registers every announced IP → stable client
+ID mapping. At ingest time:
+
+| Source/destination IP | Stored entity key |
+|---|---|
+| Client's own announced IP | 64-char hex client ID |
+| Unknown device on client's LAN | `@{reporterClientId}:{ip}` |
+| Public / external IP | ASN + organisation string |
+
+The `@reporter:ip` prefix makes each entity key globally unique: `@aabbcc...:192.168.1.20`
+and `@ddeeff...:192.168.1.20` are separate keys even though the device IP is identical.
+
+### Dashboard display
+
+- **Entity Summary tab** — unknown LAN devices from client A appear as `LAN (ClientA-name)`,
+  those from client B appear as `LAN (ClientB-name)`. Traffic attributed to a known
+  client's own IP shows the client nickname directly.
+- **LAN Detail tab** — lists every unidentified LAN device with its raw IP, a
+  **"Reported by"** column showing which NTM client observed it, and in/out byte totals.
+  Same IP on different physical LANs appears as separate rows with different reporters.
+
+### Redundant reporters (same physical LAN, two clients)
+
+If two NTM clients on the **same** physical network both observe the same unknown device,
+that device appears as two separate LAN Detail rows — one per reporting client. This is
+expected behaviour in redundant-monitoring setups.
+
 ## Limitations & Notes
 
 - **Web dashboard — no per-user authentication (current version):** The web dashboard

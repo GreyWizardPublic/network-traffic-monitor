@@ -139,6 +139,21 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
             if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
         return true;
     };
+    // Detects reporter-scoped LAN keys produced at ingest time: "@{64-hex}:{ip}".
+    // These encode which NTM client reported the traffic so that the same RFC 1918
+    // address on two physically separate LANs is never conflated in storage.
+    auto parseReporterScoped = [](const std::string &s,
+                                   std::string *reporterHex = nullptr,
+                                   std::string *lanIp = nullptr) -> bool {
+        if (s.size() < 67 || s[0] != '@' || s[65] != ':') return false;
+        for (std::size_t i = 1; i <= 64; ++i) {
+            char c = s[i];
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+        }
+        if (reporterHex) *reporterHex = s.substr(1, 64);
+        if (lanIp)       *lanIp       = s.substr(66);
+        return true;
+    };
     auto displayClient = [&nicknames, &isHexClientId](const std::string &s) -> std::string {
         if (isHexClientId(s)) {
             auto it = nicknames.find(s);
@@ -150,6 +165,14 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
         if (isHexClientId(s)) {
             auto it = nicknames.find(s);
             return it != nicknames.end() ? it->second : s;
+        }
+        // Reporter-scoped unknown LAN device: "@{reporterHex}:{ip}"
+        // Show as "LAN (ClientName)" so multi-LAN deployments can tell networks apart.
+        std::string reporterHex;
+        if (parseReporterScoped(s, &reporterHex)) {
+            auto it = nicknames.find(reporterHex);
+            std::string name = (it != nicknames.end()) ? it->second : reporterHex.substr(0, 8) + "...";
+            return "LAN (" + name + ")";
         }
         if (isLanIP(s)) return "Local Devices";
         return s;
@@ -234,11 +257,12 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
             sg.packets += pkts;
             sg.bytes   += bytes;
 
-            // Accumulate per-IP in/out for unidentified LAN IPs only.
-            // Known client IPs are stored as hex IDs (not raw IPs) at ingest time,
-            // so any raw LAN IP in storage is by definition unidentified.
-            const bool srcUnident = isLanIP(storedSrc);
-            const bool dstUnident = isLanIP(storedDst);
+            // Accumulate per-IP in/out for unidentified LAN IPs.
+            // Known client IPs are stored as hex IDs at ingest time.
+            // Unknown LAN devices use the reporter-scoped "@hex:ip" key format;
+            // legacy raw LAN IPs (if any) are also included for backwards compatibility.
+            const bool srcUnident = parseReporterScoped(storedSrc) || isLanIP(storedSrc);
+            const bool dstUnident = parseReporterScoped(storedDst) || isLanIP(storedDst);
             if (srcUnident) { auto &ls = lanMap[storedSrc]; ls.outPkts += pkts; ls.outBytes += bytes; }
             if (dstUnident) { auto &ls = lanMap[storedDst]; ls.inPkts  += pkts; ls.inBytes  += bytes; }
         }
@@ -311,8 +335,19 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
     for (const auto &r : lanRows)
     {
         if (!first) j += ',';
+        // Parse reporter-scoped key "@{hex}:{ip}" if present; fall back to raw IP.
+        std::string displayIp, reportedBy, reporterHex;
+        if (parseReporterScoped(r.ip, &reporterHex, &displayIp)) {
+            auto it = nicknames.find(reporterHex);
+            reportedBy = (it != nicknames.end()) ? it->second : reporterHex.substr(0, 8) + "...";
+        } else {
+            displayIp  = r.ip;
+            reportedBy = "";
+        }
         j += "\n    {\"ip\":\"";
-        j += jsonEsc(r.ip);
+        j += jsonEsc(displayIp);
+        j += "\",\"reported_by\":\"";
+        j += jsonEsc(reportedBy);
         j += "\",\"out_packets\":";
         j += std::to_string(r.outPkts);
         j += ",\"out_bytes\":";
@@ -393,7 +428,7 @@ tr:hover td{background:#171726}
   <div class="note" id="entity_note"></div>
 </div>
 <div id="sec-lan" class="tabpanel" style="display:none">
-  <table><thead><tr><th>LAN IP</th><th>Out Packets</th><th>Out Bytes</th><th>In Packets</th><th>In Bytes</th></tr></thead>
+  <table><thead><tr><th>LAN IP</th><th>Reported by</th><th>Out Packets</th><th>Out Bytes</th><th>In Packets</th><th>In Bytes</th></tr></thead>
   <tbody id="lan_body"></tbody></table>
   <div class="note" id="lan_note"></div>
 </div>
@@ -438,10 +473,10 @@ async function refresh(){
       d.truncated?'Results truncated to server limit.':'';
     const lans=d.entities_lan||[];
     document.getElementById('lan_body').innerHTML=
-      lans.length?lans.map(x=>row([x.ip,
+      lans.length?lans.map(x=>row([x.ip,x.reported_by||'—',
         x.out_packets.toLocaleString(),fmtB(x.out_bytes),
         x.in_packets.toLocaleString(),fmtB(x.in_bytes)])).join('')
-      :'<tr><td colspan="5" style="color:#555">No unidentified LAN devices detected</td></tr>';
+      :'<tr><td colspan="6" style="color:#555">No unidentified LAN devices detected</td></tr>';
     document.getElementById('lan_note').textContent=
       d.truncated_lan?'Results truncated to server limit.':'';
     setS(true,'OK — '+new Date().toLocaleTimeString());
