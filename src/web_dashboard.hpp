@@ -14,7 +14,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <string>
 #include <unordered_map>
 
@@ -34,9 +33,6 @@ struct WebConfig
     // The internal clientId in TrafficStats is always the raw hex; lookup happens only at
     // JSON serialisation so renaming a client never orphans historical data.
     std::unordered_map<std::string, std::string> client_nicknames;
-    // Shared registry mapping a client's LAN IP → display name, populated by each
-    // connectionThread on authentication and read by buildSummaryJson per request.
-    std::shared_ptr<ClientRegistry> registry;
     // Admin purge password loaded from admin_password_file at startup.
     // Empty string = admin endpoints disabled (silently return 404).
     std::string admin_password;

@@ -52,14 +52,14 @@ inline bool isLanIP(const std::string &ip)
     return false;
 }
 
-// Shared registry: maps a client's LAN IP string to its display name (nickname or hex ID).
-// Written by connectionThread on each successful authentication; read by buildSummaryJson.
-// Entries are never removed so that historical entity strings remain resolvable after
-// a client reconnects from a different IP — display-time grouping merges them transparently.
+// Shared registry: maps a client's LAN IP string to its Ed25519 hex client ID.
+// Written by connectionThread on each successful authentication; read by connectionThread
+// workers (via local snapshot) to resolve LAN IPs to stable client IDs at ingest time.
+// Entries are never removed so that old IPs continue resolving correctly across reconnects.
 struct ClientRegistry
 {
     mutable std::mutex mtx;
-    std::unordered_map<std::string, std::string> ipToDisplay;
+    std::unordered_map<std::string, std::string> ipToClientId;
 };
 
 inline constexpr unsigned kAggregationWindowDaysDefault = 7;

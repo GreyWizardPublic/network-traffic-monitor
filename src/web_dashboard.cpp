@@ -120,8 +120,7 @@ static std::string jsonGetString(const std::string &json, const std::string &key
 // ---------------------------------------------------------------------------
 
 static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLines,
-                                    const std::unordered_map<std::string, std::string> &nicknames,
-                                    const std::shared_ptr<ClientRegistry> &registry)
+                                    const std::unordered_map<std::string, std::string> &nicknames)
 {
     TrafficStats::InterfaceTotals totals;
     TrafficStats::InterfaceFlows flows;
@@ -130,25 +129,28 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
     TrafficStats::TimePoint windowStart;
     stats.snapshot(totals, flows, countryFlows, entityFlows, &windowStart);
 
-    // Display name for the monitoring client (pubkey hex → nickname).
-    auto displayClient = [&nicknames](const std::string &hexId) -> const std::string & {
-        auto it = nicknames.find(hexId);
-        return it != nicknames.end() ? it->second : hexId;
+    // Display name for any stored identifier: 64-char hex pubkey → nickname (or hex);
+    // raw LAN IP → "Local Devices" (main tab); ASN entity string → as-is.
+    // Entity strings are resolved to stable hex client IDs at ingest time, so no
+    // IP→display registry lookup is needed here.
+    auto isHexClientId = [](const std::string &s) -> bool {
+        if (s.size() != 64) return false;
+        for (char c : s)
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+        return true;
     };
-
-    // Snapshot the IP→display registry lock-free for the rest of this build.
-    std::unordered_map<std::string, std::string> ipToDisplay;
-    if (registry)
-    {
-        std::lock_guard<std::mutex> lk(registry->mtx);
-        ipToDisplay = registry->ipToDisplay;
-    }
-
-    // Resolve a stored entity string for the Entity Summary tab.
-    // Known client IPs → display name; other LAN IPs → "Local Devices"; else as-is.
+    auto displayClient = [&nicknames, &isHexClientId](const std::string &s) -> std::string {
+        if (isHexClientId(s)) {
+            auto it = nicknames.find(s);
+            return it != nicknames.end() ? it->second : s;
+        }
+        return s;
+    };
     auto resolveEntityMain = [&](const std::string &s) -> std::string {
-        auto it = ipToDisplay.find(s);
-        if (it != ipToDisplay.end()) return it->second;
+        if (isHexClientId(s)) {
+            auto it = nicknames.find(s);
+            return it != nicknames.end() ? it->second : s;
+        }
         if (isLanIP(s)) return "Local Devices";
         return s;
     };
@@ -175,7 +177,7 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
         std::string iface  = sep == std::string::npos ? kv.first : kv.first.substr(sep + 1);
         if (!first) j += ',';
         j += "\n    {\"client\":\"";
-        j += jsonEsc(displayClient(client));
+        j += jsonEsc(displayClient(client));   // hex → nickname (or hex if no nickname)
         j += "\",\"iface\":\"";
         j += jsonEsc(iface);
         j += "\",\"packets\":";
@@ -233,8 +235,10 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
             sg.bytes   += bytes;
 
             // Accumulate per-IP in/out for unidentified LAN IPs only.
-            const bool srcUnident = isLanIP(storedSrc) && ipToDisplay.count(storedSrc) == 0;
-            const bool dstUnident = isLanIP(storedDst) && ipToDisplay.count(storedDst) == 0;
+            // Known client IPs are stored as hex IDs (not raw IPs) at ingest time,
+            // so any raw LAN IP in storage is by definition unidentified.
+            const bool srcUnident = isLanIP(storedSrc);
+            const bool dstUnident = isLanIP(storedDst);
             if (srcUnident) { auto &ls = lanMap[storedSrc]; ls.outPkts += pkts; ls.outBytes += bytes; }
             if (dstUnident) { auto &ls = lanMap[storedDst]; ls.inPkts  += pkts; ls.inBytes  += bytes; }
         }
@@ -729,8 +733,7 @@ void webServerThread(httplib::SSLServer &svr,
         [&stats, &config](const httplib::Request &, httplib::Response &res) {
             res.set_header("Cache-Control", "no-store");
             res.set_content(buildSummaryJson(stats, config.max_entity_lines,
-                                             config.client_nicknames,
-                                             config.registry),
+                                             config.client_nicknames),
                             "application/json");
         });
 

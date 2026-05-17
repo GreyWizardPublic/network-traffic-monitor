@@ -897,15 +897,15 @@ void connectionThread(int clientFd,
     if (!writeExact(ssl, clientFd, &ok, 1))
         return;
 
-    // Register this client's LAN IP in the display registry for entity resolution at render time.
-    // Kept forever so that old entity strings remain resolvable if the client reconnects with
-    // a different IP — display-time grouping will merge flows from both IPs transparently.
+    // Register this client's LAN IP → hex clientId in the shared registry.
+    // All connectionThread workers snapshot this at ingest time so that packets
+    // whose src/dst IP belongs to a known client are stored under the stable hex ID
+    // rather than the raw IP. Entries are never removed — old IPs remain resolvable
+    // across reconnects without any retroactive data mutation.
     if (registry && !clientIp.empty())
     {
-        auto nit = clientNicknames.find(clientId);
-        std::string disp = (nit != clientNicknames.end()) ? nit->second : clientId;
         std::lock_guard<std::mutex> lk(registry->mtx);
-        registry->ipToDisplay[clientIp] = disp;
+        registry->ipToClientId[clientIp] = clientId;
     }
 
     // Idle-recv-block fix: bound the per-recv blocking time so the loop can re-check
@@ -926,6 +926,18 @@ void connectionThread(int clientFd,
     std::string buffer;
     buffer.reserve(4096);
 
+    // Local snapshot of the shared IP→clientId registry. Refreshed every 5 seconds
+    // so we can resolve LAN IPs to stable hex client IDs in the hot data path without
+    // locking per-packet. The initial snapshot is taken immediately after auth so that
+    // the client's own IP (and any peers that connected before us) are available at once.
+    std::unordered_map<std::string, std::string> localRegSnap;
+    auto lastRegRefresh = std::chrono::steady_clock::now();
+    if (registry)
+    {
+        std::lock_guard<std::mutex> lk(registry->mtx);
+        localRegSnap = registry->ipToClientId;
+    }
+
     auto lastActivity = std::chrono::steady_clock::now();
     std::int64_t lastDLineSecond = -1;
     std::size_t dLineCountThisSecond = 0;
@@ -945,6 +957,16 @@ void connectionThread(int clientFd,
         auto idleSec = std::chrono::duration_cast<std::chrono::seconds>(now - lastActivity).count();
         if (idleSec >= static_cast<std::chrono::seconds::rep>(config.idle_timeout_seconds))
             break;  // idle timeout
+
+        // Refresh local registry snapshot every 5 seconds so newly authenticated
+        // clients are quickly picked up for ingest-time entity resolution.
+        if (registry &&
+            std::chrono::duration_cast<std::chrono::seconds>(now - lastRegRefresh).count() >= 5)
+        {
+            std::lock_guard<std::mutex> lk(registry->mtx);
+            localRegSnap = registry->ipToClientId;
+            lastRegRefresh = now;
+        }
 
         int n;
         if (ssl)
@@ -1007,12 +1029,15 @@ void connectionThread(int clientFd,
                                                       : std::string(IPRangeResolver::kUnknownCountry);
                     std::string dstCountry = resolver ? resolver->countryFor(meta.dstIp)
                                                       : std::string(IPRangeResolver::kUnknownCountry);
-                    // LAN IPs are stored verbatim as entity strings so that
-                    // display-time resolution can map them to client names or
-                    // "Local Devices" and merge across IP changes without any
-                    // retroactive data mutation.
-                    auto entityForIp = [&resolver](const std::string &ip) -> std::string {
-                        if (isLanIP(ip)) return ip;
+                    // Entity resolution: for LAN IPs, look up the local registry snapshot
+                    // to get the stable hex client ID. Unknown LAN IPs fall back to raw IP.
+                    // External IPs use the ASN entity resolver.
+                    auto entityForIp = [&resolver, &localRegSnap](const std::string &ip) -> std::string {
+                        if (isLanIP(ip)) {
+                            auto it = localRegSnap.find(ip);
+                            if (it != localRegSnap.end()) return it->second; // known client → hex ID
+                            return ip;                                         // unknown LAN → raw IP
+                        }
                         return resolver ? resolver->entityFor(ip)
                                        : std::string(IPRangeResolver::kUnknownEntity);
                     };
@@ -1535,7 +1560,6 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                     webCfg.rate_limit_rpm   = config.web_rate_limit_rpm;
                     webCfg.max_entity_lines = config.max_entity_lines_in_summary;
                     webCfg.client_nicknames = clientNicknames;
-                    webCfg.registry         = clientRegistry;
                     webCfg.admin_password   = adminPassword;
 
                     webThread = std::thread(webServerThread,
