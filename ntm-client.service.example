@@ -74,7 +74,9 @@ ProcSubset=pid
 
 # AF_PACKET is required because libpcap uses raw packet sockets on Linux.
 # AF_INET and AF_INET6 are needed for the TCP/TLS connection to ntm-server.
-RestrictAddressFamilies=AF_INET AF_INET6 AF_PACKET
+# AF_NETLINK is needed by getifaddrs() (called by libpcap) and by the
+# NetworkMonitor RTNETLINK watcher to detect interface changes.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_PACKET AF_NETLINK
 
 [Install]
 WantedBy=multi-user.target
