@@ -769,6 +769,8 @@ void connectionThread(int clientFd,
                       std::string peerAddr,
                       std::string clientIp,
                       const AllowedKeysSet &allowedKeys,
+                      const std::unordered_map<std::string, std::string> &clientNicknames,
+                      std::shared_ptr<ClientRegistry> registry,
                       TrafficStats &stats,
                       IPDataUpdater &ipDataUpdater,
                       std::atomic<std::size_t> &activeConnections,
@@ -888,6 +890,17 @@ void connectionThread(int clientFd,
     if (!writeExact(ssl, clientFd, &ok, 1))
         return;
 
+    // Register this client's LAN IP in the display registry for entity resolution at render time.
+    // Kept forever so that old entity strings remain resolvable if the client reconnects with
+    // a different IP — display-time grouping will merge flows from both IPs transparently.
+    if (registry && !clientIp.empty())
+    {
+        auto nit = clientNicknames.find(clientId);
+        std::string disp = (nit != clientNicknames.end()) ? nit->second : clientId;
+        std::lock_guard<std::mutex> lk(registry->mtx);
+        registry->ipToDisplay[clientIp] = disp;
+    }
+
     // Idle-recv-block fix: bound the per-recv blocking time so the loop can re-check
     // idle_timeout_seconds and g_running periodically.
     {
@@ -987,10 +1000,17 @@ void connectionThread(int clientFd,
                                                       : std::string(IPRangeResolver::kUnknownCountry);
                     std::string dstCountry = resolver ? resolver->countryFor(meta.dstIp)
                                                       : std::string(IPRangeResolver::kUnknownCountry);
-                    std::string srcEntity  = resolver ? resolver->entityFor(meta.srcIp)
-                                                      : std::string(IPRangeResolver::kUnknownEntity);
-                    std::string dstEntity  = resolver ? resolver->entityFor(meta.dstIp)
-                                                      : std::string(IPRangeResolver::kUnknownEntity);
+                    // LAN IPs are stored verbatim as entity strings so that
+                    // display-time resolution can map them to client names or
+                    // "Local Devices" and merge across IP changes without any
+                    // retroactive data mutation.
+                    auto entityForIp = [&resolver](const std::string &ip) -> std::string {
+                        if (isLanIP(ip)) return ip;
+                        return resolver ? resolver->entityFor(ip)
+                                       : std::string(IPRangeResolver::kUnknownEntity);
+                    };
+                    std::string srcEntity = entityForIp(meta.srcIp);
+                    std::string dstEntity = entityForIp(meta.dstIp);
                     auto addRes = stats.addPacket(clientId, meta.iface, meta.srcIp, meta.dstIp,
                                                   srcCountry, dstCountry, srcEntity, dstEntity, meta.bytes);
                     // UB-1: log on power-of-two crossings so a misbehaving client
@@ -1353,6 +1373,10 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
         return 1;
     }
 
+    // Shared registry: client LAN IP → display name, written by each connectionThread and
+    // read by the web thread at render time to resolve entity strings in the dashboard.
+    auto clientRegistry = std::make_shared<ClientRegistry>();
+
     TrafficStats stats(config.aggregation_window_days,
                        config.max_flow_entries_per_key,
                        config.max_entity_flow_entries_per_key,
@@ -1470,6 +1494,7 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                     webCfg.rate_limit_rpm   = config.web_rate_limit_rpm;
                     webCfg.max_entity_lines = config.max_entity_lines_in_summary;
                     webCfg.client_nicknames = clientNicknames;
+                    webCfg.registry         = clientRegistry;
 
                     webThread = std::thread(webServerThread,
                                             std::ref(*webSvr),
@@ -1631,6 +1656,8 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                           peerAddr,
                           clientIpStr,
                           std::cref(allowedKeys),
+                          std::cref(clientNicknames),
+                          clientRegistry,
                           std::ref(stats),
                           std::ref(ipDataUpdater),
                           std::ref(activeConnections),

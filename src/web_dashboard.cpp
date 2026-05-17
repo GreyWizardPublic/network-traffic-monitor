@@ -4,13 +4,9 @@
 
 #include "web_dashboard.hpp"
 
-#include <arpa/inet.h>
-#include <netinet/in.h>
-
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
-#include <cstring>
 #include <deque>
 #include <mutex>
 #include <string>
@@ -19,37 +15,6 @@
 
 namespace ntm
 {
-
-// ---------------------------------------------------------------------------
-// LAN guard
-// ---------------------------------------------------------------------------
-
-// Returns true if ip (IPv4 or IPv6 string) is in RFC 1918 / loopback / ULA /
-// link-local space. Non-parseable strings return false (reject).
-static bool isLanIP(const std::string &ip)
-{
-    struct in_addr a4;
-    if (::inet_pton(AF_INET, ip.c_str(), &a4) == 1)
-    {
-        std::uint32_t a = ntohl(a4.s_addr);
-        if ((a & 0xFF000000u) == 0x7F000000u) return true; // 127.0.0.0/8
-        if ((a & 0xFF000000u) == 0x0A000000u) return true; // 10.0.0.0/8
-        if ((a & 0xFFF00000u) == 0xAC100000u) return true; // 172.16.0.0/12
-        if ((a & 0xFFFF0000u) == 0xC0A80000u) return true; // 192.168.0.0/16
-        return false;
-    }
-    struct in6_addr a6;
-    if (::inet_pton(AF_INET6, ip.c_str(), &a6) == 1)
-    {
-        static const std::uint8_t lo6[16] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1};
-        if (std::memcmp(&a6, lo6, 16) == 0) return true;       // ::1
-        if ((a6.s6_addr[0] & 0xFEu) == 0xFCu) return true;    // fc00::/7 ULA
-        if (a6.s6_addr[0] == 0xFEu &&
-            (a6.s6_addr[1] & 0xC0u) == 0x80u) return true;    // fe80::/10 link-local
-        return false;
-    }
-    return false;
-}
 
 // ---------------------------------------------------------------------------
 // Per-IP sliding-window rate limiter
@@ -103,7 +68,8 @@ static std::string jsonEsc(const std::string &s)
 }
 
 static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLines,
-                                    const std::unordered_map<std::string, std::string> &nicknames)
+                                    const std::unordered_map<std::string, std::string> &nicknames,
+                                    const std::shared_ptr<ClientRegistry> &registry)
 {
     TrafficStats::InterfaceTotals totals;
     TrafficStats::InterfaceFlows flows;
@@ -112,10 +78,27 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
     TrafficStats::TimePoint windowStart;
     stats.snapshot(totals, flows, countryFlows, entityFlows, &windowStart);
 
-    // Returns the nickname for a client hex-id, or the hex-id itself if no nickname is set.
+    // Display name for the monitoring client (pubkey hex → nickname).
     auto displayClient = [&nicknames](const std::string &hexId) -> const std::string & {
         auto it = nicknames.find(hexId);
         return it != nicknames.end() ? it->second : hexId;
+    };
+
+    // Snapshot the IP→display registry lock-free for the rest of this build.
+    std::unordered_map<std::string, std::string> ipToDisplay;
+    if (registry)
+    {
+        std::lock_guard<std::mutex> lk(registry->mtx);
+        ipToDisplay = registry->ipToDisplay;
+    }
+
+    // Resolve a stored entity string for the Entity Summary tab.
+    // Known client IPs → display name; other LAN IPs → "Local Devices"; else as-is.
+    auto resolveEntityMain = [&](const std::string &s) -> std::string {
+        auto it = ipToDisplay.find(s);
+        if (it != ipToDisplay.end()) return it->second;
+        if (isLanIP(s)) return "Local Devices";
+        return s;
     };
 
     const auto windowEpoch = std::chrono::duration_cast<std::chrono::seconds>(
@@ -124,13 +107,13 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
         std::chrono::system_clock::now().time_since_epoch()).count();
 
     std::string j;
-    j.reserve(4096);
+    j.reserve(8192);
     j += "{\n  \"window_start\": ";
     j += std::to_string(windowEpoch);
     j += ",\n  \"generated_at\": ";
     j += std::to_string(nowEpoch);
 
-    // Interfaces
+    // Interfaces — unchanged
     j += ",\n  \"interfaces\": [";
     bool first = true;
     for (const auto &kv : totals)
@@ -152,38 +135,103 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
     }
     j += "\n  ]";
 
-    // Entities — collect all rows, sort by bytes descending, truncate
-    struct EntityRow
+    // Entity Summary: group raw stored entities by resolved display labels, merge, sort.
+    struct SummaryKey
     {
-        std::string client, iface, srcEntity, dstEntity;
-        std::uint64_t packets{0}, bytes{0};
+        std::string client, iface, src, dst;
+        bool operator==(const SummaryKey &o) const noexcept
+        {
+            return client == o.client && iface == o.iface && src == o.src && dst == o.dst;
+        }
     };
-    std::vector<EntityRow> rows;
+    struct SummaryKeyHash
+    {
+        std::size_t operator()(const SummaryKey &k) const noexcept
+        {
+            std::hash<std::string> h;
+            return ((h(k.client) * 2654435761u) ^ (h(k.iface) * 40503u))
+                 ^ ((h(k.src)    * 1315423911u) ^ h(k.dst));
+        }
+    };
+    std::unordered_map<SummaryKey, Counter, SummaryKeyHash> summaryGroups;
+
+    // LAN Detail: per unidentified-LAN-IP in/out totals, aggregated across all clients/ifaces.
+    struct LanStats { std::uint64_t outPkts{0}, outBytes{0}, inPkts{0}, inBytes{0}; };
+    std::unordered_map<std::string, LanStats> lanMap;
+
     for (const auto &kv : entityFlows)
     {
         auto sep = kv.first.find('|');
         std::string client = sep == std::string::npos ? std::string{} : kv.first.substr(0, sep);
         std::string iface  = sep == std::string::npos ? kv.first : kv.first.substr(sep + 1);
+        const std::string &dispCli = displayClient(client);
+
         for (const auto &ek : kv.second)
-            rows.push_back({client, iface, ek.first.src, ek.first.dst,
-                            ek.second.packets, ek.second.bytes});
+        {
+            const std::string &storedSrc = ek.first.src;
+            const std::string &storedDst = ek.first.dst;
+            const std::uint64_t pkts  = ek.second.packets;
+            const std::uint64_t bytes = ek.second.bytes;
+
+            // Group by resolved display labels for the Entity Summary tab.
+            auto &sg = summaryGroups[{dispCli, iface,
+                                      resolveEntityMain(storedSrc),
+                                      resolveEntityMain(storedDst)}];
+            sg.packets += pkts;
+            sg.bytes   += bytes;
+
+            // Accumulate per-IP in/out for unidentified LAN IPs only.
+            const bool srcUnident = isLanIP(storedSrc) && ipToDisplay.count(storedSrc) == 0;
+            const bool dstUnident = isLanIP(storedDst) && ipToDisplay.count(storedDst) == 0;
+            if (srcUnident) { auto &ls = lanMap[storedSrc]; ls.outPkts += pkts; ls.outBytes += bytes; }
+            if (dstUnident) { auto &ls = lanMap[storedDst]; ls.inPkts  += pkts; ls.inBytes  += bytes; }
+        }
     }
-    std::sort(rows.begin(), rows.end(),
-              [](const EntityRow &a, const EntityRow &b) { return a.bytes > b.bytes; });
+
+    // Sort Entity Summary rows by bytes descending, truncate.
+    struct SummaryRow { std::string client, iface, src, dst; std::uint64_t packets{0}, bytes{0}; };
+    std::vector<SummaryRow> summaryRows;
+    summaryRows.reserve(summaryGroups.size());
+    for (const auto &kv : summaryGroups)
+        summaryRows.push_back({kv.first.client, kv.first.iface,
+                               kv.first.src,    kv.first.dst,
+                               kv.second.packets, kv.second.bytes});
+    std::sort(summaryRows.begin(), summaryRows.end(),
+              [](const SummaryRow &a, const SummaryRow &b) { return a.bytes > b.bytes; });
     bool truncated = false;
-    if (maxEntityLines > 0 && rows.size() > maxEntityLines)
+    if (maxEntityLines > 0 && summaryRows.size() > maxEntityLines)
     {
-        rows.resize(maxEntityLines);
+        summaryRows.resize(maxEntityLines);
         truncated = true;
     }
 
+    // Sort LAN Detail rows by total bytes descending, truncate.
+    struct LanRow { std::string ip; std::uint64_t outPkts{0}, outBytes{0}, inPkts{0}, inBytes{0}; };
+    std::vector<LanRow> lanRows;
+    lanRows.reserve(lanMap.size());
+    for (const auto &kv : lanMap)
+        lanRows.push_back({kv.first,
+                           kv.second.outPkts, kv.second.outBytes,
+                           kv.second.inPkts,  kv.second.inBytes});
+    std::sort(lanRows.begin(), lanRows.end(),
+              [](const LanRow &a, const LanRow &b) {
+                  return (a.outBytes + a.inBytes) > (b.outBytes + b.inBytes);
+              });
+    bool truncatedLan = false;
+    if (maxEntityLines > 0 && lanRows.size() > maxEntityLines)
+    {
+        lanRows.resize(maxEntityLines);
+        truncatedLan = true;
+    }
+
+    // Emit Entity Summary
     j += ",\n  \"entities\": [";
     first = true;
-    for (const auto &r : rows)
+    for (const auto &r : summaryRows)
     {
         if (!first) j += ',';
         j += "\n    {\"client\":\"";
-        j += jsonEsc(displayClient(r.client));
+        j += jsonEsc(r.client);
         j += "\",\"iface\":\"";
         j += jsonEsc(r.iface);
         j += "\",\"packets\":";
@@ -191,15 +239,38 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
         j += ",\"bytes\":";
         j += std::to_string(r.bytes);
         j += ",\"src_entity\":\"";
-        j += jsonEsc(r.srcEntity);
+        j += jsonEsc(r.src);
         j += "\",\"dst_entity\":\"";
-        j += jsonEsc(r.dstEntity);
+        j += jsonEsc(r.dst);
         j += "\"}";
         first = false;
     }
     j += "\n  ]";
     j += ",\n  \"truncated\": ";
     j += truncated ? "true" : "false";
+
+    // Emit LAN Detail
+    j += ",\n  \"entities_lan\": [";
+    first = true;
+    for (const auto &r : lanRows)
+    {
+        if (!first) j += ',';
+        j += "\n    {\"ip\":\"";
+        j += jsonEsc(r.ip);
+        j += "\",\"out_packets\":";
+        j += std::to_string(r.outPkts);
+        j += ",\"out_bytes\":";
+        j += std::to_string(r.outBytes);
+        j += ",\"in_packets\":";
+        j += std::to_string(r.inPkts);
+        j += ",\"in_bytes\":";
+        j += std::to_string(r.inBytes);
+        j += '}';
+        first = false;
+    }
+    j += "\n  ]";
+    j += ",\n  \"truncated_lan\": ";
+    j += truncatedLan ? "true" : "false";
     j += "\n}\n";
     return j;
 }
@@ -229,7 +300,10 @@ tr:hover td{background:#171726}
 .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;vertical-align:middle}
 .ok{background:#3a3}
 .err{background:#a33}
-.trunc{color:#a80;font-style:italic;font-size:0.8em;padding:4px 10px}
+.tabs{display:flex;gap:0;margin:8px 0 0}
+.tab{padding:4px 14px;cursor:pointer;border:1px solid #252535;border-bottom:none;border-radius:3px 3px 0 0;font-size:0.82em;color:#666;background:#111118;font-family:monospace;outline:none}
+.tab.active{color:#7af;background:#0e0e14;border-color:#3a3a5a}
+.tabpanel{border-top:1px solid #252535;padding-top:4px}
 </style>
 </head>
 <body>
@@ -246,10 +320,21 @@ tr:hover td{background:#171726}
 <tbody id="iface_body"></tbody></table>
 <div class="note" id="iface_note"></div>
 
-<div class="section">Entity Flows <span style="color:#555;font-size:0.85em">(sorted by bytes, top results)</span></div>
-<table><thead><tr><th>Client</th><th>Interface</th><th>Src Entity</th><th>Dst Entity</th><th>Packets</th><th>Bytes</th></tr></thead>
-<tbody id="entity_body"></tbody></table>
-<div class="note" id="entity_note"></div>
+<div class="section">Entity Flows</div>
+<div class="tabs">
+  <button class="tab active" id="tab-summary" onclick="showTab('summary')">Entity Summary</button>
+  <button class="tab" id="tab-lan" onclick="showTab('lan')">LAN Detail</button>
+</div>
+<div id="sec-summary" class="tabpanel">
+  <table><thead><tr><th>Client</th><th>Interface</th><th>Src Entity</th><th>Dst Entity</th><th>Packets</th><th>Bytes</th></tr></thead>
+  <tbody id="entity_body"></tbody></table>
+  <div class="note" id="entity_note"></div>
+</div>
+<div id="sec-lan" class="tabpanel" style="display:none">
+  <table><thead><tr><th>LAN IP</th><th>Out Packets</th><th>Out Bytes</th><th>In Packets</th><th>In Bytes</th></tr></thead>
+  <tbody id="lan_body"></tbody></table>
+  <div class="note" id="lan_note"></div>
+</div>
 
 <script>
 const POLL_MS=30000;
@@ -264,6 +349,12 @@ function esc(s){
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 function row(cells){return'<tr>'+cells.map(c=>'<td>'+esc(c)+'</td>').join('')+'</tr>';}
+function showTab(name){
+  ['summary','lan'].forEach(function(t){
+    document.getElementById('tab-'+t).className='tab'+(t===name?' active':'');
+    document.getElementById('sec-'+t).style.display=t===name?'':'none';
+  });
+}
 async function refresh(){
   try{
     const r=await fetch('/api/summary',{cache:'no-store'});
@@ -276,7 +367,6 @@ async function refresh(){
       ifaces.length?ifaces.map(x=>row([x.client||'(ip-auth)',x.iface,
         x.packets.toLocaleString(),fmtB(x.bytes)])).join('')
       :'<tr><td colspan="4" style="color:#555">No data yet</td></tr>';
-    document.getElementById('iface_note').textContent='';
     const ents=d.entities||[];
     document.getElementById('entity_body').innerHTML=
       ents.length?ents.map(x=>row([x.client||'(ip-auth)',x.iface,
@@ -284,6 +374,14 @@ async function refresh(){
       :'<tr><td colspan="6" style="color:#555">No data yet</td></tr>';
     document.getElementById('entity_note').textContent=
       d.truncated?'Results truncated to server limit.':'';
+    const lans=d.entities_lan||[];
+    document.getElementById('lan_body').innerHTML=
+      lans.length?lans.map(x=>row([x.ip,
+        x.out_packets.toLocaleString(),fmtB(x.out_bytes),
+        x.in_packets.toLocaleString(),fmtB(x.in_bytes)])).join('')
+      :'<tr><td colspan="5" style="color:#555">No unidentified LAN devices detected</td></tr>';
+    document.getElementById('lan_note').textContent=
+      d.truncated_lan?'Results truncated to server limit.':'';
     setS(true,'OK — '+new Date().toLocaleTimeString());
   }catch(e){setS(false,'Error: '+e.message);}
 }
@@ -360,7 +458,8 @@ void webServerThread(httplib::SSLServer &svr,
         [&stats, &config](const httplib::Request &, httplib::Response &res) {
             res.set_header("Cache-Control", "no-store");
             res.set_content(buildSummaryJson(stats, config.max_entity_lines,
-                                             config.client_nicknames),
+                                             config.client_nicknames,
+                                             config.registry),
                             "application/json");
         });
 

@@ -3,6 +3,9 @@
 // ntm_types.hpp — aggregation data types and process-wide logging,
 // shared between server_core and web_dashboard compilation units.
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -10,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <deque>
 #include <iostream>
 #include <mutex>
@@ -20,6 +24,43 @@
 
 namespace ntm
 {
+
+// Returns true if ip (IPv4 or IPv6 string) is in RFC 1918 / loopback / ULA /
+// link-local space. Non-parseable strings return false.
+inline bool isLanIP(const std::string &ip)
+{
+    struct in_addr a4;
+    if (::inet_pton(AF_INET, ip.c_str(), &a4) == 1)
+    {
+        std::uint32_t a = ntohl(a4.s_addr);
+        if ((a & 0xFF000000u) == 0x7F000000u) return true; // 127.0.0.0/8
+        if ((a & 0xFF000000u) == 0x0A000000u) return true; // 10.0.0.0/8
+        if ((a & 0xFFF00000u) == 0xAC100000u) return true; // 172.16.0.0/12
+        if ((a & 0xFFFF0000u) == 0xC0A80000u) return true; // 192.168.0.0/16
+        return false;
+    }
+    struct in6_addr a6;
+    if (::inet_pton(AF_INET6, ip.c_str(), &a6) == 1)
+    {
+        static const std::uint8_t lo6[16] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1};
+        if (std::memcmp(&a6, lo6, 16) == 0) return true;       // ::1
+        if ((a6.s6_addr[0] & 0xFEu) == 0xFCu) return true;    // fc00::/7 ULA
+        if (a6.s6_addr[0] == 0xFEu &&
+            (a6.s6_addr[1] & 0xC0u) == 0x80u) return true;    // fe80::/10 link-local
+        return false;
+    }
+    return false;
+}
+
+// Shared registry: maps a client's LAN IP string to its display name (nickname or hex ID).
+// Written by connectionThread on each successful authentication; read by buildSummaryJson.
+// Entries are never removed so that historical entity strings remain resolvable after
+// a client reconnects from a different IP — display-time grouping merges them transparently.
+struct ClientRegistry
+{
+    mutable std::mutex mtx;
+    std::unordered_map<std::string, std::string> ipToDisplay;
+};
 
 inline constexpr unsigned kAggregationWindowDaysDefault = 7;
 
