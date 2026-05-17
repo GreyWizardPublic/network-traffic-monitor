@@ -1,0 +1,80 @@
+# ntm-client systemd service unit example
+#
+# Installation:
+#   sudo cp ntm-client.service.example /etc/systemd/system/ntm-client.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now ntm-client
+#
+# Prerequisites:
+#   - Binary installed at /usr/local/bin/ntm-client
+#   - Config file at /etc/ntmclient/ntm-client.conf
+#   - Dedicated unprivileged user created:
+#       sudo useradd -r -s /sbin/nologin ntmclient
+#   - Config directory created and ownership set:
+#       sudo mkdir -p /etc/ntmclient
+#       sudo chown -R ntmclient:ntmclient /etc/ntmclient
+#       sudo chmod 600 /etc/ntmclient/client_private.pem
+#
+# See CLIENT_DEPLOYMENT.md for full setup instructions.
+
+[Unit]
+Description=NTM network traffic monitor client
+After=network.target
+
+[Service]
+User=ntmclient
+Group=ntmclient
+
+ExecStart=/usr/local/bin/ntm-client --config /etc/ntmclient/ntm-client.conf
+
+ReadOnlyPaths=/etc/ntmclient
+WorkingDirectory=/tmp
+RuntimeDirectory=ntmclient
+
+Restart=always
+
+# ── Capabilities ──────────────────────────────────────────────────────────────
+#
+# libpcap requires CAP_NET_RAW (raw packet socket) and CAP_NET_ADMIN
+# (promiscuous mode). AmbientCapabilities grants these to the unprivileged
+# service user at runtime without making the binary setuid or granting any
+# other elevated privileges.
+
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+
+# ── Security hardening ────────────────────────────────────────────────────────
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+# MemoryDenyWriteExecute must NOT be enabled. OpenSSL uses mprotect() internally
+# for hardware-accelerated ciphers (AES-NI etc.), which this option blocks with
+# EPERM. That causes TLS context creation to fail and the client to fall back to
+# plain TCP or exit, depending on configuration.
+# MemoryDenyWriteExecute=true   # <-- do not uncomment
+
+PrivateDevices=true
+
+# PrivateUsers must NOT be enabled. It creates a user namespace that interferes
+# with OpenSSL privilege checks and socket operations, producing the same silent
+# TLS failure as MemoryDenyWriteExecute. It is also redundant here because the
+# service already runs as the unprivileged dedicated user ntmclient.
+# PrivateUsers=true   # <-- do not uncomment
+
+ProtectProc=invisible
+ProcSubset=pid
+
+# AF_PACKET is required because libpcap uses raw packet sockets on Linux.
+# AF_INET and AF_INET6 are needed for the TCP/TLS connection to ntm-server.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_PACKET
+
+[Install]
+WantedBy=multi-user.target
