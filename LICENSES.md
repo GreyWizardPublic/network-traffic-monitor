@@ -1,9 +1,9 @@
 # Third-Party Licenses
 
 This document enumerates every external library, runtime component, and data
-source that the `NetworkTrafficMonitor` binaries (`ntm-server`, `ntm-client`,
-`ntm-monitor`) depend on, together with each item's SPDX identifier, upstream
-home page, and the binary it is linked into.
+source that the `NetworkTrafficMonitor` binaries (`ntm-server`, `ntm-client`)
+depend on, together with each item's SPDX identifier, upstream home page, and
+the binary it is linked into.
 
 All listed dependencies are open-source and OSI-approved. None require shipping
 their source alongside this project's binaries (they are dynamically linked
@@ -21,11 +21,12 @@ These are the libraries declared in `CMakeLists.txt` via `find_package` /
 
 | # | Library | SPDX | Upstream | Used by | Purpose |
 |---|---------|------|----------|---------|---------|
-| 1 | **OpenSSL** (`libssl` + `libcrypto`) | `Apache-2.0` (OpenSSL ≥ 3.0) <br/> `OpenSSL` (legacy dual BSD-style, OpenSSL ≤ 1.1.1) | <https://www.openssl.org/> | `ntm-server`, `ntm-client`, `ntm-monitor` | TLS 1.2+ transport; Ed25519 keygen / sign / verify; constant-time memcmp; SHA-256 cert pinning. |
+| 1 | **OpenSSL** (`libssl` + `libcrypto`) | `Apache-2.0` (OpenSSL ≥ 3.0) <br/> `OpenSSL` (legacy dual BSD-style, OpenSSL ≤ 1.1.1) | <https://www.openssl.org/> | `ntm-server`, `ntm-client` | TLS 1.2+ transport; Ed25519 keygen / sign / verify; constant-time memcmp; SHA-256 cert pinning. |
 | 2 | **libcurl** | `curl` (an MIT-style permissive license; the upstream SPDX identifier is `curl`) | <https://curl.se/libcurl/> | `ntm-server` | HTTPS download of the iptoasn.com IP-to-ASN database, with certificate verification, redirect following, and timeouts. |
 | 3 | **zlib** | `Zlib` | <https://zlib.net/> | `ntm-server` | Transparent gzip decompression of the local `ip2asn-combined.tsv.gz` cache file via `gzopen`/`gzgets`. |
-| 4 | **libpcap** | `BSD-3-Clause` | <https://www.tcpdump.org/> | `ntm-server` (link-time only), `ntm-client` (capture loop) | Packet capture on the client side (`pcap_create`, `pcap_dispatch`, BPF filters). |
-| 5 | **POSIX threads (`pthread`)** via CMake `Threads::Threads` | Inherits from libc. <br/> glibc: `LGPL-2.1-or-later WITH GCC-exception-2.0`. <br/> musl: `MIT`. <br/> bionic (Android): `Apache-2.0`. | <https://www.gnu.org/software/libc/> (glibc) <br/> <https://musl.libc.org/> (musl) | All three binaries | Threading primitives used by `std::thread`, `std::mutex`, `std::condition_variable`. |
+| 4 | **libpcap** | `BSD-3-Clause` | <https://www.tcpdump.org/> | `ntm-client` | Packet capture on the client side (`pcap_create`, `pcap_dispatch`, BPF filters). |
+| 5 | **POSIX threads (`pthread`)** via CMake `Threads::Threads` | Inherits from libc. <br/> glibc: `LGPL-2.1-or-later WITH GCC-exception-2.0`. <br/> musl: `MIT`. <br/> bionic (Android): `Apache-2.0`. | <https://www.gnu.org/software/libc/> (glibc) <br/> <https://musl.libc.org/> (musl) | Both binaries | Threading primitives used by `std::thread`, `std::mutex`, `std::condition_variable`. |
+| 6 | **cpp-httplib** (`src/httplib.h`) | `MIT` | <https://github.com/yhirose/cpp-httplib> (v0.20.0) | `ntm-server` | Single-header C++11 HTTP/HTTPS server and client library. Used to serve the embedded HTTPS web dashboard (`GET /` and `GET /api/summary`). TLS is provided by OpenSSL (already linked). Header is vendored at `src/httplib.h`; no additional system libraries are required. |
 
 ### Notes on OpenSSL
 
@@ -48,9 +49,8 @@ These are the libraries declared in `CMakeLists.txt` via `find_package` /
 
 ### Notes on libpcap
 
-- Linked into `ntm-server` only because of CMake target wiring; the server
-  never actually invokes any pcap symbol. (Future cleanup: move the
-  `find_library(PCAP_LIBRARY pcap REQUIRED)` to the client-only target.)
+- Linked into `ntm-client` only. The `find_library(PCAP_LIBRARY pcap REQUIRED)`
+  declaration is scoped to the `ntm-client` target in `CMakeLists.txt`.
 
 ---
 
@@ -131,7 +131,6 @@ self-contained `IPRangeResolver` + iptoasn.com data:
 # Show every dynamic library the binaries depend on:
 ldd build/ntm-server
 ldd build/ntm-client
-ldd build/ntm-monitor
 
 # Show the upstream package each lib belongs to (Arch / pacman):
 ldd build/ntm-server | awk '/=>/ {print $3}' | sort -u \

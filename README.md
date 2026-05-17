@@ -9,10 +9,9 @@ See [`LICENSE`](LICENSE) for project source license (GPL-3.0-or-later) and
 Headless, extensible **client–server network traffic monitor** written in **C++**.
 
 - **Client (`ntm-client`)**: runs on devices, captures packets via `libpcap`, and sends **metadata only** to the server.
-- **Server (`ntm-server`)**: runs as a headless aggregator, maintaining per-interface, per-flow, and per-country aggregates.
-- **Monitoring UI (future)**: a separate process can connect to `ntm-server` to fetch aggregated data and render any GUI or dashboards you like.
+- **Server (`ntm-server`)**: runs as a headless aggregator, maintaining per-interface, per-flow, and per-entity aggregates. Includes an embedded **HTTPS web dashboard** accessible from any browser on your LAN.
 
-Both client and server are **headless processes**. They can run either in the **foreground** (for debugging) or as **Unix daemons**.
+Both binaries can run either in the **foreground** (for debugging) or as **Unix daemons**.
 
 > **Note:** Capturing packets typically requires root privileges or appropriate capabilities on your network interfaces.
 
@@ -20,31 +19,22 @@ Both client and server are **headless processes**. They can run either in the **
 
 - **ntm-client**
   - Discovers local interfaces using `pcap_findalldevs`.
-  - Captures IPv4 packets on each interface.
+  - Captures IPv4 and IPv6 packets on each interface.
   - For each packet, sends a single-line record to the server:
     - Format: `D iface src_ip dst_ip bytes\n`
-  - No GUI; intended to be portable to other platforms (Windows, iOS, etc.) by re-implementing the capture and TCP send logic.
+  - No GUI; intended to be portable to other platforms by re-implementing the capture and TCP send logic.
 
 - **ntm-server**
-  - Listens on **two TCP ports**:
-    - **Client port** (default `5555`) for `ntm-client` data ingestion.
-    - **Monitor port** (default `5556`) for standalone monitoring processes.
-  - Optional **Ed25519 authentication**: when started with `--allowed-keys FILE`, each connecting client must prove identity with an Ed25519 key; the server uses the key’s public part as the client identifier in aggregation.
+  - Listens on one **client data-ingestion TCP port** (default `5555`) for `ntm-client` connections.
+  - Optional **Ed25519 authentication**: when started with `--allowed-keys FILE`, each connecting client must prove identity with an Ed25519 key; the server uses the public key as the client identifier in aggregation.
   - Consumes `D ...` data lines from clients and aggregates:
     - Per-interface totals (packets, bytes).
     - Per-flow `(src IP, dst IP)`.
-    - Per-country `(src country, dst country)` resolved against a local IP→ASN/country database (no third-party library; see below).
-    - Per-entity `(src entity, dst entity)` (autonomous system number + organization) resolved against the same database.
-  - **Aggregation** uses a **rolling window by day** (configurable via `--config` and `aggregation_window_days`, default 7). Statistics are tracked per day; when the window is exceeded (e.g. day 8 arrives), only the **oldest day’s** data is dropped. Counters use **uint64_t**; if any counter would overflow for a client, **all statistics for that client** (all interfaces, all days in the window) are reset and the current packet is counted from zero—other clients are unaffected.
-  - Exposes a simple text command for monitoring processes:
-    - `IFACE_SUMMARY\n` → responds with:
-      - `WINDOW_START <epoch_sec>\n` (aggregation window start time),
-      - `IFACE client iface packets bytes\n` for each known interface,
-      - `ENTITY\tclient\tiface\tpackets\tbytes\tsrc_entity\tdst_entity\n` for each (client, iface, src entity, dst entity) aggregate (tab-separated; entity is e.g. `AS15169 Google LLC`),
-      - `END\n`
-  - Prints periodic summaries to stderr in foreground mode (including the current window start).
-
-A future monitoring process can connect to the **monitor port**, send `IFACE_SUMMARY`, and parse the reply to display aggregated data in any UI.
+    - Per-country `(src country, dst country)` resolved against a local IP→ASN/country database.
+    - Per-entity `(src entity, dst entity)` (ASN + organisation name) resolved against the same database.
+  - **Aggregation** uses a **rolling window by day** (configurable, default 7 days). When the window is exceeded, only the oldest day's data is dropped. Counters use `uint64_t`; if any counter would overflow for a client, all statistics for that client are reset — other clients are unaffected.
+  - Serves an embedded **HTTPS web dashboard** (default port `8443`) — see [Web Dashboard](#web-dashboard).
+  - Prints periodic summaries to stderr in foreground mode.
 
 ## Prerequisites
 
@@ -54,13 +44,9 @@ A future monitoring process can connect to the **monitor port**, send `IFACE_SUM
 - **libcurl** for the server's auto-update of the IP database (on Arch: `pacman -S curl`)
 - **zlib** for reading the gzipped IP database (on Arch: usually preinstalled; `pacman -S zlib`)
 - `libpcap` and its development headers (on Arch: `pacman -S libpcap`)
-- **No libmaxminddb required.** The server uses an embedded `IPRangeResolver` that consumes the **iptoasn.com** combined IPv4+IPv6 dataset (gzipped TSV, CC0 public domain). On startup the server loads the local cache file at `ip_db_path` (default `/var/lib/ntm-server/ip2asn-combined.tsv.gz`) and a background thread re-downloads it every `ip_db_update_interval_days` (default 7). The cache directory is created automatically if missing.
-  - Override URL with `ip_db_url` (e.g. to mirror behind your own CDN).
-  - Disable auto-update with `ip_db_auto_update=false` if you maintain the file out-of-band.
-  - The download verifies HTTPS certificates (`CURLOPT_SSL_VERIFYPEER`/`HOST`) and follows up to 5 redirects, with a 30s connect timeout and 180s total timeout. A failed download leaves the existing on-disk cache intact.
-- Ability to run the client with sufficient privileges for packet capture:
-  - E.g. run `ntm-client` with `sudo`, or
-  - Grant `CAP_NET_RAW` / `CAP_NET_ADMIN` to the binary.
+- **No libmaxminddb required.** The server uses an embedded `IPRangeResolver` that consumes the **iptoasn.com** combined IPv4+IPv6 dataset (gzipped TSV, CC0 public domain). On startup the server loads the local cache file at `ip_db_path` (default `/var/lib/ntm-server/ip2asn-combined.tsv.gz`) and a background thread re-downloads it every `ip_db_update_interval_days` (default 7).
+- **cpp-httplib** is **vendored** at `src/httplib.h` (single header, MIT). No separate installation needed.
+- Ability to run the client with sufficient privileges for packet capture.
 
 ## Build
 
@@ -73,7 +59,7 @@ cmake ..
 cmake --build .
 ```
 
-This produces two binaries in `build`:
+This produces two binaries in `build/`:
 
 - `ntm-server`
 - `ntm-client`
@@ -81,13 +67,136 @@ This produces two binaries in `build`:
 > For a full breakdown of every linked library and external data source, with
 > SPDX identifiers and upstream URLs, see [`LICENSES.md`](LICENSES.md).
 
-## Authentication (Ed25519)
+## Web Dashboard
 
-Client and server can use **Ed25519** so that each client has a stable identity and only allowed keys can connect.
+`ntm-server` includes an embedded HTTPS web dashboard. Open it in any browser
+on your LAN — no extra software required.
+
+> **Security limitation — LAN use only (current version)**
+>
+> The web dashboard enforces a hard LAN-only IP filter: only connections from
+> RFC 1918 private address ranges (`10.x.x.x`, `172.16–31.x.x`, `192.168.x.x`)
+> and loopback are accepted. Public internet IPs are rejected at the application
+> layer regardless of the server's bind address.
+>
+> **Do not expose `ntm-server` directly to the internet** in its current form.
+> Even with HTTPS and a bearer token, the filter is not user-configurable and
+> there is no brute-force protection on the token. A future version will add
+> configurable CIDR allowlists and optional mutual-TLS client authentication
+> for internet-facing deployments. For now, keep `ntm-server` inside your LAN
+> or behind a VPN.
+
+### Setting up TLS for the web dashboard
+
+The web dashboard is **HTTPS-only**. You must provide a server certificate and
+private key. The same cert/key pair is shared with the client data-ingestion
+port when TLS is enabled there.
+
+#### Option A — Self-signed certificate (typical for a private LAN)
+
+```bash
+# 1. Generate a 4096-bit RSA key and self-signed certificate.
+#    Set CN to the server's LAN IP address or hostname.
+openssl req -x509 -newkey rsa:4096 \
+  -keyout ntm-server-key.pem \
+  -out    ntm-server-cert.pem \
+  -days   365 -nodes \
+  -subj   "/CN=192.168.1.10"   # ← replace with your server's LAN IP or hostname
+
+# 2. Restrict key file permissions.
+chmod 600 ntm-server-key.pem
+
+# 3. (Optional) Move to a permanent location.
+sudo mkdir -p /etc/ntm-server
+sudo mv ntm-server-cert.pem ntm-server-key.pem /etc/ntm-server/
+sudo chmod 600 /etc/ntm-server/ntm-server-key.pem
+```
+
+Add to your config file or pass as CLI flags:
+
+```ini
+cert = /etc/ntm-server/ntm-server-cert.pem
+key  = /etc/ntm-server/ntm-server-key.pem
+```
+
+**Browser trust:** Self-signed certificates are not trusted by browsers by
+default. You have two options:
+
+- **Accept the warning**: open `https://<server-ip>:8443` and click through the
+  browser's "Your connection is not private" warning (safe to do on a known LAN).
+- **Import as trusted CA**: add `ntm-server-cert.pem` to your browser's or OS's
+  certificate store once, and future visits will show a green padlock.
+  - Chrome / Chromium: Settings → Privacy → Manage certificates → Authorities → Import.
+  - Firefox: Settings → Privacy → Certificates → View Certificates → Authorities → Import.
+  - Linux system-wide (Arch): `sudo trust anchor --store ntm-server-cert.pem`.
+  - macOS: Keychain Access → System → File → Import Items, then mark as trusted.
+
+> **Remember to renew** the certificate before the `-days 365` expiry or the
+> dashboard will show a TLS error.
+
+#### Option B — CA-signed certificate
+
+If you have a certificate signed by a public CA (e.g. Let's Encrypt) or an
+internal CA trusted by all your devices, configure it the same way:
+
+```ini
+cert = /path/to/fullchain.pem
+key  = /path/to/privkey.pem
+```
+
+Browsers will trust it automatically and no import step is required.
+
+### Accessing the dashboard
+
+Once `ntm-server` is running with a cert and key configured, open a browser
+on any device on the same LAN and navigate to:
+
+```
+https://<server-ip>:8443
+```
+
+The page auto-refreshes every 30 seconds and shows:
+
+- **Interfaces** table — per-client, per-interface packet and byte totals over the aggregation window.
+- **Entity flows** table — top (src ASN, dst ASN) pairs sorted by bytes, showing the autonomous systems your traffic passes through.
+
+### Optional bearer token
+
+For additional access control on a shared LAN, set a static bearer token:
+
+```ini
+# ntm-server.conf
+web_token = your-secret-token-here
+```
+
+or pass it on the CLI:
+
+```bash
+./ntm-server --web-token your-secret-token-here ...
+```
+
+All web requests must then include:
+
+```
+Authorization: Bearer your-secret-token-here
+```
+
+Standard browser access will prompt for a token through the `401` response;
+most browsers will show a generic authentication dialog or you can configure
+a browser extension (e.g. ModHeader) to inject the header automatically.
+
+### Rate limiting
+
+The server enforces a sliding-window rate limit per IP address on the web port
+(default: 30 requests per minute). Excess requests receive `429 Too Many Requests`.
+Configure via `web_rate_limit_rpm` (0 = unlimited).
+
+## Authentication (Ed25519) — client data ingestion
+
+Client and server can use **Ed25519** so that each client has a stable identity
+and only allowed keys can connect to the data-ingestion port.
 
 ### Public / private key generation (OpenSSL)
-
-OpenSSL is available on most systems and supports Ed25519.
 
 **1. Generate a client private key (PEM):**
 
@@ -98,15 +207,15 @@ openssl genpkey -algorithm ED25519 -out client_private.pem
 **2. Derive the public key in the format the server expects (64 hex chars = 32-byte raw key):**
 
 ```bash
-# Output raw 32-byte public key as hex (one line, 64 characters)
 openssl pkey -in client_private.pem -pubout -outform DER | tail -c 32 | xxd -p -c 0
 ```
 
-Save that hex line (e.g. `a1b2c3...`) for the server’s allowed list. The client uses **only** the private key file (`client_private.pem`); the server uses **only** the list of public keys (hex lines).
+Save that hex line (e.g. `a1b2c3...`) for the server's allowed list.
 
 **3. Server allowed-keys file**
 
-Create a text file (e.g. `allowed_clients.txt`) with one 64-character hex public key per line. Empty lines and lines starting with `#` are ignored. Add the hex line from step 2 for each allowed client.
+Create a text file (e.g. `allowed_clients.txt`) with one 64-character hex public
+key per line. Empty lines and lines starting with `#` are ignored.
 
 Example `allowed_clients.txt`:
 
@@ -119,110 +228,100 @@ f0e0d0c0b0a090807060504030201000fedcba9876543210fedcba987654321
 
 ### Usage
 
-- **Server** (require auth): `./ntm-server --allowed-keys /path/to/allowed_clients.txt [--port 5555] [--monitor-port 5556]`
+- **Server** (require auth): `./ntm-server --allowed-keys /path/to/allowed_clients.txt [--port 5555]`
 - **Client** (prove identity): `./ntm-client --identity /path/to/client_private.pem --server HOST [--port 5555]`
 
-If the server is started **without** `--allowed-keys`, it does not perform authentication and identifies clients by TCP peer address. If the server **has** an allowed-keys file, every connection must complete Ed25519 auth; unknown or invalid keys are rejected.
+If the server is started **without** `--allowed-keys`, it does not perform
+authentication and identifies clients by TCP peer address.
 
-## TLS encryption and session lifetime
+## TLS encryption (client data ingestion)
 
-Traffic between client and server can be **encrypted with TLS** using session-specific keys. The client verifies the server certificate, which **prevents man-in-the-middle attacks**: a MITM cannot present a valid server certificate unless it has the server’s private key.
+Traffic between client and server can be **encrypted with TLS** using the same
+certificate configured for the web dashboard.
 
-- **Session limit:** Each TLS session is limited to **6 hours**. After 6 hours the connection is closed and the client reconnects, establishing a new session and new session keys.
-- **Server:** Start with `--cert SERVER_CERT.pem` and `--key SERVER_KEY.pem` (PEM format). Without these, the server accepts plain TCP (not recommended for production).
-- **Client:** Start with `--ca CA.pem` (CA bundle to verify the server cert) or `--server-cert SERVER_CERT.pem` (pin the server’s certificate). Without either, the client connects in plain TCP and does not verify the server.
-
-For a **self-signed server certificate** (typical for a private deployment):
-
-```bash
-# Generate server key and self-signed cert (adjust -days and -subj as needed)
-openssl req -x509 -newkey rsa:4096 -keyout server_key.pem -out server_cert.pem -days 365 -nodes -subj "/CN=ntm-server"
-```
-
-Use `server_cert.pem` as both the server’s `--cert` and the client’s `--server-cert` (certificate pinning). For CA-signed certs, use the CA’s bundle as the client’s `--ca`.
+- **Session limit:** Each TLS session is limited to **6 hours**. After 6 hours
+  the connection is closed and the client reconnects with new session keys.
+- **Server:** Start with `--cert SERVER_CERT.pem` and `--key SERVER_KEY.pem`.
+  Without these, the server accepts plain TCP on the ingestion port (not
+  recommended for production).
+- **Client:** Start with `--ca CA.pem` (CA bundle) or `--server-cert SERVER_CERT.pem`
+  (certificate pinning). Without either, the client connects in plain TCP.
 
 ## Running (foreground for debugging)
 
-In one terminal, start the server (with TLS and auth):
-
 ```bash
 cd build
-./ntm-server --port 5555 --monitor-port 5556 --cert server_cert.pem --key server_key.pem --allowed-keys /path/to/allowed_clients.txt
+
+# Start the server (with TLS and auth for both ports):
+./ntm-server \
+  --port 5555 \
+  --cert ntm-server-cert.pem --key ntm-server-key.pem \
+  --allowed-keys /path/to/allowed_clients.txt \
+  --web-port 8443
+
+# Start the client (with TLS and identity):
+sudo ./ntm-client \
+  --server 192.168.1.10 --port 5555 \
+  --server-cert ntm-server-cert.pem \
+  --identity /path/to/client_private.pem
 ```
 
-In another terminal on the same host, start the client with TLS and identity:
+Open `https://192.168.1.10:8443` in a browser on the same LAN to see the
+live dashboard.
 
-```bash
-cd build
-sudo ./ntm-client --server 127.0.0.1 --port 5555 --server-cert server_cert.pem --identity /path/to/client_private.pem
-```
-
-Without `--cert`/`--key` (server) and `--ca`/`--server-cert` (client), traffic is plain TCP. Without `--allowed-keys` and `--identity`, the server does not require client auth and identifies clients by IP:port.
-
-You’ll see periodic summaries printed by `ntm-server` to stderr.
-
-To query a summary from a standalone monitoring process, connect to the **monitor port** and send `IFACE_SUMMARY`.
-
-Plain TCP example:
-
-```bash
-printf "IFACE_SUMMARY\n" | nc 127.0.0.1 5556
-```
-
-TLS example (when the server is started with `--cert/--key`, and especially if `--require-tls` is set):
-
-```bash
-printf "IFACE_SUMMARY\n" | openssl s_client -connect 127.0.0.1:5556 -quiet
-```
-
-The server responds with `WINDOW_START ...`, `IFACE ...` lines, optional `ENTITY\t...` lines, and then `END`.
-
-If you configured **monitor authentication** (`monitor_allowed_keys` / `--monitor-allowed-keys`), use the included `ntm-monitor` example client (it supports TLS verification/pinning and Ed25519 auth v2):
-
-```bash
-cd build
-./ntm-monitor --server 127.0.0.1 --monitor-port 5556 --server-cert server_cert.pem --identity /path/to/monitor_private.pem
-```
+Without `--cert`/`--key`, traffic is plain TCP and the web dashboard is disabled.
+Without `--allowed-keys` and `--identity`, the server does not require client auth.
 
 ## Running as a daemon (Unix)
 
-- **Server** (with TLS; add `--require-tls` when exposed to the internet):
+```bash
+cd build
 
-  ```bash
-  cd build
-  ./ntm-server --daemon --port 5555 --monitor-port 5556 --cert server_cert.pem --key server_key.pem --allowed-keys /path/to/allowed_clients.txt
-  ```
+# Server (with TLS; add --require-tls to refuse plain-TCP ingestion connections):
+./ntm-server --daemon \
+  --port 5555 \
+  --cert /etc/ntm-server/ntm-server-cert.pem \
+  --key  /etc/ntm-server/ntm-server-key.pem \
+  --allowed-keys /etc/ntm-server/allowed_clients.txt \
+  --web-port 8443
 
-- **Client** (with TLS and identity):
-
-  ```bash
-  cd build
-  sudo ./ntm-client --daemon --server 127.0.0.1 --port 5555 --server-cert server_cert.pem --identity /path/to/client_private.pem
-  ```
+# Client (with TLS and identity):
+sudo ./ntm-client --daemon \
+  --server 192.168.1.10 --port 5555 \
+  --server-cert /etc/ntm-server/ntm-server-cert.pem \
+  --identity /path/to/client_private.pem
+```
 
 You can integrate these binaries with your init system (e.g. `systemd`) as services.
 
-**If the client exits with status 1** (e.g. when run as a systemd unit), the reason is now reported: when run in the foreground you’ll see it on stderr; when run with `--daemon`, it is logged to syslog (e.g. `journalctl -u ntm-client` or `journalctl -t ntm-client`). Common causes: server not reachable, TLS or server-cert verification failure, authentication rejected (client key not in server’s `allowed_keys`), or no capture-capable interfaces (run with `sudo` or appropriate capabilities).
+**If the client exits with status 1**, the reason is reported to stderr (foreground)
+or syslog (daemon). Common causes: server not reachable, TLS or certificate
+verification failure, authentication rejected (key not in server's `allowed_keys`),
+or no capture-capable interfaces (run with `sudo` or appropriate capabilities).
 
 ## Server configuration (optional)
 
-The server reads one config file via `--config FILE`. Startup options (port, TLS, auth) and all boundary/limit constants can be set there; missing keys use built-in defaults. **Command-line options override config file values** when both are present.
+The server reads one config file via `--config FILE`. Startup options (port, TLS,
+auth, web dashboard) and all limit constants can be set there; missing keys use
+built-in defaults. **Command-line options override config file values.**
 
 - **Format:** `key=value` per line; `#` starts a comment; leading/trailing space is trimmed.
-- **Startup / TLS / auth (config or CLI):** `port` (1–65535), `monitor_port` (1–65535), `allowed_keys` (path to allowed Ed25519 public keys), `cert` (TLS server cert PEM path), `key` (TLS server key PEM path), `require_tls` (true/yes/1 or false/no/0).
-- **Monitor hardening (config or CLI):** `monitor_bind` (IPv4 bind address; default `127.0.0.1` local-only), `monitor_allowed_keys` (allowed Ed25519 public keys for monitoring), `require_tls_monitor` (true/yes/1), plus monitor limits `max_monitor_summaries_per_second_per_connection`, `max_iface_lines_in_summary`, `max_summary_bytes`.
-- **Limit keys:** `aggregation_window_days`, `max_recv_buffer_bytes`, `max_flow_entries_per_key`, `max_entity_flow_entries_per_key`, `max_ifaces_per_client`, `max_entity_lines_in_summary`, `max_snapshot_entries_for_print`, `max_iface_len`, `max_ip_len`, `max_concurrent_connections`, `max_connections_per_ip`, `max_concurrent_monitor_connections`, `max_monitor_connections_per_ip`, `idle_timeout_seconds`, `max_d_lines_per_second_per_connection`.
-- **IP database keys:** `ip_db_path`, `ip_db_url`, `ip_db_update_interval_days`, `ip_db_auto_update`.
-- Statistics are stored **per day**. When more than `aggregation_window_days` days exist, only the **oldest day** is dropped (no full reset).
 
-Example: `./ntm-server --config /path/to/ntm-server.conf ...`. See `ntm-server.conf.example` for all keys, defaults, and allowed ranges.
+See `ntm-server.conf.example` for all keys, defaults, and allowed ranges.
 
-## Client configuration (one file)
+Key groups:
 
-The client reads **at most one config file** via `--config FILE`. All options can be set there; command-line arguments override config file values.
+| Group | Keys |
+|-------|------|
+| Data ingestion | `port`, `client_bind`, `allowed_keys`, `cert`, `key`, `require_tls` |
+| Web dashboard | `web_port`, `web_bind`, `web_token`, `web_rate_limit_rpm` |
+| Aggregation | `aggregation_window_days` |
+| IP database | `ip_db_path`, `ip_db_url`, `ip_db_update_interval_days`, `ip_db_auto_update` |
+| Limits | `max_recv_buffer_bytes`, `max_flow_entries_per_key`, `max_entity_flow_entries_per_key`, `max_ifaces_per_client`, `max_entity_lines_in_summary`, `max_snapshot_entries_for_print`, `max_iface_len`, `max_ip_len`, `max_concurrent_connections`, `max_connections_per_ip`, `idle_timeout_seconds`, `max_d_lines_per_second_per_connection` |
 
-- **Format:** `key=value` per line; `#` starts a comment; leading/trailing space is trimmed.
-- **Keys:** `server`, `port`, `identity`, `ca`, `server_cert`, `send_buffer_bytes`. Omitted keys use defaults.
+## Client configuration
+
+The client reads one config file via `--config FILE`. All options can be set there.
 
 | Key | Meaning | Default |
 |-----|---------|---------|
@@ -233,34 +332,41 @@ The client reads **at most one config file** via `--config FILE`. All options ca
 | `server_cert` | Path to server cert (pinning) | (none) |
 | `send_buffer_bytes` | Fixed send buffer size (4096–2097152) | 524288 |
 
-Example: `./ntm-client --config /path/to/ntm-client.conf` or override: `./ntm-client --config ntm-client.conf --server 192.168.1.1`
-
 See `ntm-client.conf.example` in the project root.
 
 ## Security
 
-For production deployments, especially when the server is exposed to the internet:
+For production deployments:
 
-- **Use TLS:** Start the server with `--cert` and `--key` so all traffic is encrypted. Start the client with `--ca` or `--server-cert` so it verifies the server and is protected against man-in-the-middle attacks. Without TLS, all traffic (including authentication) is cleartext.
-- **Require TLS (internet exposure):** Use `--require-tls` so the server refuses to start unless `--cert` and `--key` are set; use this when the server is reachable from the internet to avoid accidental plain-TCP exposure.
-- **Use authentication:** Start the server with `--allowed-keys` and the client with `--identity` so only known clients can connect. Without `--allowed-keys`, the server identifies clients by TCP peer address only and accepts any connection.
+- **Use TLS on the ingestion port:** Start the server with `--cert` and `--key` and
+  the client with `--ca` or `--server-cert` to protect against man-in-the-middle attacks.
+  Use `--require-tls` to refuse plain-TCP ingestion connections.
+- **Use Ed25519 auth:** Start the server with `--allowed-keys` and the client with
+  `--identity` so only known clients can submit data.
+- **Web dashboard — LAN only:** The dashboard hard-enforces RFC 1918 source-IP
+  filtering. Additionally, configure a `web_token` on any LAN where other users
+  share the same network segment. Do **not** expose port `web_port` to the internet
+  (see the limitation notice in [Web Dashboard](#web-dashboard)).
+- **TLS certificate renewal:** Self-signed certificates expire (default 365 days).
+  Set a calendar reminder to regenerate before expiry.
 
 The server enforces protocol and resource limits to reduce abuse and DoS:
 
-- **Protocol:** Maximum lengths for `D` line fields (iface, src_ip, dst_ip), per-connection receive buffer cap, and bounded caches and flow/entity maps (see memory assessment).
-- **Connections:** Global cap on concurrent connections; per-IP cap so one host cannot exhaust the connection pool. When a limit is hit, new connections are closed and a short message is logged to stderr.
-- **Rate and idle:** Per-connection limit on `D` lines per second (excess lines dropped); idle timeout closes connections that send no data for a configured period. Session lifetime is capped (e.g. 6 hours).
-
-Detailed security and vulnerability assessments are in the `docs/` folder:
-
-- **Server and protocol:** `docs/SERVER_AND_PROTOCOL_SECURITY_ASSESSMENT.md` — transport, authentication, protocol parsing, and server-side DoS mitigations.
-- **Server memory:** `docs/SERVER_MEMORY_ASSESSMENT.md` — bounded memory use for caches, flow maps, and buffers.
-- **Client:** `docs/CLIENT_SECURITY_ASSESSMENT.md` — client-side overflow and config safety.
+- **Protocol:** Maximum lengths for `D` line fields, per-connection receive buffer cap,
+  and bounded caches and flow/entity maps.
+- **Connections:** Global cap on concurrent connections; per-IP cap so one host cannot
+  exhaust the connection pool.
+- **Rate and idle:** Per-connection limit on `D` lines per second; idle timeout closes
+  connections that send no data; session lifetime capped at 6 hours.
+- **Web dashboard:** Per-IP sliding-window rate limit (default 30 req/min).
 
 ## Limitations & Notes
 
-- **Encryption:** Use `--cert`/`--key` on the server and `--ca` or `--server-cert` on the client for encrypted traffic and protection against MITM. Sessions are limited to 6 hours, then renegotiated.
+- **LAN-only web dashboard:** The current version does not support internet-facing
+  deployment of the web dashboard. See the notice in [Web Dashboard](#web-dashboard).
+  Planned for a future version: configurable CIDR allowlists, mutual-TLS client auth.
+- **Encryption on ingestion port:** Use `--cert`/`--key` on the server and `--ca` or
+  `--server-cert` on the client for encrypted traffic. Sessions are limited to 6 hours.
 - This is a **live monitor**; it does not persist historical data to disk.
-- For very high-throughput links, a user-space monitor may still miss some packets; for production-grade monitoring you may want a dedicated C/Go-based collector or kernel-level capture.
-- IPv4 and IPv6 are both captured when using the Linux client.
-
+- For very high-throughput links, a user-space monitor may still miss some packets.
+- IPv4 and IPv6 are both captured on the Linux client.

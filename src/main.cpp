@@ -3,7 +3,7 @@
 // by interface, IP pair, and country pair.
 
 #include "proto_client_server.hpp"
-#include "proto_server_monitor.hpp"
+#include "httplib.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -100,19 +100,17 @@ struct ServerConfig
 {
     // Startup / TLS / auth (config file or CLI; CLI overrides config).
     std::uint16_t port{kDefaultPort};
-    std::uint16_t monitor_port{static_cast<std::uint16_t>(kDefaultPort + 1)};
     std::string client_bind; // empty = INADDR_ANY
-    std::string monitor_bind{"127.0.0.1"};
     std::string allowed_keys;
-    std::string monitor_allowed_keys;
     std::string cert;
     std::string key;
     bool require_tls{false};
-    bool require_tls_monitor{false};
     bool verbose{false};
-    unsigned max_monitor_summaries_per_second_per_connection{5};
-    std::size_t max_iface_lines_in_summary{200000};
-    std::size_t max_summary_bytes{4 * 1024 * 1024};
+    // Web dashboard (HTTPS, LAN-only).
+    std::uint16_t web_port{8443};
+    std::string web_bind{"0.0.0.0"};
+    std::string web_token;          // optional bearer token; empty = no token auth
+    unsigned web_rate_limit_rpm{30}; // max requests per IP per minute (0 = unlimited)
     // Boundary limits.
     unsigned aggregation_window_days{kAggregationWindowDaysDefault};
     std::size_t max_recv_buffer_bytes{1024 * 1024};  // 1 MiB
@@ -136,8 +134,6 @@ struct ServerConfig
     std::size_t max_ip_len{50};
     std::size_t max_concurrent_connections{1000};
     std::size_t max_connections_per_ip{20};
-    std::size_t max_concurrent_monitor_connections{200};
-    std::size_t max_monitor_connections_per_ip{20};
     unsigned idle_timeout_seconds{300};
     unsigned max_d_lines_per_second_per_connection{20000};
 };
@@ -823,11 +819,10 @@ static std::string verifyClientAuth(SSL *ssl, int clientFd, const AllowedKeysSet
 static const std::set<std::string> &knownServerConfigKeys()
 {
     static const std::set<std::string> keys = {
-        "port", "monitor_port", "client_bind", "monitor_bind",
-        "allowed_keys", "monitor_allowed_keys", "cert", "key",
-        "require_tls", "require_tls_monitor", "verbose",
-        "max_monitor_summaries_per_second_per_connection",
-        "max_iface_lines_in_summary", "max_summary_bytes",
+        "port", "client_bind",
+        "allowed_keys", "cert", "key",
+        "require_tls", "verbose",
+        "web_port", "web_bind", "web_token", "web_rate_limit_rpm",
         "aggregation_window_days", "max_recv_buffer_bytes",
         "ip_db_path", "ip_db_url", "ip_db_update_interval_days", "ip_db_auto_update",
         "max_flow_entries_per_key", "max_entity_flow_entries_per_key",
@@ -835,7 +830,6 @@ static const std::set<std::string> &knownServerConfigKeys()
         "max_entity_lines_in_summary", "max_snapshot_entries_for_print",
         "max_iface_len", "max_ip_len",
         "max_concurrent_connections", "max_connections_per_ip",
-        "max_concurrent_monitor_connections", "max_monitor_connections_per_ip",
         "idle_timeout_seconds", "max_d_lines_per_second_per_connection",
     };
     return keys;
@@ -893,7 +887,7 @@ static ServerConfig loadServerConfig(const std::string &configPath, bool *ok = n
         start = val.find_first_not_of(" \t");
         if (start != std::string::npos)
             val = val.substr(start);
-        if (val.empty() && key != "allowed_keys" && key != "cert" && key != "key")
+        if (val.empty() && key != "allowed_keys" && key != "cert" && key != "key" && key != "web_token")
             continue;
         try
         {
@@ -903,26 +897,13 @@ static ServerConfig loadServerConfig(const std::string &configPath, bool *ok = n
                 u = std::stoul(val);
                 cfg.port = static_cast<std::uint16_t>(std::max(1ul, std::min(65535ul, u)));
             }
-            else if (key == "monitor_port")
-            {
-                u = std::stoul(val);
-                cfg.monitor_port = static_cast<std::uint16_t>(std::max(1ul, std::min(65535ul, u)));
-            }
             else if (key == "client_bind")
             {
                 cfg.client_bind = val;
             }
-            else if (key == "monitor_bind")
-            {
-                cfg.monitor_bind = val;
-            }
             else if (key == "allowed_keys")
             {
                 cfg.allowed_keys = val;
-            }
-            else if (key == "monitor_allowed_keys")
-            {
-                cfg.monitor_allowed_keys = val;
             }
             else if (key == "cert")
             {
@@ -938,32 +919,29 @@ static ServerConfig loadServerConfig(const std::string &configPath, bool *ok = n
                 std::transform(v.begin(), v.end(), v.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
                 cfg.require_tls = (v == "true" || v == "yes" || v == "1");
             }
-            else if (key == "require_tls_monitor")
-            {
-                std::string v = val;
-                std::transform(v.begin(), v.end(), v.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-                cfg.require_tls_monitor = (v == "true" || v == "yes" || v == "1");
-            }
             else if (key == "verbose")
             {
                 std::string v = val;
                 std::transform(v.begin(), v.end(), v.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
                 cfg.verbose = (v == "true" || v == "yes" || v == "1");
             }
-            else if (key == "max_monitor_summaries_per_second_per_connection")
+            else if (key == "web_port")
             {
                 u = std::stoul(val);
-                cfg.max_monitor_summaries_per_second_per_connection = static_cast<unsigned>(std::min(1000ul, std::max(1ul, u)));
+                cfg.web_port = static_cast<std::uint16_t>(std::min(65535ul, u));
             }
-            else if (key == "max_iface_lines_in_summary")
+            else if (key == "web_bind")
             {
-                u = std::stoul(val);
-                cfg.max_iface_lines_in_summary = static_cast<std::size_t>(std::min(2000000ul, std::max(1000ul, u)));
+                cfg.web_bind = val;
             }
-            else if (key == "max_summary_bytes")
+            else if (key == "web_token")
+            {
+                cfg.web_token = val;
+            }
+            else if (key == "web_rate_limit_rpm")
             {
                 u = std::stoul(val);
-                cfg.max_summary_bytes = static_cast<std::size_t>(std::min(32ul * 1024 * 1024, std::max(4096ul, u)));
+                cfg.web_rate_limit_rpm = static_cast<unsigned>(std::min(100000ul, u));
             }
             else if (key == "aggregation_window_days")
             {
@@ -1041,16 +1019,6 @@ static ServerConfig loadServerConfig(const std::string &configPath, bool *ok = n
                 u = std::stoul(val);
                 cfg.max_connections_per_ip = static_cast<std::size_t>(std::min(1000ul, std::max(1ul, u)));
             }
-            else if (key == "max_concurrent_monitor_connections")
-            {
-                u = std::stoul(val);
-                cfg.max_concurrent_monitor_connections = static_cast<std::size_t>(std::min(100000ul, std::max(1ul, u)));
-            }
-            else if (key == "max_monitor_connections_per_ip")
-            {
-                u = std::stoul(val);
-                cfg.max_monitor_connections_per_ip = static_cast<std::size_t>(std::min(1000ul, std::max(1ul, u)));
-            }
             else if (key == "idle_timeout_seconds")
             {
                 u = std::stoul(val);
@@ -1126,6 +1094,335 @@ std::string formatBytes(std::uint64_t bytes)
     return oss.str();
 }
 
+// ---------------------------------------------------------------------------
+// Web dashboard helpers
+// ---------------------------------------------------------------------------
+
+// Returns true if ip (IPv4 or IPv6 string) is in RFC 1918 / loopback / ULA /
+// link-local space.  Non-parseable strings return false (reject).
+static bool isLanIP(const std::string &ip)
+{
+    struct in_addr a4;
+    if (::inet_pton(AF_INET, ip.c_str(), &a4) == 1)
+    {
+        std::uint32_t a = ntohl(a4.s_addr);
+        if ((a & 0xFF000000u) == 0x7F000000u) return true; // 127.0.0.0/8
+        if ((a & 0xFF000000u) == 0x0A000000u) return true; // 10.0.0.0/8
+        if ((a & 0xFFF00000u) == 0xAC100000u) return true; // 172.16.0.0/12
+        if ((a & 0xFFFF0000u) == 0xC0A80000u) return true; // 192.168.0.0/16
+        return false;
+    }
+    struct in6_addr a6;
+    if (::inet_pton(AF_INET6, ip.c_str(), &a6) == 1)
+    {
+        static const std::uint8_t lo6[16] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1};
+        if (std::memcmp(&a6, lo6, 16) == 0) return true;       // ::1
+        if ((a6.s6_addr[0] & 0xFEu) == 0xFCu) return true;    // fc00::/7 ULA
+        if (a6.s6_addr[0] == 0xFEu &&
+            (a6.s6_addr[1] & 0xC0u) == 0x80u) return true;    // fe80::/10 link-local
+        return false;
+    }
+    return false;
+}
+
+// Per-IP sliding-window rate limiter for the web port.
+class WebRateLimiter
+{
+public:
+    explicit WebRateLimiter(unsigned rpm) : rpm_(rpm) {}
+
+    // Returns true if the request is allowed, false if over limit.
+    bool tryAcquire(const std::string &ip)
+    {
+        if (rpm_ == 0) return true;
+        std::lock_guard<std::mutex> lk(mtx_);
+        auto &dq = map_[ip];
+        const auto now = std::chrono::steady_clock::now();
+        while (!dq.empty() &&
+               std::chrono::duration_cast<std::chrono::seconds>(now - dq.front()).count() >= 60)
+            dq.pop_front();
+        if (dq.size() >= rpm_) return false;
+        dq.push_back(now);
+        return true;
+    }
+
+private:
+    unsigned rpm_;
+    std::mutex mtx_;
+    std::unordered_map<std::string, std::deque<std::chrono::steady_clock::time_point>> map_;
+};
+
+// Escape a string for embedding in a JSON value (returned without surrounding quotes).
+static std::string jsonEsc(const std::string &s)
+{
+    std::string o;
+    o.reserve(s.size() + 4);
+    for (unsigned char c : s)
+    {
+        if      (c == '"')  o += "\\\"";
+        else if (c == '\\') o += "\\\\";
+        else if (c == '\n') o += "\\n";
+        else if (c == '\r') o += "\\r";
+        else if (c == '\t') o += "\\t";
+        else if (c < 0x20)  ; // drop other control chars
+        else                o += static_cast<char>(c);
+    }
+    return o;
+}
+
+static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLines)
+{
+    TrafficStats::InterfaceTotals totals;
+    TrafficStats::InterfaceFlows flows;
+    TrafficStats::InterfaceCountryFlows countryFlows;
+    TrafficStats::InterfaceEntityFlows entityFlows;
+    TrafficStats::TimePoint windowStart;
+    stats.snapshot(totals, flows, countryFlows, entityFlows, &windowStart);
+
+    const auto windowEpoch = std::chrono::duration_cast<std::chrono::seconds>(
+        windowStart.time_since_epoch()).count();
+    const auto nowEpoch = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+
+    std::string j;
+    j.reserve(4096);
+    j += "{\n  \"window_start\": ";
+    j += std::to_string(windowEpoch);
+    j += ",\n  \"generated_at\": ";
+    j += std::to_string(nowEpoch);
+
+    // Interfaces
+    j += ",\n  \"interfaces\": [";
+    bool first = true;
+    for (const auto &kv : totals)
+    {
+        auto sep = kv.first.find('|');
+        std::string client = sep == std::string::npos ? std::string{} : kv.first.substr(0, sep);
+        std::string iface  = sep == std::string::npos ? kv.first : kv.first.substr(sep + 1);
+        if (!first) j += ',';
+        j += "\n    {\"client\":\"";
+        j += jsonEsc(client);
+        j += "\",\"iface\":\"";
+        j += jsonEsc(iface);
+        j += "\",\"packets\":";
+        j += std::to_string(kv.second.packets);
+        j += ",\"bytes\":";
+        j += std::to_string(kv.second.bytes);
+        j += '}';
+        first = false;
+    }
+    j += "\n  ]";
+
+    // Entities — collect all rows, sort by bytes descending, truncate
+    struct EntityRow
+    {
+        std::string client, iface, srcEntity, dstEntity;
+        std::uint64_t packets{0}, bytes{0};
+    };
+    std::vector<EntityRow> rows;
+    for (const auto &kv : entityFlows)
+    {
+        auto sep = kv.first.find('|');
+        std::string client = sep == std::string::npos ? std::string{} : kv.first.substr(0, sep);
+        std::string iface  = sep == std::string::npos ? kv.first : kv.first.substr(sep + 1);
+        for (const auto &ek : kv.second)
+            rows.push_back({client, iface, ek.first.src, ek.first.dst,
+                            ek.second.packets, ek.second.bytes});
+    }
+    std::sort(rows.begin(), rows.end(),
+              [](const EntityRow &a, const EntityRow &b) { return a.bytes > b.bytes; });
+    bool truncated = false;
+    if (maxEntityLines > 0 && rows.size() > maxEntityLines)
+    {
+        rows.resize(maxEntityLines);
+        truncated = true;
+    }
+
+    j += ",\n  \"entities\": [";
+    first = true;
+    for (const auto &r : rows)
+    {
+        if (!first) j += ',';
+        j += "\n    {\"client\":\"";
+        j += jsonEsc(r.client);
+        j += "\",\"iface\":\"";
+        j += jsonEsc(r.iface);
+        j += "\",\"packets\":";
+        j += std::to_string(r.packets);
+        j += ",\"bytes\":";
+        j += std::to_string(r.bytes);
+        j += ",\"src_entity\":\"";
+        j += jsonEsc(r.srcEntity);
+        j += "\",\"dst_entity\":\"";
+        j += jsonEsc(r.dstEntity);
+        j += "\"}";
+        first = false;
+    }
+    j += "\n  ]";
+    j += ",\n  \"truncated\": ";
+    j += truncated ? "true" : "false";
+    j += "\n}\n";
+    return j;
+}
+
+// Self-contained HTML dashboard served at GET /.
+static const char kDashboardHtml[] = R"HTML(<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Network Traffic Monitor</title>
+<style>
+*{box-sizing:border-box}
+body{font-family:monospace;background:#0e0e14;color:#ccc;margin:0;padding:16px}
+h1{font-size:1.05em;margin:0 0 4px;color:#7af}
+.meta{font-size:0.78em;color:#666;margin-bottom:14px}
+.section{color:#7af;font-size:0.82em;text-transform:uppercase;letter-spacing:.06em;margin:18px 0 4px}
+table{border-collapse:collapse;width:100%;font-size:0.82em;margin-bottom:4px}
+th{background:#161622;color:#888;text-align:left;padding:5px 10px;border-bottom:1px solid #252535;white-space:nowrap}
+td{padding:3px 10px;border-bottom:1px solid #1a1a28;white-space:nowrap}
+tr:hover td{background:#171726}
+.note{font-size:0.75em;color:#666;margin-top:2px}
+#status{font-size:0.75em;margin-bottom:10px}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;vertical-align:middle}
+.ok{background:#3a3}
+.err{background:#a33}
+.trunc{color:#a80;font-style:italic;font-size:0.8em;padding:4px 10px}
+</style>
+</head>
+<body>
+<h1>Network Traffic Monitor</h1>
+<div id="status"><span id="dot" class="dot ok"></span><span id="smsg">Loading&#8230;</span></div>
+<div class="meta">
+  Window start: <span id="win">&#8212;</span> &nbsp;|&nbsp;
+  Updated: <span id="gen">&#8212;</span> &nbsp;|&nbsp;
+  Auto-refresh: 30 s
+</div>
+
+<div class="section">Interfaces</div>
+<table><thead><tr><th>Client</th><th>Interface</th><th>Packets</th><th>Bytes</th></tr></thead>
+<tbody id="iface_body"></tbody></table>
+<div class="note" id="iface_note"></div>
+
+<div class="section">Entity Flows <span style="color:#555;font-size:0.85em">(sorted by bytes, top results)</span></div>
+<table><thead><tr><th>Client</th><th>Interface</th><th>Src Entity</th><th>Dst Entity</th><th>Packets</th><th>Bytes</th></tr></thead>
+<tbody id="entity_body"></tbody></table>
+<div class="note" id="entity_note"></div>
+
+<script>
+const POLL_MS=30000;
+function fmtB(b){
+  if(b<1024)return b+'B';
+  if(b<1048576)return(b/1024).toFixed(1)+'K';
+  if(b<1073741824)return(b/1048576).toFixed(1)+'M';
+  return(b/1073741824).toFixed(2)+'G';
+}
+function fmtT(ep){return ep?new Date(ep*1000).toLocaleString():'—';}
+function esc(s){
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function row(cells){return'<tr>'+cells.map(c=>'<td>'+esc(c)+'</td>').join('')+'</tr>';}
+async function refresh(){
+  try{
+    const r=await fetch('/api/summary',{cache:'no-store'});
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const d=await r.json();
+    document.getElementById('win').textContent=fmtT(d.window_start);
+    document.getElementById('gen').textContent=fmtT(d.generated_at);
+    const ifaces=d.interfaces||[];
+    document.getElementById('iface_body').innerHTML=
+      ifaces.length?ifaces.map(x=>row([x.client||'(ip-auth)',x.iface,
+        x.packets.toLocaleString(),fmtB(x.bytes)])).join('')
+      :'<tr><td colspan="4" style="color:#555">No data yet</td></tr>';
+    document.getElementById('iface_note').textContent='';
+    const ents=d.entities||[];
+    document.getElementById('entity_body').innerHTML=
+      ents.length?ents.map(x=>row([x.client||'(ip-auth)',x.iface,
+        x.src_entity,x.dst_entity,x.packets.toLocaleString(),fmtB(x.bytes)])).join('')
+      :'<tr><td colspan="6" style="color:#555">No data yet</td></tr>';
+    document.getElementById('entity_note').textContent=
+      d.truncated?'Results truncated to server limit.':'';
+    setS(true,'OK — '+new Date().toLocaleTimeString());
+  }catch(e){setS(false,'Error: '+e.message);}
+}
+function setS(ok,m){
+  document.getElementById('dot').className='dot '+(ok?'ok':'err');
+  document.getElementById('smsg').textContent=m;
+}
+refresh();
+setInterval(refresh,POLL_MS);
+</script>
+</body>
+</html>
+)HTML";
+
+// Run the HTTPS web dashboard in a background thread.
+// Blocks until svr.stop() is called (or cert/key setup fails).
+static void webServerThread(httplib::SSLServer &svr,
+                            TrafficStats &stats,
+                            const ServerConfig &config)
+{
+    WebRateLimiter rateLimiter(config.web_rate_limit_rpm);
+
+    // Pre-routing: LAN check, rate limit, optional bearer token.
+    svr.set_pre_routing_handler(
+        [&](const httplib::Request &req, httplib::Response &res) -> httplib::Server::HandlerResponse
+        {
+            const std::string &ip = req.remote_addr;
+            if (!isLanIP(ip))
+            {
+                res.status = 403;
+                res.set_content("{\"error\":\"forbidden: LAN clients only\"}\n",
+                                "application/json");
+                return httplib::Server::HandlerResponse::Handled;
+            }
+            if (!rateLimiter.tryAcquire(ip))
+            {
+                res.status = 429;
+                res.set_header("Retry-After", "60");
+                res.set_content("{\"error\":\"rate limit exceeded\"}\n", "application/json");
+                return httplib::Server::HandlerResponse::Handled;
+            }
+            if (!config.web_token.empty())
+            {
+                auto auth = req.get_header_value("Authorization");
+                const std::string expected = "Bearer " + config.web_token;
+                if (auth != expected)
+                {
+                    res.status = 401;
+                    res.set_header("WWW-Authenticate", "Bearer realm=\"ntm\"");
+                    res.set_content("{\"error\":\"unauthorized\"}\n", "application/json");
+                    return httplib::Server::HandlerResponse::Handled;
+                }
+            }
+            // Security headers on every response.
+            res.set_header("X-Content-Type-Options", "nosniff");
+            res.set_header("Content-Security-Policy", "default-src 'self'");
+            return httplib::Server::HandlerResponse::Unhandled;
+        });
+
+    // GET / — embedded dashboard HTML
+    svr.Get("/", [](const httplib::Request &, httplib::Response &res) {
+        res.set_content(kDashboardHtml, "text/html; charset=utf-8");
+    });
+
+    // GET /api/summary — JSON snapshot
+    svr.Get("/api/summary",
+        [&stats, &config](const httplib::Request &, httplib::Response &res) {
+            res.set_header("Cache-Control", "no-store");
+            res.set_content(buildSummaryJson(stats, config.max_entity_lines_in_summary),
+                            "application/json");
+        });
+
+    // All other paths → 404
+    svr.set_error_handler([](const httplib::Request &, httplib::Response &res) {
+        if (res.status == 404)
+            res.set_content("{\"error\":\"not found\"}\n", "application/json");
+    });
+
+    svr.listen(config.web_bind, static_cast<int>(config.web_port));
+}
+
 void connectionThread(int clientFd,
                       std::string peerAddr,
                       std::string clientIp,
@@ -1136,7 +1433,6 @@ void connectionThread(int clientFd,
                       PerIPConnectionLimiter &perIPLimiter,
                       const ServerConfig &config,
                       SSL_CTX *sslCtx,
-                      bool monitorOnly,
                       bool requireTlsForThisPort,
                       std::shared_ptr<std::atomic<bool>> doneFlag)
 {
@@ -1283,8 +1579,6 @@ void connectionThread(int clientFd,
     auto lastActivity = std::chrono::steady_clock::now();
     std::int64_t lastDLineSecond = -1;
     std::size_t dLineCountThisSecond = 0;
-    std::int64_t lastMonitorSecond = -1;
-    std::size_t monitorCountThisSecond = 0;
     // UB-1: per-connection counter of D-lines dropped because the client has
     // exceeded its iface cap. Used to log only on power-of-two crossings so a
     // misbehaving client cannot spam syslog.
@@ -1346,8 +1640,6 @@ void connectionThread(int clientFd,
 
             if (line.rfind(kDataLinePrefix, 0) == 0)
             {
-                if (monitorOnly)
-                    break; // monitor port: reject data ingestion
                 PacketMeta meta;
                 if (parseDataLine(line.substr(2), meta, config.max_iface_len, config.max_ip_len))
                 {
@@ -1395,118 +1687,6 @@ void connectionThread(int clientFd,
                         }
                     }
                 }
-            }
-            else if (line == kMonitorCmdIfaceSummary)
-            {
-                if (monitorOnly)
-                {
-                    auto nowSec = std::chrono::duration_cast<std::chrono::seconds>(
-                        std::chrono::steady_clock::now().time_since_epoch()).count();
-                    if (nowSec != lastMonitorSecond)
-                    {
-                        lastMonitorSecond = nowSec;
-                        monitorCountThisSecond = 0;
-                    }
-                    monitorCountThisSecond++;
-                    if (monitorCountThisSecond > config.max_monitor_summaries_per_second_per_connection)
-                        break; // rate limit: close connection
-                }
-
-                TrafficStats::InterfaceTotals totals;
-                TrafficStats::InterfaceFlows flows;
-                TrafficStats::InterfaceCountryFlows countryFlows;
-                TrafficStats::InterfaceEntityFlows entityFlows;
-                TrafficStats::TimePoint windowStart;
-                stats.snapshot(totals, flows, countryFlows, entityFlows, &windowStart);
-                const auto windowEpoch = std::chrono::duration_cast<std::chrono::seconds>(windowStart.time_since_epoch()).count();
-
-                std::string out;
-                out += kMonitorTokWindowStart;
-                out.push_back(' ');
-                out += std::to_string(windowEpoch);
-                out += "\n";
-                std::size_t ifaceLines = 0;
-                for (const auto &kv : totals)
-                {
-                    if (ifaceLines >= config.max_iface_lines_in_summary)
-                        break;
-                    const auto &key = kv.first;
-                    const auto &c = kv.second;
-                    auto sep = key.find('|');
-                    std::string client = sep == std::string::npos ? std::string{} : key.substr(0, sep);
-                    std::string iface = sep == std::string::npos ? key : key.substr(sep + 1);
-                    out += kMonitorTokIface;
-                    out.push_back(' ');
-                    out += client;
-                    out.push_back(' ');
-                    out += iface;
-                    out.push_back(' ');
-                    out += std::to_string(c.packets);
-                    out.push_back(' ');
-                    out += std::to_string(c.bytes);
-                    out.push_back('\n');
-                    ++ifaceLines;
-                    if (out.size() >= config.max_summary_bytes)
-                        break;
-                }
-                if (out.size() >= config.max_summary_bytes)
-                {
-                    out += kMonitorTokTruncated;
-                    out += "\n";
-                    out += kMonitorTokEnd;
-                    out += "\n";
-                    if (!writeExact(ssl, clientFd, out.data(), out.size()))
-                        break;
-                    continue;
-                }
-                std::size_t entityLines = 0;
-                for (const auto &kv : entityFlows)
-                {
-                    if (entityLines >= config.max_entity_lines_in_summary)
-                        break;
-                    const auto &ciKey = kv.first;
-                    auto sep = ciKey.find('|');
-                    std::string client = sep == std::string::npos ? std::string{} : ciKey.substr(0, sep);
-                    std::string iface = sep == std::string::npos ? ciKey : ciKey.substr(sep + 1);
-                    for (const auto &ek : kv.second)
-                    {
-                        if (entityLines >= config.max_entity_lines_in_summary)
-                            break;
-                        out += kMonitorTokEntity;
-                        out += "\t";
-                        out += client;
-                        out += "\t";
-                        out += iface;
-                        out += "\t";
-                        out += std::to_string(ek.second.packets);
-                        out += "\t";
-                        out += std::to_string(ek.second.bytes);
-                        out += "\t";
-                        out += ek.first.src;
-                        out += "\t";
-                        out += ek.first.dst;
-                        out += "\n";
-                        ++entityLines;
-                        if (out.size() >= config.max_summary_bytes)
-                            break;
-                    }
-                    if (out.size() >= config.max_summary_bytes)
-                        break;
-                }
-                if (out.size() >= config.max_summary_bytes)
-                {
-                    out += kMonitorTokTruncated;
-                    out += "\n";
-                    out += kMonitorTokEnd;
-                    out += "\n";
-                    if (!writeExact(ssl, clientFd, out.data(), out.size()))
-                        break;
-                    continue;
-                }
-                out += kMonitorTokEnd;
-                out += "\n";
-                if (!writeExact(ssl, clientFd, out.data(), out.size()))
-                    break;
             }
         }
         if (pos > 0)
@@ -1796,11 +1976,8 @@ void keyboardWatcherThread()
 
 int runServer(std::uint16_t port, bool daemonMode, bool verbose,
               const std::string &allowedKeysPath,
-              std::uint16_t monitorPort,
-              const std::string &monitorBind,
-              const std::string &monitorAllowedKeysPath,
               const std::string &certPath, const std::string &keyPath,
-              const ServerConfig &config, bool requireTls, bool requireTlsMonitor)
+              const ServerConfig &config, bool requireTls)
 {
     // H2: open syslog before daemonize() because daemonize closes stderr.
     g_verbose.store(verbose, std::memory_order_relaxed);
@@ -1836,15 +2013,13 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
     {
         serverLog(LogLevel::Warn, "ntm-server: no TLS (--cert/--key not set); connection not encrypted");
     }
-    if ((requireTls || requireTlsMonitor) && !sslCtx)
+    if (requireTls && !sslCtx)
     {
         serverLog(LogLevel::Err, "ntm-server: TLS required but TLS not configured; use --cert and --key");
         return 1;
     }
     if (requireTls)
         serverLog(LogLevel::Warn, "ntm-server: TLS required (plain TCP rejected)");
-    if (requireTlsMonitor)
-        serverLog(LogLevel::Warn, "ntm-server: monitor TLS required (plain TCP rejected)");
 
     // NEW-H1: fail-closed authentication.
     // If the operator configured an allowed-keys file, refuse to start with zero
@@ -1872,26 +2047,6 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                   "any reachable host can submit data");
     }
 
-    AllowedKeysSet monitorAllowedKeys = loadAllowedKeys(monitorAllowedKeysPath);
-    if (!monitorAllowedKeysPath.empty())
-    {
-        if (monitorAllowedKeys.empty())
-        {
-            serverLog(LogLevel::Err,
-                      "ntm-server: --monitor-allowed-keys/monitor_allowed_keys is set to '%s' but loaded 0 valid keys; "
-                      "refusing to start in fail-open mode (fix the file or unset the option).",
-                      monitorAllowedKeysPath.c_str());
-            if (sslCtx) SSL_CTX_free(sslCtx);
-            return 1;
-        }
-        serverLog(LogLevel::Warn, "ntm-server: loaded %zu allowed monitor key(s)", monitorAllowedKeys.size());
-    }
-    else
-    {
-        serverLog(LogLevel::Warn,
-                  "ntm-server: NO MONITOR AUTHENTICATION configured (monitor_allowed_keys not set); "
-                  "any reachable host can request summaries");
-    }
     TrafficStats stats(config.aggregation_window_days,
                        config.max_flow_entries_per_key,
                        config.max_entity_flow_entries_per_key,
@@ -1977,20 +2132,64 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                   static_cast<unsigned>(port), std::strerror(errno));
         return 1;
     }
-    int listenFdMonitor = createListenSocket(monitorBind, monitorPort);
-    if (listenFdMonitor < 0)
-    {
-        serverLog(LogLevel::Err, "ntm-server: listen(monitor port %u) failed: %s",
-                  static_cast<unsigned>(monitorPort), std::strerror(errno));
-        ::close(listenFdClient);
-        return 1;
-    }
 
     serverLog(LogLevel::Warn, "ntm-server listening on client port %u (%s)",
               static_cast<unsigned>(port), daemonMode ? "daemon mode" : "foreground mode");
-    serverLog(LogLevel::Warn, "ntm-server listening on monitor port %u (%s)",
-              static_cast<unsigned>(monitorPort),
-              monitorBind.empty() ? "0.0.0.0" : monitorBind.c_str());
+
+    // Start HTTPS web dashboard if web_port > 0 and TLS cert/key are configured.
+    std::unique_ptr<httplib::SSLServer> webSvr;
+    std::thread webThread;
+    if (config.web_port > 0)
+    {
+        if (certPath.empty() || keyPath.empty())
+        {
+            serverLog(LogLevel::Warn,
+                      "ntm-server: web_port=%u configured but --cert/--key not set; "
+                      "web dashboard disabled (HTTPS requires a certificate)",
+                      static_cast<unsigned>(config.web_port));
+        }
+        else
+        {
+            try
+            {
+                webSvr = std::make_unique<httplib::SSLServer>(certPath.c_str(), keyPath.c_str());
+                if (!webSvr->is_valid())
+                {
+                    serverLog(LogLevel::Err,
+                              "ntm-server: failed to initialise HTTPS server (bad cert/key at %s / %s)",
+                              certPath.c_str(), keyPath.c_str());
+                    webSvr.reset();
+                }
+                else
+                {
+                    webThread = std::thread(webServerThread,
+                                            std::ref(*webSvr),
+                                            std::ref(stats),
+                                            std::cref(config));
+                    serverLog(LogLevel::Warn,
+                              "ntm-server: HTTPS web dashboard on %s:%u (LAN-only, rate-limit %u rpm)",
+                              config.web_bind.c_str(),
+                              static_cast<unsigned>(config.web_port),
+                              config.web_rate_limit_rpm);
+                    if (!config.web_token.empty())
+                        serverLog(LogLevel::Warn, "ntm-server: web dashboard bearer token auth enabled");
+                    else
+                        serverLog(LogLevel::Warn,
+                                  "ntm-server: web dashboard has no bearer token; "
+                                  "access restricted to LAN IPs only");
+                }
+            }
+            catch (const std::exception &e)
+            {
+                serverLog(LogLevel::Err, "ntm-server: web server init failed: %s", e.what());
+                webSvr.reset();
+            }
+        }
+    }
+    else
+    {
+        serverLog(LogLevel::Warn, "ntm-server: web dashboard disabled (web_port=0)");
+    }
 
     std::thread printer(statsPrinterThread, std::ref(stats), config.max_snapshot_entries_for_print);
     std::thread keyWatcher;
@@ -2008,7 +2207,7 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
         std::shared_ptr<std::atomic<bool>> done;
     };
     std::vector<WorkerEntry> workers;
-    workers.reserve(config.max_concurrent_connections + config.max_concurrent_monitor_connections);
+    workers.reserve(config.max_concurrent_connections);
     auto reapFinishedWorkers = [&]() {
         for (auto it = workers.begin(); it != workers.end(); )
         {
@@ -2026,18 +2225,14 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
     };
 
     std::atomic<std::size_t> activeClientConnections{0};
-    std::atomic<std::size_t> activeMonitorConnections{0};
     PerIPConnectionLimiter perIPLimiterClient(config.max_connections_per_ip);
-    PerIPConnectionLimiter perIPLimiterMonitor(config.max_monitor_connections_per_ip);
 
     while (g_running.load())
     {
-        pollfd fds[2]{};
+        pollfd fds[1]{};
         fds[0].fd = listenFdClient;
         fds[0].events = POLLIN;
-        fds[1].fd = listenFdMonitor;
-        fds[1].events = POLLIN;
-        int pr = ::poll(fds, 2, 1000);
+        int pr = ::poll(fds, 1, 1000);
         if (pr < 0)
         {
             if (errno == EINTR)
@@ -2050,28 +2245,9 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
         if (pr == 0)
             continue;
 
-        bool monitorOnly = false;
-        const AllowedKeysSet *keysForConn = &allowedKeys;
-        bool requireTlsForConn = requireTls;
-        int acceptFd = -1;
-        if (fds[1].revents & POLLIN)
-        {
-            acceptFd = listenFdMonitor;
-            monitorOnly = true;
-            keysForConn = &monitorAllowedKeys;
-            requireTlsForConn = requireTlsMonitor;
-        }
-        else if (fds[0].revents & POLLIN)
-        {
-            acceptFd = listenFdClient;
-            monitorOnly = false;
-            keysForConn = &allowedKeys;
-            requireTlsForConn = requireTls;
-        }
-        else
-        {
+        if (!(fds[0].revents & POLLIN))
             continue;
-        }
+        int acceptFd = listenFdClient;
 
         sockaddr_in clientAddr{};
         socklen_t len = sizeof(clientAddr);
@@ -2100,8 +2276,8 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
             break;
         }
 
-        auto &activeConnections = monitorOnly ? activeMonitorConnections : activeClientConnections;
-        const std::size_t maxConn = monitorOnly ? config.max_concurrent_monitor_connections : config.max_concurrent_connections;
+        auto &activeConnections = activeClientConnections;
+        const std::size_t maxConn = config.max_concurrent_connections;
 
         if (activeConnections.load(std::memory_order_relaxed) >= maxConn)
         {
@@ -2137,7 +2313,7 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
         }
         std::string peerAddr = clientIpStr + ":" + std::to_string(ntohs(clientAddr.sin_port));
 
-        auto &perIPLimiter = monitorOnly ? perIPLimiterMonitor : perIPLimiterClient;
+        auto &perIPLimiter = perIPLimiterClient;
         if (!perIPLimiter.tryAcquire(clientIpStr))
         {
             ::close(clientFd);
@@ -2161,15 +2337,14 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                           clientFd,
                           peerAddr,
                           clientIpStr,
-                          std::cref(*keysForConn),
+                          std::cref(allowedKeys),
                           std::ref(stats),
                           std::ref(ipDataUpdater),
                           std::ref(activeConnections),
                           std::ref(perIPLimiter),
                           std::cref(config),
                           sslCtx,
-                          monitorOnly,
-                          requireTlsForConn,
+                          requireTls,
                           doneFlag);
             // From here on, t is a live joinable thread. The only ops left are
             // noexcept (shared_ptr move, thread move, vector push into reserved
@@ -2198,8 +2373,15 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
     }
 
     ::close(listenFdClient);
-    ::close(listenFdMonitor);
     g_running.store(false);
+
+    // Stop the web server (SSLServer::stop() is thread-safe).
+    if (webSvr)
+    {
+        webSvr->stop();
+        if (webThread.joinable())
+            webThread.join();
+    }
 
     for (auto &w : workers)
     {
@@ -2270,8 +2452,13 @@ int main(int argc, char *argv[])
         }
         if (arg == "--help" || arg == "-h")
         {
-            std::cout << "Usage: ntm-server [--daemon] [--verbose] [--require-tls] [--require-tls-monitor] [--port N] [--monitor-port N] [--monitor-bind IP] [--allowed-keys FILE] [--monitor-allowed-keys FILE] [--cert PEM] [--key PEM] [--config FILE]\n";
-            std::cout << "  Options can be set in config file; command-line overrides config.\n";
+            std::cout <<
+                "Usage: ntm-server [--daemon] [--verbose] [--require-tls] [--port N]\n"
+                "                  [--allowed-keys FILE] [--cert PEM] [--key PEM]\n"
+                "                  [--web-port N] [--web-bind IP] [--web-token TOKEN]\n"
+                "                  [--config FILE]\n"
+                "  Options can be set in config file (key=value); command-line overrides config.\n"
+                "  Web dashboard (HTTPS) requires --cert and --key.\n";
             return 0;
         }
     }
@@ -2294,14 +2481,10 @@ int main(int argc, char *argv[])
                   << "' contained no recognized keys; running with built-in defaults\n";
     }
     std::uint16_t port = config.port;
-    std::uint16_t monitorPort = config.monitor_port;
-    std::string monitorBind = config.monitor_bind;
     std::string allowedKeysPath = config.allowed_keys;
-    std::string monitorAllowedKeysPath = config.monitor_allowed_keys;
     std::string certPath = config.cert;
     std::string keyPath = config.key;
     bool requireTls = config.require_tls;
-    bool requireTlsMonitor = config.require_tls_monitor;
     if (!verbose) verbose = config.verbose;
 
     for (int i = 1; i < argc; ++i)
@@ -2313,28 +2496,26 @@ int main(int argc, char *argv[])
             verbose = true;
         else if (arg == "--require-tls")
             requireTls = true;
-        else if (arg == "--require-tls-monitor")
-            requireTlsMonitor = true;
         else if (arg == "--port" && i + 1 < argc)
         {
             if (!parsePortArg("--port", argv[++i], port))
                 return 1;
         }
-        else if (arg == "--monitor-port" && i + 1 < argc)
-        {
-            if (!parsePortArg("--monitor-port", argv[++i], monitorPort))
-                return 1;
-        }
-        else if (arg == "--monitor-bind" && i + 1 < argc)
-            monitorBind = argv[++i];
         else if (arg == "--allowed-keys" && i + 1 < argc)
             allowedKeysPath = argv[++i];
-        else if (arg == "--monitor-allowed-keys" && i + 1 < argc)
-            monitorAllowedKeysPath = argv[++i];
         else if (arg == "--cert" && i + 1 < argc)
             certPath = argv[++i];
         else if (arg == "--key" && i + 1 < argc)
             keyPath = argv[++i];
+        else if (arg == "--web-port" && i + 1 < argc)
+        {
+            if (!parsePortArg("--web-port", argv[++i], config.web_port))
+                return 1;
+        }
+        else if (arg == "--web-bind" && i + 1 < argc)
+            config.web_bind = argv[++i];
+        else if (arg == "--web-token" && i + 1 < argc)
+            config.web_token = argv[++i];
         else if (arg == "--config" && i + 1 < argc)
             ++i;
         else if (arg == "--help" || arg == "-h")
@@ -2346,7 +2527,7 @@ int main(int argc, char *argv[])
         }
     }
 
-    return ntm::runServer(port, daemonMode, verbose, allowedKeysPath, monitorPort, monitorBind, monitorAllowedKeysPath,
-                          certPath, keyPath, config, requireTls, requireTlsMonitor);
+    return ntm::runServer(port, daemonMode, verbose, allowedKeysPath,
+                          certPath, keyPath, config, requireTls);
 }
 

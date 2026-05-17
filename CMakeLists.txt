@@ -19,28 +19,21 @@ add_executable(ntm-client
     src/client_linux.cpp
 )
 
-add_executable(ntm-monitor
-    src/monitor_main.cpp
-)
-
 target_link_libraries(ntm-server
     PRIVATE
         OpenSSL::SSL
-        ${PCAP_LIBRARY}
         CURL::libcurl
         ZLIB::ZLIB
         Threads::Threads
 )
 
+# CPPHTTPLIB_OPENSSL_SUPPORT enables TLS in the vendored cpp-httplib header.
+# OpenSSL is already linked above; no extra library needed.
+target_compile_definitions(ntm-server PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+
 target_link_libraries(ntm-client
     PRIVATE
         OpenSSL::SSL
         ${PCAP_LIBRARY}
-        Threads::Threads
-)
-
-target_link_libraries(ntm-monitor
-    PRIVATE
-        OpenSSL::SSL
         Threads::Threads
 )
