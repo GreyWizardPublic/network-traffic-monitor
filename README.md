@@ -220,13 +220,18 @@ Save that hex line (e.g. `a1b2c3...`) for the server's allowed list.
 Create a text file (e.g. `allowed_clients.txt`) with one 64-character hex public
 key per line. Empty lines and lines starting with `#` are ignored.
 
+An optional **nickname** can follow the key on the same line, separated by one or
+more spaces or tabs (max 64 chars, no `|` or control characters). The nickname is
+shown in the web dashboard and verbose logs in place of the raw hex key — the hex
+key remains the internal identifier, so renaming a client does not affect stored data.
+
 Example `allowed_clients.txt`:
 
 ```
-# Client A (e.g. sensor-01)
-a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456
-# Client B
-f0e0d0c0b0a090807060504030201000fedcba9876543210fedcba987654321
+# <64-hex-pubkey>  [optional nickname]
+a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456  kitchen-router
+f0e0d0c0b0a090807060504030201000fedcba9876543210fedcba987654321  office-switch
+dead0000000000000000000000000000000000000000000000000000000beef1
 ```
 
 ### Usage

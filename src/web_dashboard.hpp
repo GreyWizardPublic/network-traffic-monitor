@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 
 namespace ntm
 {
@@ -28,6 +29,10 @@ struct WebConfig
     std::string   token;              // empty = no bearer-token auth
     unsigned      rate_limit_rpm{30};
     std::size_t   max_entity_lines{50000};
+    // Display-time nickname substitution: lowercase 64-hex pubkey → human-readable name.
+    // The internal clientId in TrafficStats is always the raw hex; lookup happens only at
+    // JSON serialisation so renaming a client never orphans historical data.
+    std::unordered_map<std::string, std::string> client_nicknames;
 };
 
 // Thread function: registers HTTP routes on svr, then blocks in svr.listen().

@@ -102,7 +102,8 @@ static std::string jsonEsc(const std::string &s)
     return o;
 }
 
-static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLines)
+static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLines,
+                                    const std::unordered_map<std::string, std::string> &nicknames)
 {
     TrafficStats::InterfaceTotals totals;
     TrafficStats::InterfaceFlows flows;
@@ -110,6 +111,12 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
     TrafficStats::InterfaceEntityFlows entityFlows;
     TrafficStats::TimePoint windowStart;
     stats.snapshot(totals, flows, countryFlows, entityFlows, &windowStart);
+
+    // Returns the nickname for a client hex-id, or the hex-id itself if no nickname is set.
+    auto displayClient = [&nicknames](const std::string &hexId) -> const std::string & {
+        auto it = nicknames.find(hexId);
+        return it != nicknames.end() ? it->second : hexId;
+    };
 
     const auto windowEpoch = std::chrono::duration_cast<std::chrono::seconds>(
         windowStart.time_since_epoch()).count();
@@ -133,7 +140,7 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
         std::string iface  = sep == std::string::npos ? kv.first : kv.first.substr(sep + 1);
         if (!first) j += ',';
         j += "\n    {\"client\":\"";
-        j += jsonEsc(client);
+        j += jsonEsc(displayClient(client));
         j += "\",\"iface\":\"";
         j += jsonEsc(iface);
         j += "\",\"packets\":";
@@ -176,7 +183,7 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
     {
         if (!first) j += ',';
         j += "\n    {\"client\":\"";
-        j += jsonEsc(r.client);
+        j += jsonEsc(displayClient(r.client));
         j += "\",\"iface\":\"";
         j += jsonEsc(r.iface);
         j += "\",\"packets\":";
@@ -352,7 +359,8 @@ void webServerThread(httplib::SSLServer &svr,
     svr.Get("/api/summary",
         [&stats, &config](const httplib::Request &, httplib::Response &res) {
             res.set_header("Cache-Control", "no-store");
-            res.set_content(buildSummaryJson(stats, config.max_entity_lines),
+            res.set_content(buildSummaryJson(stats, config.max_entity_lines,
+                                             config.client_nicknames),
                             "application/json");
         });
 

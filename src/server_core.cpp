@@ -271,7 +271,8 @@ static bool allowedKeysContains(const AllowedKeysSet &keys, const std::string &n
     return found != 0u;
 }
 
-static AllowedKeysSet loadAllowedKeys(const std::string &path)
+static AllowedKeysSet loadAllowedKeys(const std::string &path,
+                                      std::unordered_map<std::string, std::string> &nicknames)
 {
     AllowedKeysSet out;
     if (path.empty())
@@ -287,21 +288,30 @@ static AllowedKeysSet loadAllowedKeys(const std::string &path)
     while (std::getline(f, line))
     {
         ++lineNo;
-        // Trim and skip empty / comment
+        // Trim trailing CR/LF
         while (!line.empty() && (line.back() == '\r' || line.back() == '\n'))
             line.pop_back();
         if (line.empty() || line[0] == '#')
             continue;
-        if (line.size() != 64)
+        if (line.size() < 64)
         {
             serverLog(LogLevel::Warn,
-                      "ntm-server: %s line %zu: ignoring entry with %zu chars (expected 64-char hex)",
+                      "ntm-server: %s line %zu: ignoring entry with %zu chars (expected 64-char hex prefix)",
                       path.c_str(), lineNo, line.size());
             continue;
         }
-        bool bad = false;
-        for (char c : line)
+        // After the 64-char hex the line must end or have a whitespace separator.
+        if (line.size() > 64 && line[64] != ' ' && line[64] != '\t')
         {
+            serverLog(LogLevel::Warn,
+                      "ntm-server: %s line %zu: ignoring entry — expected space/tab after 64-char hex key",
+                      path.c_str(), lineNo);
+            continue;
+        }
+        bool bad = false;
+        for (std::size_t i = 0; i < 64; ++i)
+        {
+            char c = line[i];
             if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')))
             {
                 bad = true;
@@ -311,7 +321,7 @@ static AllowedKeysSet loadAllowedKeys(const std::string &path)
         if (bad)
         {
             serverLog(LogLevel::Warn,
-                      "ntm-server: %s line %zu: ignoring entry with non-hex characters",
+                      "ntm-server: %s line %zu: ignoring entry with non-hex characters in key",
                       path.c_str(), lineNo);
             continue;
         }
@@ -325,6 +335,44 @@ static AllowedKeysSet loadAllowedKeys(const std::string &path)
             raw.push_back(static_cast<char>((hi << 4) | lo));
         }
         out.insert(raw);
+
+        // Build lowercase hex key for the nickname map (display only).
+        std::string hexKey;
+        hexKey.reserve(64);
+        static constexpr char kHex[] = "0123456789abcdef";
+        for (unsigned char b : raw)
+        {
+            hexKey += kHex[b >> 4];
+            hexKey += kHex[b & 0xFu];
+        }
+
+        // Parse optional nickname: trim leading/trailing whitespace, validate.
+        if (line.size() > 64)
+        {
+            std::size_t start = 64;
+            while (start < line.size() && (line[start] == ' ' || line[start] == '\t'))
+                ++start;
+            std::size_t end = line.size();
+            while (end > start && (line[end - 1] == ' ' || line[end - 1] == '\t'))
+                --end;
+            std::string nickname = line.substr(start, end - start);
+            if (!nickname.empty())
+            {
+                bool badNick = nickname.size() > 64;
+                for (char c : nickname)
+                    if (c == '|' || static_cast<unsigned char>(c) < 0x20u) { badNick = true; break; }
+                if (badNick)
+                {
+                    serverLog(LogLevel::Warn,
+                              "ntm-server: %s line %zu: ignoring invalid nickname (too long or contains '|'/control chars)",
+                              path.c_str(), lineNo);
+                }
+                else
+                {
+                    nicknames[hexKey] = std::move(nickname);
+                }
+            }
+        }
     }
     return out;
 }
@@ -982,7 +1030,8 @@ void connectionThread(int clientFd,
     // ConnCloser/PerIPGuard/Guard/DoneGuard run here on every path.
 }
 
-void statsPrinterThread(TrafficStats &stats, std::size_t maxSnapshotEntriesForPrint)
+void statsPrinterThread(TrafficStats &stats, std::size_t maxSnapshotEntriesForPrint,
+                        std::unordered_map<std::string, std::string> nicknames)
 {
     // NEW-N3: wrap each iteration so a transient bad_alloc doesn't kill the entire daemon.
     while (g_running.load())
@@ -1073,7 +1122,13 @@ void statsPrinterThread(TrafficStats &stats, std::size_t maxSnapshotEntriesForPr
             const std::string &client = clientPair.first;
             auto &interfaces = clientPair.second;
 
-            out << "Client " << (client.empty() ? "<unknown>" : client) << ":\n";
+            {
+                const std::string *displayName = &client;
+                std::string unknown = "<unknown>";
+                if (client.empty()) displayName = &unknown;
+                else { auto it = nicknames.find(client); if (it != nicknames.end()) displayName = &it->second; }
+                out << "Client " << *displayName << ":\n";
+            }
             for (const auto &entry : interfaces)
             {
                 const auto &iface = entry.iface;
@@ -1274,7 +1329,8 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
     }
 
     // NEW-H1: fail-closed authentication.
-    AllowedKeysSet allowedKeys = loadAllowedKeys(allowedKeysPath);
+    std::unordered_map<std::string, std::string> clientNicknames;
+    AllowedKeysSet allowedKeys = loadAllowedKeys(allowedKeysPath, clientNicknames);
     if (!allowedKeysPath.empty())
     {
         if (allowedKeys.empty())
@@ -1413,6 +1469,7 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                     webCfg.token            = config.web_token;
                     webCfg.rate_limit_rpm   = config.web_rate_limit_rpm;
                     webCfg.max_entity_lines = config.max_entity_lines_in_summary;
+                    webCfg.client_nicknames = clientNicknames;
 
                     webThread = std::thread(webServerThread,
                                             std::ref(*webSvr),
@@ -1443,7 +1500,8 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
         serverLog(LogLevel::Warn, "ntm-server: web dashboard disabled (web_port=0)");
     }
 
-    std::thread printer(statsPrinterThread, std::ref(stats), config.max_snapshot_entries_for_print);
+    std::thread printer(statsPrinterThread, std::ref(stats), config.max_snapshot_entries_for_print,
+                        clientNicknames);
     std::thread keyWatcher;
     if (!daemonMode)
     {

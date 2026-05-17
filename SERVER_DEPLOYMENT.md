@@ -134,14 +134,24 @@ openssl pkey -in client_private.pem -pubout -outform DER \
 Create `/etc/ntm-server/allowed_clients.txt`:
 
 ```
-# sensor-01 (kitchen router)
-a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456
+# Format: <64-hex-pubkey>  [optional nickname]
+#
+# The nickname is shown in the web dashboard and server logs instead of the raw
+# 64-character hex key.  It must be on the same line, separated from the key by
+# one or more spaces or tabs.  Maximum 64 characters; must not contain '|' or
+# ASCII control characters.
+#
+# Lines starting with '#' and blank lines are ignored.
 
-# sensor-02 (office switch)
-f0e0d0c0b0a090807060504030201000fedcba9876543210fedcba987654321
+a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456  kitchen-router
+f0e0d0c0b0a090807060504030201000fedcba9876543210fedcba987654321  office-switch
+dead0000000000000000000000000000000000000000000000000000000beef1
 ```
 
-- One 64-character hex key per line.
+- One 64-character hex public key per line.
+- An optional **nickname** follows the key, separated by whitespace; it replaces the
+  raw hex in the web dashboard and verbose logs (the hex key remains the internal
+  identifier in all stored data, so renaming a client never affects historical records).
 - Lines starting with `#` and blank lines are ignored.
 - Malformed entries are logged as warnings at startup so keys are never silently lost.
 - Membership checks use **constant-time comparison** (`CRYPTO_memcmp`) to prevent timing
