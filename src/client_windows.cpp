@@ -87,6 +87,18 @@ SockFd connectToServer(const std::string &host, std::uint16_t port, std::string 
         return INVALID_SOCKET;
     }
 
+    // Bound the TLS handshake and Ed25519 auth reads so a server that accepts
+    // the connection but then stalls cannot hang the client thread (which would
+    // also block connectionMutex_). On Windows SO_RCVTIMEO/SO_SNDTIMEO take a
+    // DWORD of milliseconds; connect() itself uses the OS TCP connect timeout.
+    {
+        DWORD to = 30000;
+        ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO,
+                     reinterpret_cast<const char *>(&to), sizeof(to));
+        ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO,
+                     reinterpret_cast<const char *>(&to), sizeof(to));
+    }
+
     struct sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port   = htons(port);

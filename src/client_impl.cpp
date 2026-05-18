@@ -96,7 +96,11 @@ public:
         return connectUnlocked();
     }
 
-    const std::string &lastError() const { return lastError_; }
+    std::string lastError() const
+    {
+        std::lock_guard<std::mutex> lock(connectionMutex_);
+        return lastError_;
+    }
 
     void close()
     {
@@ -145,7 +149,7 @@ private:
     std::atomic<bool>        runningSender_{false};
     std::thread              senderThread_;
 
-    std::mutex               connectionMutex_;
+    mutable std::mutex       connectionMutex_;
     std::string              host_;
     std::uint16_t            port_;
     SockFd                   fd_{kInvalidSock};
@@ -371,7 +375,13 @@ public:
     {
         if (!running_.load()) return;
         running_.store(false);
-        if (pcapHandle_) pcap_breakloop(pcapHandle_);
+        {
+            // pcapMutex_ serialises this pcap_breakloop() against the
+            // pcap_close() in run()'s teardown so the handle can never be
+            // closed by one thread while breakloop'd by another.
+            std::lock_guard<std::mutex> lk(pcapMutex_);
+            if (pcapHandle_) pcap_breakloop(pcapHandle_);
+        }
         if (worker_.joinable()) worker_.join();
     }
 
@@ -446,44 +456,54 @@ private:
 
     void run()
     {
+        // All pcap_* calls below operate on the thread-local `h`. The shared
+        // member pcapHandle_ is only ever touched under pcapMutex_, purely so
+        // stop() can pcap_breakloop() a handle that is guaranteed valid for the
+        // duration it holds the lock. Teardown clears the member under the lock
+        // *before* pcap_close(h), so breakloop and close can never overlap.
+        pcap_t *h = nullptr;
         try
         {
             char errbuf[PCAP_ERRBUF_SIZE]{};
-            pcapHandle_ = pcap_create(iface_.c_str(), errbuf);
-            if (!pcapHandle_)
+            h = pcap_create(iface_.c_str(), errbuf);
+            if (!h)
             {
                 std::cerr << "ntm-client: pcap_create failed for " << iface_
                           << ": " << errbuf << "\n";
                 return;
             }
-            pcap_set_snaplen(pcapHandle_, 192);
-            pcap_set_promisc(pcapHandle_, 1);
-            pcap_set_timeout(pcapHandle_, 10);
-            pcap_set_buffer_size(pcapHandle_, 16 * 1024 * 1024);
+            pcap_set_snaplen(h, 192);
+            pcap_set_promisc(h, 1);
+            pcap_set_timeout(h, 10);
+            pcap_set_buffer_size(h, 16 * 1024 * 1024);
 
-            if (pcap_activate(pcapHandle_) < 0)
+            if (pcap_activate(h) < 0)
             {
                 std::cerr << "ntm-client: pcap_activate failed for " << iface_
-                          << ": " << pcap_geterr(pcapHandle_) << "\n";
-                pcap_close(pcapHandle_);
-                pcapHandle_ = nullptr;
+                          << ": " << pcap_geterr(h) << "\n";
+                pcap_close(h);
                 return;
             }
 
-            linkType_ = pcap_datalink(pcapHandle_);
+            linkType_ = pcap_datalink(h);
 
             struct bpf_program fp{};
-            if (pcap_compile(pcapHandle_, &fp, "ip or ip6", 1, PCAP_NETMASK_UNKNOWN) == 0)
+            if (pcap_compile(h, &fp, "ip or ip6", 1, PCAP_NETMASK_UNKNOWN) == 0)
             {
-                pcap_setfilter(pcapHandle_, &fp);
+                pcap_setfilter(h, &fp);
                 pcap_freecode(&fp);
+            }
+
+            {
+                std::lock_guard<std::mutex> lk(pcapMutex_);
+                pcapHandle_ = h;
             }
 
             std::int64_t lastStatsSec = 0;
             std::uint32_t prevRecv = 0, prevDrop = 0;
             while (running_.load())
             {
-                int ret = pcap_dispatch(pcapHandle_, -1, &PacketSniffer::pcapCallback,
+                int ret = pcap_dispatch(h, -1, &PacketSniffer::pcapCallback,
                                         reinterpret_cast<u_char *>(this));
                 if (ret == -1) break;
 
@@ -493,7 +513,7 @@ private:
                 {
                     lastStatsSec = nowSec;
                     struct pcap_stat ps{};
-                    if (pcap_stats(pcapHandle_, &ps) == 0)
+                    if (pcap_stats(h, &ps) == 0)
                     {
                         connection_.addPcapStats(
                             static_cast<std::uint32_t>(ps.ps_recv - prevRecv),
@@ -503,19 +523,20 @@ private:
                     }
                 }
             }
-            pcap_close(pcapHandle_);
-            pcapHandle_ = nullptr;
         }
         catch (const std::exception &e)
         {
             std::cerr << "ntm-client: PacketSniffer exception: " << e.what() << "\n";
-            if (pcapHandle_) { pcap_close(pcapHandle_); pcapHandle_ = nullptr; }
         }
         catch (...)
         {
             std::cerr << "ntm-client: PacketSniffer unknown exception\n";
-            if (pcapHandle_) { pcap_close(pcapHandle_); pcapHandle_ = nullptr; }
         }
+        {
+            std::lock_guard<std::mutex> lk(pcapMutex_);
+            pcapHandle_ = nullptr;
+        }
+        if (h) pcap_close(h);
     }
 
     std::string       iface_;   // pcap device name (passed to pcap_create)
@@ -523,7 +544,8 @@ private:
     ClientConnection &connection_;
     std::atomic<bool> running_{false};
     std::thread       worker_;
-    pcap_t           *pcapHandle_{nullptr};
+    std::mutex        pcapMutex_;              // guards pcapHandle_
+    pcap_t           *pcapHandle_{nullptr};    // only touched under pcapMutex_
     int               linkType_{DLT_EN10MB};
 };
 
@@ -547,6 +569,19 @@ int runClient(bool daemonMode, const ClientConfig &config)
                     + ":" + std::to_string(config.port)
                     + " (identity=" + id + ", ca=" + ca + ", server-cert=" + sc + ")";
     platform::ntmLog(platform::LogLevel::Info, daemonMode, msg);
+
+    // Refuse to run without TLS. With neither a CA bundle nor a pinned server
+    // cert, the client would connect in cleartext and send its identity and all
+    // captured metadata unencrypted. The server mandates TLS so such a client
+    // can never succeed anyway; fail loudly instead of silently going plaintext.
+    if (config.tlsCaPath.empty() && config.tlsServerCertPath.empty())
+    {
+        platform::ntmLog(platform::LogLevel::Err, daemonMode,
+            "ntm-client: refusing to start without TLS — set 'ca' (CA bundle) "
+            "or 'server_cert' (pinned cert) in the config / --ca / --server-cert");
+        platform::cleanupPlatform();
+        return 1;
+    }
 
     ClientConnection connection(config.server, config.port,
                                 config.identityPath, config.tlsCaPath,

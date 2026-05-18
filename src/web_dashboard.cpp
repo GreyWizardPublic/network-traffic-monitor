@@ -32,8 +32,24 @@ public:
     {
         if (rpm_ == 0) return true;
         std::lock_guard<std::mutex> lk(mtx_);
-        auto &dq = map_[ip];
         const auto now = std::chrono::steady_clock::now();
+
+        // Periodic sweep: erase entries whose 60 s window has fully drained so
+        // the map cannot grow unboundedly with one entry per distinct source IP
+        // ever seen. O(n) every 256 calls — negligible for a LAN-only endpoint.
+        if (((++ops_) & 0xFFu) == 0)
+        {
+            for (auto it = map_.begin(); it != map_.end(); )
+            {
+                auto &q = it->second;
+                while (!q.empty() &&
+                       std::chrono::duration_cast<std::chrono::seconds>(now - q.front()).count() >= 60)
+                    q.pop_front();
+                it = q.empty() ? map_.erase(it) : std::next(it);
+            }
+        }
+
+        auto &dq = map_[ip];
         while (!dq.empty() &&
                std::chrono::duration_cast<std::chrono::seconds>(now - dq.front()).count() >= 60)
             dq.pop_front();
@@ -45,6 +61,7 @@ public:
 private:
     unsigned rpm_;
     std::mutex mtx_;
+    std::uint64_t ops_{0};
     std::unordered_map<std::string, std::deque<std::chrono::steady_clock::time_point>> map_;
 };
 

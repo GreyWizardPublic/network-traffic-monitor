@@ -86,6 +86,17 @@ SockFd connectToServer(const std::string &host, std::uint16_t port, std::string 
     int fd = ::socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) { errOut = "socket() failed"; std::perror("socket"); return kInvalidSock; }
 
+    // Bound connect(), the TLS handshake and the Ed25519 auth exchange so a
+    // dead or malicious server that accepts TCP but never replies cannot hang
+    // the client thread indefinitely (which would also block connectionMutex_).
+    // On Linux SO_SNDTIMEO bounds a blocking connect(); SO_RCVTIMEO bounds the
+    // subsequent handshake/auth reads.
+    {
+        struct timeval tv{ 30, 0 };
+        ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    }
+
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port   = htons(port);

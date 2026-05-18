@@ -1841,7 +1841,17 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
         {
             std::shared_ptr<std::atomic<bool>> doneFlag =
                 std::make_shared<std::atomic<bool>>(false);
-            std::thread t(connectionThread,
+            // Reserve the tracking slot BEFORE creating the thread. If we
+            // instead created a local std::thread and then threw while pushing
+            // it into the vector (e.g. bad_alloc on growth), the still-joinable
+            // local would be destroyed during unwinding and call std::terminate,
+            // taking the whole server down. emplace_back() only default-
+            // constructs (no thread); vector growth moves std::thread, which is
+            // noexcept, so no terminate path remains.
+            workers.emplace_back();
+            try
+            {
+                workers.back().t = std::thread(connectionThread,
                           clientFd,
                           peerAddr,
                           clientIpStr,
@@ -1855,7 +1865,15 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                           std::cref(config),
                           sslCtx,
                           doneFlag);
-            workers.push_back(WorkerEntry{std::move(t), std::move(doneFlag)});
+                workers.back().done = std::move(doneFlag);
+            }
+            catch (...)
+            {
+                // No thread was created in this slot; drop it and rethrow so
+                // the outer handler releases the fd / counters exactly once.
+                workers.pop_back();
+                throw;
+            }
         }
         catch (const std::exception &e)
         {
