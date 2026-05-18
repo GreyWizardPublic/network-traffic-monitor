@@ -352,6 +352,10 @@ public:
         static std::once_flag globalInit;
         std::call_once(globalInit, []() {
             curl_global_init(CURL_GLOBAL_DEFAULT);
+            // Pair the once-only init with a once-only cleanup at normal
+            // process exit. atexit handlers run after main() returns (workers
+            // already joined), so no curl_easy_* call can still be in flight.
+            std::atexit([] { curl_global_cleanup(); });
         });
     }
 

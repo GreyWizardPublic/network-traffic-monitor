@@ -33,6 +33,9 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace ntm
@@ -597,42 +600,92 @@ int runClient(bool daemonMode, const ClientConfig &config)
         return 1;
     }
 
-    pcap_if_t *alldevs = nullptr;
-    char errbuf[PCAP_ERRBUF_SIZE]{};
-    if (pcap_findalldevs(&alldevs, errbuf) != 0 || !alldevs)
+    // Enumerate capturable devices. Returns false only when pcap_findalldevs
+    // itself errors (hard failure at startup); an empty result is valid and
+    // simply means "nothing to capture yet" — a NIC appearing later will be
+    // picked up by the periodic re-scan below (O3).
+    auto enumerateDesired =
+        [](std::unordered_map<std::string, std::string> &out) -> bool
+    {
+        out.clear();
+        pcap_if_t *alldevs = nullptr;
+        char errbuf[PCAP_ERRBUF_SIZE]{};
+        if (pcap_findalldevs(&alldevs, errbuf) != 0)
+            return false;
+        for (pcap_if_t *d = alldevs; d; d = d->next)
+        {
+            if (!d->name) continue;
+            if (platform::isLoopbackIface(reinterpret_cast<platform::pcap_if *>(d))) continue;
+            if (!d->addresses) continue;
+            // Human-readable description as the wire label (e.g. "Intel Ethernet
+            // Connection" instead of "\Device\NPF_{GUID}" on Windows); fall back
+            // to the raw device name (typical on Linux). Spaces -> '-' so the
+            // label is safe for the space-delimited "D <iface> ..." protocol.
+            std::string label = (d->description && d->description[0])
+                                ? std::string(d->description)
+                                : std::string(d->name);
+            for (char &c : label) if (c == ' ') c = '-';
+            out.emplace(std::string(d->name), std::move(label));
+        }
+        if (alldevs) pcap_freealldevs(alldevs);
+        return true;
+    };
+
+    std::unordered_map<std::string, std::unique_ptr<PacketSniffer>> sniffers;
+
+    // Reconcile running sniffers with the desired device set: stop+drop sniffers
+    // whose device disappeared, start sniffers for newly appeared devices.
+    auto syncSniffers =
+        [&](const std::unordered_map<std::string, std::string> &desired)
+    {
+        for (auto it = sniffers.begin(); it != sniffers.end(); )
+        {
+            if (desired.find(it->first) == desired.end())
+            {
+                if (it->second) it->second->stop();
+                it = sniffers.erase(it);
+            }
+            else
+            {
+                ++it;
+            }
+        }
+        for (const auto &kv : desired)
+        {
+            if (sniffers.find(kv.first) != sniffers.end()) continue;
+            auto s = std::make_unique<PacketSniffer>(kv.first, kv.second, connection);
+            s->start();
+            sniffers.emplace(kv.first, std::move(s));
+        }
+    };
+
+    std::unordered_map<std::string, std::string> desired;
+    if (!enumerateDesired(desired))
     {
         platform::ntmLog(platform::LogLevel::Err, daemonMode,
-                         std::string("ntm-client: pcap_findalldevs failed: ")
-                         + (errbuf[0] ? errbuf : "no devices"));
+                         "ntm-client: pcap_findalldevs failed");
         platform::cleanupPlatform();
         return 1;
     }
+    syncSniffers(desired);
 
-    std::vector<std::unique_ptr<PacketSniffer>> sniffers;
-    for (pcap_if_t *d = alldevs; d; d = d->next)
-    {
-        if (!d->name) continue;
-        if (platform::isLoopbackIface(reinterpret_cast<platform::pcap_if *>(d))) continue;
-        if (!d->addresses) continue;
-        // Use the human-readable description as the display label (e.g. "Intel Ethernet
-        // Connection" instead of "\Device\NPF_{GUID}" on Windows). Fall back to the
-        // raw device name when no description is available (typical on Linux).
-        // Replace spaces with '-' so the label is safe for the whitespace-delimited
-        // wire protocol: "D <iface> <src> <dst> <bytes>\n".
-        std::string label = (d->description && d->description[0])
-                            ? std::string(d->description)
-                            : std::string(d->name);
-        for (char &c : label) if (c == ' ') c = '-';
-        auto sniffer = std::make_unique<PacketSniffer>(std::string(d->name), std::move(label), connection);
-        sniffer->start();
-        sniffers.push_back(std::move(sniffer));
-    }
-    pcap_freealldevs(alldevs);
-
+    // Re-scan periodically so NICs that appear or disappear after startup
+    // (VPN up/down, USB adapter, Wi-Fi toggle) are captured/released without
+    // restarting the client.
+    int sinceScanSec = 0;
     while (g_running.load())
+    {
         std::this_thread::sleep_for(std::chrono::seconds(1));
+        if (!g_running.load()) break;
+        if (++sinceScanSec < 30) continue;
+        sinceScanSec = 0;
+        std::unordered_map<std::string, std::string> d2;
+        if (enumerateDesired(d2))   // ignore transient enumeration failures
+            syncSniffers(d2);
+    }
 
-    for (auto &s : sniffers) if (s) s->stop();
+    for (auto &kv : sniffers) if (kv.second) kv.second->stop();
+    sniffers.clear();
     connection.close();
     platform::cleanupPlatform();
     return 0;

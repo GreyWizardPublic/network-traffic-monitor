@@ -525,7 +525,7 @@ function fmtB(b){
 }
 function fmtT(ep){return ep?new Date(ep*1000).toLocaleString():'—';}
 function esc(s){
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 function row(cells){return'<tr>'+cells.map(c=>'<td>'+esc(c)+'</td>').join('')+'</tr>';}
 function showTab(name){
@@ -690,7 +690,7 @@ function fmtB(b){
   return(b/1073741824).toFixed(2)+'G';
 }
 function esc(s){
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 let selectedClient=null;
 
@@ -832,7 +832,14 @@ void webServerThread(httplib::SSLServer &svr,
             {
                 auto auth = req.get_header_value("Authorization");
                 const std::string expected = "Bearer " + config.token;
-                if (auth != expected)
+                // Constant-time compare (same approach as the admin password
+                // check) so the bearer token can't be recovered byte-by-byte
+                // via response-timing on equal-length guesses.
+                const bool authOk =
+                    (auth.size() == expected.size()) &&
+                    (CRYPTO_memcmp(auth.data(), expected.data(),
+                                   expected.size()) == 0);
+                if (!authOk)
                 {
                     res.status = 401;
                     res.set_header("WWW-Authenticate", "Bearer realm=\"ntm\"");
