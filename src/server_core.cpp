@@ -4,6 +4,7 @@
 
 #include "proto_client_server.hpp"
 #include "ntm_types.hpp"
+#include "version.hpp"
 #include "web_dashboard.hpp"
 // httplib.h comes transitively via web_dashboard.hpp
 
@@ -1173,6 +1174,7 @@ void connectionThread(int clientFd,
                         if (eq == std::string::npos) continue;
                         std::string k = tok.substr(0, eq);
                         std::string v = tok.substr(eq + 1);
+                        if (k == "ver") { hs.version = v; continue; }
                         char *endp = nullptr;
                         auto n = std::strtoull(v.c_str(), &endp, 10);
                         if (endp == v.c_str()) continue;

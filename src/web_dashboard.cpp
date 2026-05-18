@@ -3,6 +3,7 @@
 // The only dependency on server internals is TrafficStats::snapshot() via ntm_types.hpp.
 
 #include "web_dashboard.hpp"
+#include "version.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -187,6 +188,9 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
     j += std::to_string(windowEpoch);
     j += ",\n  \"generated_at\": ";
     j += std::to_string(nowEpoch);
+    j += ",\n  \"server_version\": \"";
+    j += kNtmVersion;
+    j += "\"";
 
     // Interfaces — unchanged
     j += ",\n  \"interfaces\": [";
@@ -396,6 +400,8 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
             if (!first) j += ',';
             j += "\n    {\"client\":\"";
             j += jsonEsc(displayClient(snap.clientId));
+            j += "\",\"version\":\"";
+            j += jsonEsc(hs.version.empty() ? "?" : hs.version);
             j += "\",\"pcap_recv\":";
             j += std::to_string(hs.pcapRecv);
             j += ",\"pcap_drop\":";
@@ -460,6 +466,7 @@ tr:hover td{background:#171726}
 </div>
 <div id="status"><span id="dot" class="dot ok"></span><span id="smsg">Loading&#8230;</span></div>
 <div class="meta">
+  Server: <span id="sver">&#8212;</span> &nbsp;|&nbsp;
   Window start: <span id="win">&#8212;</span> &nbsp;|&nbsp;
   Updated: <span id="gen">&#8212;</span> &nbsp;|&nbsp;
   Auto-refresh: 30 s
@@ -487,7 +494,7 @@ tr:hover td{background:#171726}
 </div>
 
 <div class="section">Client Health</div>
-<table><thead><tr><th>Client</th><th>pcap recv</th><th>kernel drop</th><th>buf drop</th><th>last report</th></tr></thead>
+<table><thead><tr><th>Client</th><th>Version</th><th>pcap recv</th><th>kernel drop</th><th>buf drop</th><th>last report</th></tr></thead>
 <tbody id="health_body"></tbody></table>
 <div class="note" id="health_note"></div>
 
@@ -515,6 +522,8 @@ async function refresh(){
     const r=await fetch('/api/summary',{cache:'no-store'});
     if(!r.ok)throw new Error('HTTP '+r.status);
     const d=await r.json();
+    const sv=d.server_version||'?';
+    document.getElementById('sver').textContent='v'+sv;
     document.getElementById('win').textContent=fmtT(d.window_start);
     document.getElementById('gen').textContent=fmtT(d.generated_at);
     const ifaces=d.interfaces||[];
@@ -544,13 +553,16 @@ async function refresh(){
         const bd=parseFloat(x.buf_drop_pct);
         const pdC=pd>1?'#c44':pd>0.1?'#c84':'#4c4';
         const bdC=bd>1?'#c44':bd>0.1?'#c84':'#4c4';
+        const verMatch=x.version===sv;
+        const verC=verMatch?'#4c4':'#c84';
+        const verTip=verMatch?'':'title="Server is v'+esc(sv)+'"';
         const st=x.stale?' <span style="color:#666">(stale)</span>':'';
-        return'<tr><td>'+esc(x.client)+st+'</td><td>'+
+        return'<tr><td>'+esc(x.client)+st+'</td><td style="color:'+verC+'" '+verTip+'>'+esc(x.version)+'</td><td>'+
           x.pcap_recv.toLocaleString()+'</td><td style="color:'+pdC+'">'+
           x.pcap_drop.toLocaleString()+' ('+x.pcap_drop_pct+'%)</td><td style="color:'+bdC+'">'+
           x.buf_drop.toLocaleString()+' ('+x.buf_drop_pct+'%)</td><td>'+
           fmtT(x.reported_at)+'</td></tr>';
-      }).join(''):'<tr><td colspan="5" style="color:#555">No health data yet</td></tr>';
+      }).join(''):'<tr><td colspan="6" style="color:#555">No health data yet</td></tr>';
     setS(true,'OK — '+new Date().toLocaleTimeString());
   }catch(e){setS(false,'Error: '+e.message);}
 }

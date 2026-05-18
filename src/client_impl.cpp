@@ -2,6 +2,7 @@
 #include "client_core.hpp"
 #include "client_platform.hpp"
 #include "proto_client_server.hpp"
+#include "version.hpp"
 
 #include <openssl/evp.h>
 #include <openssl/err.h>
@@ -235,6 +236,7 @@ private:
                         + "pcap_recv=" + std::to_string(totalPcapRecv_.load(std::memory_order_relaxed))
                         + " pcap_drop=" + std::to_string(totalPcapDrop_.load(std::memory_order_relaxed))
                         + " buf_drop="  + std::to_string(sendBufDrops_.load(std::memory_order_relaxed))
+                        + " ver=" + kNtmVersion
                         + "\n";
                     if (!platform::writeExact(ssl_, fd_, hLine.data(), hLine.size()))
                         closeUnlocked();
