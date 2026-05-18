@@ -52,15 +52,27 @@ inline bool isLanIP(const std::string &ip)
     return false;
 }
 
-// Shared registry: maps a client's LAN IP to its Ed25519 hex client ID, and tracks
-// each client's external (WAN) IP for LAN-group scoping of unknown LAN devices.
-// Written by connectionThread on auth and on X/A announce lines; read via local
-// snapshots in the data-processing hot path.
+// Per-client health stats reported via the H protocol line.
+// Session-scoped: values are cumulative since the current connection was established.
+// The server stores only the latest H line per client (replace, never accumulate).
+struct ClientHealthStats
+{
+    std::uint64_t pcapRecv{0};      // packets delivered to the capture callback (ps_recv)
+    std::uint64_t pcapDrop{0};      // packets dropped by kernel ring-buffer (ps_drop)
+    std::uint64_t bufDrop{0};       // packets the client received but couldn't queue to server
+    std::int64_t  reportedAtSec{-1}; // epoch-seconds when the last H line was received
+};
+
+// Shared registry: maps a client's LAN IP to its Ed25519 hex client ID, tracks each
+// client's external (WAN) IP for LAN-group scoping, and stores the latest health stats.
+// Written by connectionThread on auth and on X/A/H lines; read via local snapshots in
+// the data-processing hot path and via mutex-protected snapshot in the web thread.
 struct ClientRegistry
 {
     mutable std::mutex mtx;
-    std::unordered_map<std::string, std::string> ipToClientId;      // LAN IP → hex clientId
-    std::unordered_map<std::string, std::string> clientToExternalIp; // hex clientId → external IP or "null"
+    std::unordered_map<std::string, std::string>       ipToClientId;       // LAN IP → hex clientId
+    std::unordered_map<std::string, std::string>       clientToExternalIp; // hex clientId → external IP or "null"
+    std::unordered_map<std::string, ClientHealthStats> clientHealth;        // hex clientId → latest H stats
 
     // Remove all entries for clientId (called on session end and on X-line re-announce).
     void removeClient(const std::string &clientId)
@@ -70,6 +82,7 @@ struct ClientRegistry
         for (auto it = ipToClientId.begin(); it != ipToClientId.end(); )
             it = (it->second == clientId) ? ipToClientId.erase(it) : std::next(it);
         clientToExternalIp.erase(clientId);
+        clientHealth.erase(clientId);
     }
 };
 

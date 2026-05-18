@@ -14,6 +14,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <unordered_map>
 
@@ -36,6 +37,9 @@ struct WebConfig
     // Admin purge password loaded from admin_password_file at startup.
     // Empty string = admin endpoints disabled (silently return 404).
     std::string admin_password;
+    // Shared registry for per-client health stats (pcap / send-buffer drop counters).
+    // Null = health section omitted from the API response.
+    std::shared_ptr<ClientRegistry> registry;
 };
 
 // Thread function: registers HTTP routes on svr, then blocks in svr.listen().

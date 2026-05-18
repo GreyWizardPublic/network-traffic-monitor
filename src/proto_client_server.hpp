@@ -46,10 +46,13 @@ inline constexpr std::size_t kAuthSignPrefixV2Len = sizeof(kAuthSignPrefixV2) - 
 //
 // Clients re-send X + A lines on any network change and every 6 hours.
 // Fields are separated by single spaces, no spaces inside fields.
-inline constexpr char kExtIPLinePrefix[] = "X ";
-inline constexpr char kExtIPNull[]       = "null";   // sentinel: external IP unreachable
-inline constexpr char kDataLinePrefix[]  = "D ";
-inline constexpr char kAddrLinePrefix[]  = "A ";
+inline constexpr char kExtIPLinePrefix[]    = "X ";
+inline constexpr char kExtIPNull[]         = "null";   // sentinel: external IP unreachable
+inline constexpr char kDataLinePrefix[]    = "D ";
+inline constexpr char kAddrLinePrefix[]    = "A ";
+// "H pcap_recv=N pcap_drop=N buf_drop=N\n" — cumulative health stats for the current session.
+// Sent by the client every 30 s. Server stores the latest values per client; no accumulation.
+inline constexpr char kHealthLinePrefix[]  = "H ";
 
 // Maximum address-announce lines the server will accept per announce round.
 inline constexpr std::size_t kMaxAnnounceAddressesPerSession = 64;

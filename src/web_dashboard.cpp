@@ -120,7 +120,8 @@ static std::string jsonGetString(const std::string &json, const std::string &key
 // ---------------------------------------------------------------------------
 
 static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLines,
-                                    const std::unordered_map<std::string, std::string> &nicknames)
+                                    const std::unordered_map<std::string, std::string> &nicknames,
+                                    const std::shared_ptr<ClientRegistry> &registry)
 {
     TrafficStats::InterfaceTotals totals;
     TrafficStats::InterfaceFlows flows;
@@ -358,6 +359,62 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
     j += "\n  ]";
     j += ",\n  \"truncated_lan\": ";
     j += truncatedLan ? "true" : "false";
+
+    // Emit client health stats (snapshotted from shared registry under mutex).
+    j += ",\n  \"client_health\": [";
+    first = true;
+    if (registry)
+    {
+        struct HealthSnap { std::string clientId; ClientHealthStats hs; };
+        std::vector<HealthSnap> healthSnaps;
+        {
+            std::lock_guard<std::mutex> lk(registry->mtx);
+            for (const auto &kv : registry->clientHealth)
+                healthSnaps.push_back({kv.first, kv.second});
+        }
+        const auto nowSec = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+
+        // Format percentage as "N.NN" without floating point or snprintf.
+        auto fmtPct = [](std::uint64_t num, std::uint64_t denom) -> std::string {
+            if (denom == 0) return "0.00";
+            std::uint64_t pct100 = (num * 10000ULL) / denom;
+            std::string s = std::to_string(pct100 / 100);
+            s += '.';
+            std::uint64_t frac = pct100 % 100;
+            if (frac < 10) s += '0';
+            s += std::to_string(frac);
+            return s;
+        };
+
+        for (const auto &snap : healthSnaps)
+        {
+            const auto &hs = snap.hs;
+            const std::uint64_t pcapTotal = hs.pcapRecv + hs.pcapDrop;
+            const bool stale = (hs.reportedAtSec >= 0) &&
+                               ((nowSec - hs.reportedAtSec) > 90);
+            if (!first) j += ',';
+            j += "\n    {\"client\":\"";
+            j += jsonEsc(displayClient(snap.clientId));
+            j += "\",\"pcap_recv\":";
+            j += std::to_string(hs.pcapRecv);
+            j += ",\"pcap_drop\":";
+            j += std::to_string(hs.pcapDrop);
+            j += ",\"pcap_drop_pct\":\"";
+            j += fmtPct(hs.pcapDrop, pcapTotal);
+            j += "\",\"buf_drop\":";
+            j += std::to_string(hs.bufDrop);
+            j += ",\"buf_drop_pct\":\"";
+            j += fmtPct(hs.bufDrop, hs.pcapRecv);
+            j += "\",\"reported_at\":";
+            j += std::to_string(hs.reportedAtSec);
+            j += ",\"stale\":";
+            j += stale ? "true" : "false";
+            j += '}';
+            first = false;
+        }
+    }
+    j += "\n  ]";
     j += "\n}\n";
     return j;
 }
@@ -429,6 +486,11 @@ tr:hover td{background:#171726}
   <div class="note" id="lan_note"></div>
 </div>
 
+<div class="section">Client Health</div>
+<table><thead><tr><th>Client</th><th>pcap recv</th><th>kernel drop</th><th>buf drop</th><th>last report</th></tr></thead>
+<tbody id="health_body"></tbody></table>
+<div class="note" id="health_note"></div>
+
 <script>
 const POLL_MS=30000;
 function fmtB(b){
@@ -475,6 +537,20 @@ async function refresh(){
       :'<tr><td colspan="6" style="color:#555">No unidentified LAN devices detected</td></tr>';
     document.getElementById('lan_note').textContent=
       d.truncated_lan?'Results truncated to server limit.':'';
+    const health=d.client_health||[];
+    document.getElementById('health_body').innerHTML=
+      health.length?health.map(function(x){
+        const pd=parseFloat(x.pcap_drop_pct);
+        const bd=parseFloat(x.buf_drop_pct);
+        const pdC=pd>1?'#c44':pd>0.1?'#c84':'#4c4';
+        const bdC=bd>1?'#c44':bd>0.1?'#c84':'#4c4';
+        const st=x.stale?' <span style="color:#666">(stale)</span>':'';
+        return'<tr><td>'+esc(x.client)+st+'</td><td>'+
+          x.pcap_recv.toLocaleString()+'</td><td style="color:'+pdC+'">'+
+          x.pcap_drop.toLocaleString()+' ('+x.pcap_drop_pct+'%)</td><td style="color:'+bdC+'">'+
+          x.buf_drop.toLocaleString()+' ('+x.buf_drop_pct+'%)</td><td>'+
+          fmtT(x.reported_at)+'</td></tr>';
+      }).join(''):'<tr><td colspan="5" style="color:#555">No health data yet</td></tr>';
     setS(true,'OK — '+new Date().toLocaleTimeString());
   }catch(e){setS(false,'Error: '+e.message);}
 }
@@ -764,7 +840,7 @@ void webServerThread(httplib::SSLServer &svr,
         [&stats, &config](const httplib::Request &, httplib::Response &res) {
             res.set_header("Cache-Control", "no-store");
             res.set_content(buildSummaryJson(stats, config.max_entity_lines,
-                                             config.client_nicknames),
+                                             config.client_nicknames, config.registry),
                             "application/json");
         });
 

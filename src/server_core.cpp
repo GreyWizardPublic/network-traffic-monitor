@@ -1156,6 +1156,34 @@ void connectionThread(int clientFd,
                     }
                 }
             }
+            else if (line.rfind(kHealthLinePrefix, 0) == 0)
+            {
+                // Health report: "H pcap_recv=N pcap_drop=N buf_drop=N" — store latest per client.
+                if (registry)
+                {
+                    ClientHealthStats hs;
+                    hs.reportedAtSec = std::chrono::duration_cast<std::chrono::seconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count();
+                    std::string payload = line.substr(2);
+                    std::istringstream hiss(payload);
+                    std::string tok;
+                    while (hiss >> tok)
+                    {
+                        auto eq = tok.find('=');
+                        if (eq == std::string::npos) continue;
+                        std::string k = tok.substr(0, eq);
+                        std::string v = tok.substr(eq + 1);
+                        char *endp = nullptr;
+                        auto n = std::strtoull(v.c_str(), &endp, 10);
+                        if (endp == v.c_str()) continue;
+                        if      (k == "pcap_recv") hs.pcapRecv = static_cast<std::uint64_t>(n);
+                        else if (k == "pcap_drop") hs.pcapDrop = static_cast<std::uint64_t>(n);
+                        else if (k == "buf_drop")  hs.bufDrop  = static_cast<std::uint64_t>(n);
+                    }
+                    std::lock_guard<std::mutex> lk(registry->mtx);
+                    registry->clientHealth[clientId] = hs;
+                }
+            }
         }
         if (pos > 0)
             buffer.erase(0, pos);
@@ -1654,6 +1682,7 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                     webCfg.max_entity_lines = config.max_entity_lines_in_summary;
                     webCfg.client_nicknames = clientNicknames;
                     webCfg.admin_password   = adminPassword;
+                    webCfg.registry         = clientRegistry;
 
                     webThread = std::thread(webServerThread,
                                             std::ref(*webSvr),

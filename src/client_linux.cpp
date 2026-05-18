@@ -812,12 +812,23 @@ public:
             if (contentEnd_ > sendBuffer_.size())
                 return;
             if (lineLen > sendBuffer_.size() - contentEnd_)
-                return; // drop packet; buffer full
+            {
+                sendBufDrops_.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
             std::memcpy(sendBuffer_.data() + contentEnd_, buf, lineLen);
             contentEnd_ += lineLen;
             if (contentEnd_ >= kSendBatchSize)
                 queueCv_.notify_one();
         }
+    }
+
+    // Called by PacketSniffer threads to accumulate kernel-level pcap drop stats.
+    // Thread-safe: uses relaxed atomics.
+    void addPcapStats(std::uint32_t recv, std::uint32_t drop)
+    {
+        totalPcapRecv_.fetch_add(recv, std::memory_order_relaxed);
+        totalPcapDrop_.fetch_add(drop, std::memory_order_relaxed);
     }
 
 private:
@@ -840,7 +851,11 @@ private:
     std::string tlsServerCertPath_;
     std::string externalIpUrl_;
     unsigned externalIpTimeoutMs_{5000};
-    std::int64_t lastReannounceTime_{0};  // epoch-seconds of last successful sendAnnounce()
+    std::int64_t lastReannounceTime_{0};      // protected by connectionMutex_
+    std::atomic<std::int64_t>  lastHealthReportSec_{0}; // readable without connectionMutex_ for early-exit check
+    std::atomic<std::uint64_t> totalPcapRecv_{0};
+    std::atomic<std::uint64_t> totalPcapDrop_{0};
+    std::atomic<std::uint64_t> sendBufDrops_{0};
     mutable std::string lastError_;
 
     NetworkMonitor netMonitor_;
@@ -905,7 +920,11 @@ private:
 
                 // Check network change flag (cheap atomic, no lock needed here).
                 const bool netChanged = netMonitor_.checkAndClear();
-                if (toSend == 0 && !netChanged)
+                const auto nowEpochSec = std::chrono::duration_cast<std::chrono::seconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count();
+                const bool healthDue =
+                    (nowEpochSec - lastHealthReportSec_.load(std::memory_order_relaxed)) >= 30;
+                if (toSend == 0 && !netChanged && !healthDue)
                     continue;
 
                 // toSend <= sendBuffer_.size() <= kMaxIOBytes, so single writeExact is valid
@@ -919,14 +938,25 @@ private:
                 // Re-announce on network change (30-second client-side cooldown).
                 if (fd_ >= 0 && netChanged)
                 {
-                    auto nowSec = std::chrono::duration_cast<std::chrono::seconds>(
-                        std::chrono::steady_clock::now().time_since_epoch()).count();
-                    if (nowSec - lastReannounceTime_ >= 30)
+                    if (nowEpochSec - lastReannounceTime_ >= 30)
                     {
-                        lastReannounceTime_ = nowSec;
+                        lastReannounceTime_ = nowEpochSec;
                         if (!sendAnnounce(ssl_, fd_))
                             closeUnlocked();
                     }
+                }
+
+                if (fd_ >= 0 && healthDue)
+                {
+                    lastHealthReportSec_.store(nowEpochSec, std::memory_order_relaxed);
+                    const std::uint64_t recv = totalPcapRecv_.load(std::memory_order_relaxed);
+                    const std::uint64_t drop = totalPcapDrop_.load(std::memory_order_relaxed);
+                    const std::uint64_t bufd = sendBufDrops_.load(std::memory_order_relaxed);
+                    std::string hLine = std::string(kHealthLinePrefix)
+                        + "pcap_recv=" + std::to_string(recv)
+                        + " pcap_drop=" + std::to_string(drop)
+                        + " buf_drop=" + std::to_string(bufd) + "\n";
+                    if (!writeExact(ssl_, fd_, hLine.data(), hLine.size())) closeUnlocked();
                 }
 
                 if (fd_ >= 0)
@@ -1315,15 +1345,29 @@ private:
             pcap_freecode(&fp);
         }
 
+        std::int64_t lastPcapStatsSec = 0;
+        std::uint32_t prevPcapRecv = 0, prevPcapDrop = 0;
         while (running_.load())
         {
-            int ret = pcap_dispatch(pcapHandle_, 16, &PacketSniffer::pcapCallback,
+            int ret = pcap_dispatch(pcapHandle_, -1, &PacketSniffer::pcapCallback,
                                     reinterpret_cast<u_char *>(this));
             if (ret == -1)
+                break;
+            const auto nowSec = std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            if (nowSec - lastPcapStatsSec >= 30)
             {
-                break; // error
+                lastPcapStatsSec = nowSec;
+                struct pcap_stat ps{};
+                if (pcap_stats(pcapHandle_, &ps) == 0)
+                {
+                    const auto deltaRecv = static_cast<std::uint32_t>(ps.ps_recv - prevPcapRecv);
+                    const auto deltaDrop = static_cast<std::uint32_t>(ps.ps_drop - prevPcapDrop);
+                    prevPcapRecv = ps.ps_recv;
+                    prevPcapDrop = ps.ps_drop;
+                    connection_.addPcapStats(deltaRecv, deltaDrop);
+                }
             }
-            // ret == 0 means timeout; loop again.
         }
 
         pcap_close(pcapHandle_);
