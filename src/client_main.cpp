@@ -1,9 +1,13 @@
 #include "client.hpp"
+#include "client_platform.hpp"
 
 #include <iostream>
 #include <stdexcept>
 #include <string>
-#include <syslog.h>
+
+#ifndef _WIN32
+#  include <syslog.h>
+#endif
 
 int main(int argc, char *argv[])
 {
@@ -85,55 +89,35 @@ int main(int argc, char *argv[])
     const char *id = identityPath.empty() ? "(none)" : identityPath.c_str();
     const char *ca = tlsCaPath.empty() ? "(none)" : tlsCaPath.c_str();
     const char *sc = tlsServerCertPath.empty() ? "(none)" : tlsServerCertPath.c_str();
+#ifndef _WIN32
     if (daemonMode)
         openlog("ntm-client", LOG_PID, LOG_DAEMON);
+#endif
 
     if (loadedConfig)
     {
         const char *cid = opts.identityPath.empty() ? "(none)" : opts.identityPath.c_str();
         const char *cca = opts.tlsCaPath.empty() ? "(none)" : opts.tlsCaPath.c_str();
         const char *csc = opts.tlsServerCertPath.empty() ? "(none)" : opts.tlsServerCertPath.c_str();
-        if (daemonMode)
-        {
-            syslog(LOG_INFO,
-                   "loaded config from %s (server=%s, port=%u, identity=%s, ca=%s, server-cert=%s, send_buffer_bytes=%zu)",
-                   loadedConfigPath.c_str(), opts.server.c_str(),
-                   static_cast<unsigned>(opts.port), cid, cca, csc, opts.sendBufferBytes);
-        }
-        else
-        {
-            std::cerr << "ntm-client: loaded config from " << loadedConfigPath
-                      << " (server=" << opts.server
-                      << ", port=" << opts.port
-                      << ", identity=" << cid
-                      << ", ca=" << cca
-                      << ", server-cert=" << csc
-                      << ", send_buffer_bytes=" << opts.sendBufferBytes
-                      << ")\n";
-        }
+        char buf[512];
+        std::snprintf(buf, sizeof(buf),
+            "ntm-client: loaded config from %s (server=%s, port=%u, identity=%s, ca=%s, server-cert=%s, send_buffer_bytes=%zu)",
+            loadedConfigPath.c_str(), opts.server.c_str(),
+            static_cast<unsigned>(opts.port), cid, cca, csc, opts.sendBufferBytes);
+        ntm::platform::ntmLog(ntm::platform::LogLevel::Info, daemonMode, buf);
     }
     else
     {
-        if (daemonMode)
-            syslog(LOG_INFO, "no config file loaded; using built-in defaults/CLI only");
-        else
-            std::cerr << "ntm-client: no config file loaded; using built-in defaults/CLI only\n";
+        ntm::platform::ntmLog(ntm::platform::LogLevel::Info, daemonMode,
+            "ntm-client: no config file loaded; using built-in defaults/CLI only");
     }
 
-    if (daemonMode)
     {
-        syslog(LOG_INFO,
-               "effective settings after CLI override (server=%s, port=%u, identity=%s, ca=%s, server-cert=%s)",
-               host.c_str(), static_cast<unsigned>(port), id, ca, sc);
-    }
-    else
-    {
-        std::cerr << "ntm-client: effective settings after CLI override (server=" << host
-                  << ", port=" << port
-                  << ", identity=" << id
-                  << ", ca=" << ca
-                  << ", server-cert=" << sc
-                  << ")\n";
+        char buf[512];
+        std::snprintf(buf, sizeof(buf),
+            "ntm-client: effective settings (server=%s, port=%u, identity=%s, ca=%s, server-cert=%s)",
+            host.c_str(), static_cast<unsigned>(port), id, ca, sc);
+        ntm::platform::ntmLog(ntm::platform::LogLevel::Info, daemonMode, buf);
     }
 
     // Copy CLI overrides back into opts so runClient sees the merged final config.

@@ -1,31 +1,25 @@
-#if !defined(__linux__)
-#error "client_linux.cpp is only for Linux builds"
+#ifndef _WIN32
+#error "client_windows.cpp is only for Windows builds"
 #endif
 
 #include "client_platform.hpp"
 #include "client_core.hpp"
 
-#include <pcap/pcap.h>
+#ifndef WIN32_LEAN_AND_MEAN
+#  define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <iphlpapi.h>
+#include <windows.h>
 
-#include <arpa/inet.h>
-#include <ifaddrs.h>
-#include <linux/netlink.h>
-#include <linux/rtnetlink.h>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <poll.h>
-#include <sys/socket.h>
-#include <sys/stat.h>
-#include <syslog.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <csignal>
+// Npcap / WinPcap forward type (pcap_if_t defined in pcap.h, included only in client_impl)
+#include <pcap/pcap.h>
 
 #include <openssl/ssl.h>
 
 #include <atomic>
 #include <chrono>
-#include <cerrno>
 #include <climits>
 #include <cstdint>
 #include <cstdio>
@@ -35,6 +29,9 @@
 #include <string>
 #include <thread>
 #include <unordered_set>
+
+#pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "iphlpapi.lib")
 
 namespace ntm::platform
 {
@@ -52,7 +49,7 @@ bool readExact(SSL *ssl, SockFd fd, void *buf, std::size_t n)
         int chunk = static_cast<int>(n < static_cast<std::size_t>(INT_MAX) ? n
                                                                             : static_cast<std::size_t>(INT_MAX));
         int r = ssl ? SSL_read(ssl, p, chunk)
-                    : static_cast<int>(::recv(fd, p, static_cast<std::size_t>(chunk), 0));
+                    : ::recv(fd, reinterpret_cast<char *>(p), chunk, 0);
         if (r <= 0) return false;
         p += static_cast<std::size_t>(r);
         n -= static_cast<std::size_t>(r);
@@ -69,7 +66,7 @@ bool writeExact(SSL *ssl, SockFd fd, const void *buf, std::size_t n)
         int chunk = static_cast<int>(n < static_cast<std::size_t>(INT_MAX) ? n
                                                                             : static_cast<std::size_t>(INT_MAX));
         int r = ssl ? SSL_write(ssl, p, chunk)
-                    : static_cast<int>(::send(fd, p, static_cast<std::size_t>(chunk), MSG_NOSIGNAL));
+                    : ::send(fd, reinterpret_cast<const char *>(p), chunk, 0);
         if (r <= 0) return false;
         p += static_cast<std::size_t>(r);
         n -= static_cast<std::size_t>(r);
@@ -83,32 +80,35 @@ bool writeExact(SSL *ssl, SockFd fd, const void *buf, std::size_t n)
 
 SockFd connectToServer(const std::string &host, std::uint16_t port, std::string &errOut)
 {
-    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) { errOut = "socket() failed"; std::perror("socket"); return kInvalidSock; }
+    SOCKET fd = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (fd == INVALID_SOCKET)
+    {
+        errOut = "socket() failed (WSA " + std::to_string(WSAGetLastError()) + ")";
+        return INVALID_SOCKET;
+    }
 
-    sockaddr_in addr{};
+    struct sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port   = htons(port);
     if (::inet_pton(AF_INET, host.c_str(), &addr.sin_addr) != 1)
     {
         errOut = "invalid server host: " + host;
-        ::close(fd);
-        return kInvalidSock;
+        ::closesocket(fd);
+        return INVALID_SOCKET;
     }
-    if (::connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0)
+    if (::connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) == SOCKET_ERROR)
     {
-        errOut = "connect() failed";
-        std::perror("connect");
-        ::close(fd);
-        return kInvalidSock;
+        errOut = "connect() failed (WSA " + std::to_string(WSAGetLastError()) + ")";
+        ::closesocket(fd);
+        return INVALID_SOCKET;
     }
     return fd;
 }
 
 void setSendBufferSize(SockFd fd, int bytes)
 {
-    if (::setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &bytes, sizeof(bytes)) < 0)
-        std::perror("setsockopt(SO_SNDBUF)");
+    ::setsockopt(fd, SOL_SOCKET, SO_SNDBUF,
+                 reinterpret_cast<const char *>(&bytes), sizeof(bytes));
 }
 
 // ---------------------------------------------------------------------------
@@ -118,33 +118,54 @@ void setSendBufferSize(SockFd fd, int bytes)
 std::unordered_set<std::string> collectLanAddresses()
 {
     std::unordered_set<std::string> result;
-    struct ifaddrs *ifap = nullptr;
-    if (::getifaddrs(&ifap) != 0) return result;
-    char buf[INET6_ADDRSTRLEN];
-    for (struct ifaddrs *ifa = ifap; ifa; ifa = ifa->ifa_next)
+
+    ULONG bufLen = 15000;
+    std::vector<std::uint8_t> buf(bufLen);
+    auto *addrs = reinterpret_cast<IP_ADAPTER_ADDRESSES *>(buf.data());
+
+    ULONG ret = GetAdaptersAddresses(AF_UNSPEC,
+                    GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST |
+                    GAA_FLAG_SKIP_DNS_SERVER,
+                    nullptr, addrs, &bufLen);
+    if (ret == ERROR_BUFFER_OVERFLOW)
     {
-        if (!ifa->ifa_addr) continue;
-        if (ifa->ifa_addr->sa_family == AF_INET)
+        buf.resize(bufLen);
+        addrs = reinterpret_cast<IP_ADAPTER_ADDRESSES *>(buf.data());
+        ret = GetAdaptersAddresses(AF_UNSPEC,
+                    GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST |
+                    GAA_FLAG_SKIP_DNS_SERVER,
+                    nullptr, addrs, &bufLen);
+    }
+    if (ret != NO_ERROR) return result;
+
+    char ipStr[INET6_ADDRSTRLEN];
+    for (auto *adapter = addrs; adapter; adapter = adapter->Next)
+    {
+        if (adapter->OperStatus != IfOperStatusUp) continue;
+        for (auto *ua = adapter->FirstUnicastAddress; ua; ua = ua->Next)
         {
-            auto *sa4 = reinterpret_cast<struct sockaddr_in *>(ifa->ifa_addr);
-            if (!isLanAddrV4(sa4->sin_addr.s_addr)) continue;
-            if (!::inet_ntop(AF_INET, &sa4->sin_addr, buf, sizeof(buf))) continue;
-            result.insert(buf);
-        }
-        else if (ifa->ifa_addr->sa_family == AF_INET6)
-        {
-            auto *sa6 = reinterpret_cast<struct sockaddr_in6 *>(ifa->ifa_addr);
-            if (!isLanAddrV6(sa6->sin6_addr.s6_addr)) continue;
-            if (!::inet_ntop(AF_INET6, &sa6->sin6_addr, buf, sizeof(buf))) continue;
-            result.insert(buf);
+            auto *sa = ua->Address.lpSockaddr;
+            if (sa->sa_family == AF_INET)
+            {
+                auto *sa4 = reinterpret_cast<struct sockaddr_in *>(sa);
+                if (!isLanAddrV4(sa4->sin_addr.s_addr)) continue;
+                if (::inet_ntop(AF_INET, &sa4->sin_addr, ipStr, sizeof(ipStr)))
+                    result.insert(ipStr);
+            }
+            else if (sa->sa_family == AF_INET6)
+            {
+                auto *sa6 = reinterpret_cast<struct sockaddr_in6 *>(sa);
+                if (!isLanAddrV6(sa6->sin6_addr.s6_addr)) continue;
+                if (::inet_ntop(AF_INET6, &sa6->sin6_addr, ipStr, sizeof(ipStr)))
+                    result.insert(ipStr);
+            }
         }
     }
-    ::freeifaddrs(ifap);
     return result;
 }
 
 // ---------------------------------------------------------------------------
-// External IP
+// External IP (Winsock2 port of the POSIX socket version)
 // ---------------------------------------------------------------------------
 
 std::string queryExternalIP(const std::string &url, unsigned timeoutMs)
@@ -157,7 +178,11 @@ std::string queryExternalIP(const std::string &url, unsigned timeoutMs)
 
     std::string host, portStr = "80";
     auto colonPos = hostPort.rfind(':');
-    if (colonPos != std::string::npos) { host = hostPort.substr(0, colonPos); portStr = hostPort.substr(colonPos + 1); }
+    if (colonPos != std::string::npos)
+    {
+        host    = hostPort.substr(0, colonPos);
+        portStr = hostPort.substr(colonPos + 1);
+    }
     else host = hostPort;
     if (host.empty()) return {};
 
@@ -167,43 +192,57 @@ std::string queryExternalIP(const std::string &url, unsigned timeoutMs)
     struct addrinfo *res = nullptr;
     if (::getaddrinfo(host.c_str(), portStr.c_str(), &hints, &res) != 0 || !res) return {};
 
-    int fd = ::socket(res->ai_family, SOCK_STREAM, 0);
-    if (fd < 0) { ::freeaddrinfo(res); return {}; }
+    SOCKET fd = ::socket(res->ai_family, SOCK_STREAM, IPPROTO_TCP);
+    if (fd == INVALID_SOCKET) { ::freeaddrinfo(res); return {}; }
 
-    int flags = ::fcntl(fd, F_GETFL, 0);
-    ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-    int cr = ::connect(fd, res->ai_addr, res->ai_addrlen);
+    // Non-blocking connect with select-based timeout
+    u_long mode = 1;
+    ::ioctlsocket(fd, FIONBIO, &mode);
+    int cr = ::connect(fd, res->ai_addr, static_cast<int>(res->ai_addrlen));
     ::freeaddrinfo(res);
 
-    if (cr != 0 && errno != EINPROGRESS) { ::close(fd); return {}; }
-    if (cr != 0)
+    if (cr == SOCKET_ERROR && WSAGetLastError() != WSAEWOULDBLOCK)
     {
-        struct pollfd pfd{fd, POLLOUT, 0};
-        int pr = ::poll(&pfd, 1, static_cast<int>(timeoutMs));
-        if (pr <= 0) { ::close(fd); return {}; }
-        int err = 0; socklen_t elen = sizeof(err);
-        ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &elen);
-        if (err != 0) { ::close(fd); return {}; }
+        ::closesocket(fd); return {};
     }
-    ::fcntl(fd, F_SETFL, flags);
-    struct timeval tv{ static_cast<time_t>(timeoutMs / 1000),
-                       static_cast<suseconds_t>((timeoutMs % 1000) * 1000) };
-    ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+    fd_set wset;
+    FD_ZERO(&wset);
+    FD_SET(fd, &wset);
+    struct timeval tv{ static_cast<long>(timeoutMs / 1000),
+                       static_cast<long>((timeoutMs % 1000) * 1000) };
+    if (::select(0, nullptr, &wset, nullptr, &tv) <= 0)
+    {
+        ::closesocket(fd); return {};
+    }
+    int err = 0;
+    int elen = sizeof(err);
+    ::getsockopt(fd, SOL_SOCKET, SO_ERROR, reinterpret_cast<char *>(&err), &elen);
+    if (err != 0) { ::closesocket(fd); return {}; }
+
+    // Restore blocking; set recv/send timeout
+    mode = 0;
+    ::ioctlsocket(fd, FIONBIO, &mode);
+    DWORD tout = static_cast<DWORD>(timeoutMs);
+    ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char *>(&tout), sizeof(tout));
+    ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char *>(&tout), sizeof(tout));
 
     std::string req = "GET " + path + " HTTP/1.0\r\nHost: " + host + "\r\nConnection: close\r\n\r\n";
-    if (::send(fd, req.c_str(), req.size(), MSG_NOSIGNAL) < 0) { ::close(fd); return {}; }
+    if (::send(fd, req.c_str(), static_cast<int>(req.size()), 0) == SOCKET_ERROR)
+    {
+        ::closesocket(fd); return {};
+    }
 
     std::string response;
     response.reserve(512);
     char rbuf[512];
-    ssize_t n;
+    int n;
     while ((n = ::recv(fd, rbuf, sizeof(rbuf), 0)) > 0)
     {
         response.append(rbuf, static_cast<std::size_t>(n));
         if (response.size() > 4096) break;
     }
-    ::close(fd);
+    ::closesocket(fd);
 
     auto pos = response.find("\r\n\r\n");
     if (pos == std::string::npos) return {};
@@ -234,49 +273,29 @@ bool isLoopbackIface(const pcap_if *dev)
 {
     const auto *d = reinterpret_cast<const pcap_if_t *>(dev);
     if (!d) return false;
-    if (d->flags & PCAP_IF_LOOPBACK) return true;
-    return d->name && std::strcmp(d->name, "lo") == 0;
+    // Npcap sets PCAP_IF_LOOPBACK for the NPF loopback adapter
+    return (d->flags & PCAP_IF_LOOPBACK) != 0;
 }
 
 // ---------------------------------------------------------------------------
-// Key file permissions
+// Key file permissions (stub — full Windows ACL check is a future enhancement)
 // ---------------------------------------------------------------------------
 
-void checkIdentityFilePermissions(const std::string &path, bool isDaemon, bool /*verbose*/)
+void checkIdentityFilePermissions(const std::string &path, bool /*isDaemon*/, bool /*verbose*/)
 {
-    struct stat st;
-    if (::stat(path.c_str(), &st) != 0) return;
-    if ((st.st_mode & (S_IRWXG | S_IRWXO)) != 0)
-    {
-        const char *msg = "ntm-client: WARNING: identity key has group/world permissions";
-        if (isDaemon) syslog(LOG_WARNING, "%s (path=%s)", msg, path.c_str());
-        else std::cerr << msg << " (path=" << path << ")\n";
-    }
-    if (st.st_uid != ::geteuid())
-    {
-        const char *msg = "ntm-client: WARNING: identity key not owned by current user";
-        if (isDaemon) syslog(LOG_WARNING, "%s (path=%s)", msg, path.c_str());
-        else std::cerr << msg << " (path=" << path << ")\n";
-    }
+    // On Windows, permission checking requires the Security API.
+    // We emit a reminder to protect the file via NTFS permissions manually.
+    std::cerr << "ntm-client: NOTE: ensure identity key is protected via NTFS permissions: "
+              << path << "\n";
 }
 
 // ---------------------------------------------------------------------------
-// Logging
+// Logging (stderr always — no syslog on Windows)
 // ---------------------------------------------------------------------------
 
-void ntmLog(LogLevel level, bool isDaemon, const std::string &msg)
+void ntmLog(LogLevel /*level*/, bool /*isDaemon*/, const std::string &msg)
 {
-    if (isDaemon)
-    {
-        int prio = (level == LogLevel::Err)  ? LOG_ERR
-                 : (level == LogLevel::Warn) ? LOG_WARNING
-                 : LOG_INFO;
-        syslog(prio, "%s", msg.c_str());
-    }
-    else
-    {
-        std::cerr << msg << "\n";
-    }
+    std::cerr << msg << "\n";
 }
 
 // ---------------------------------------------------------------------------
@@ -285,51 +304,53 @@ void ntmLog(LogLevel level, bool isDaemon, const std::string &msg)
 
 static std::atomic<bool> *g_runningPtr = nullptr;
 
-static void sigHandler(int) { if (g_runningPtr) g_runningPtr->store(false); }
+static BOOL WINAPI consoleCtrlHandler(DWORD type)
+{
+    if (type == CTRL_C_EVENT || type == CTRL_BREAK_EVENT || type == CTRL_CLOSE_EVENT)
+    {
+        if (g_runningPtr) g_runningPtr->store(false);
+        return TRUE;
+    }
+    return FALSE;
+}
 
 void setupSignals(std::atomic<bool> &running)
 {
     g_runningPtr = &running;
-    std::signal(SIGINT,  sigHandler);
-    std::signal(SIGTERM, sigHandler);
+    ::SetConsoleCtrlHandler(consoleCtrlHandler, TRUE);
 }
 
 // ---------------------------------------------------------------------------
-// Daemon
+// Daemon (not supported on Windows)
 // ---------------------------------------------------------------------------
 
 void daemonize(bool isDaemon)
 {
-    if (!isDaemon) return;
-
-    pid_t pid = ::fork();
-    if (pid < 0) { std::perror("fork"); std::exit(EXIT_FAILURE); }
-    if (pid > 0) std::exit(EXIT_SUCCESS);
-    if (::setsid() < 0) { std::perror("setsid"); std::exit(EXIT_FAILURE); }
-    pid = ::fork();
-    if (pid < 0) { std::perror("fork"); std::exit(EXIT_FAILURE); }
-    if (pid > 0) std::exit(EXIT_SUCCESS);
-    ::umask(0);
-    if (::chdir("/") != 0) std::perror("chdir");
-    int fd = ::open("/dev/null", O_RDWR);
-    if (fd >= 0)
-    {
-        ::dup2(fd, STDIN_FILENO);
-        ::dup2(fd, STDOUT_FILENO);
-        ::dup2(fd, STDERR_FILENO);
-        if (fd > 2) ::close(fd);
-    }
+    if (isDaemon)
+        std::cerr << "ntm-client: --daemon is not supported on Windows; running in foreground\n";
 }
 
 // ---------------------------------------------------------------------------
-// Platform init/cleanup (no-op on Linux)
+// Platform init/cleanup
 // ---------------------------------------------------------------------------
 
-void initPlatform()  {}
-void cleanupPlatform() {}
+void initPlatform()
+{
+    WSADATA wsa;
+    if (::WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
+    {
+        std::cerr << "ntm-client: WSAStartup failed\n";
+        std::exit(1);
+    }
+}
+
+void cleanupPlatform()
+{
+    ::WSACleanup();
+}
 
 // ---------------------------------------------------------------------------
-// NetworkMonitor — RTNETLINK with getifaddrs fallback
+// NetworkMonitor — NotifyIpInterfaceChange with polling fallback
 // ---------------------------------------------------------------------------
 
 struct NetworkMonitor::Impl
@@ -337,6 +358,14 @@ struct NetworkMonitor::Impl
     std::atomic<bool> running{false};
     std::atomic<bool> changed{false};
     std::thread       worker;
+    HANDLE            notifyHandle{nullptr};
+
+    static void NETIOAPI_API_ ifaceChangeCallback(PVOID ctx, PMIB_IPINTERFACE_ROW,
+                                                  MIB_NOTIFICATION_TYPE)
+    {
+        auto *self = static_cast<Impl *>(ctx);
+        self->changed.store(true);
+    }
 
     void monitorLoopPoll()
     {
@@ -353,45 +382,21 @@ struct NetworkMonitor::Impl
 
     void monitorLoop()
     {
-        int fd = ::socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_ROUTE);
-        if (fd < 0) { monitorLoopPoll(); return; }
-
-        struct sockaddr_nl sa{};
-        sa.nl_family = AF_NETLINK;
-        sa.nl_groups = RTMGRP_LINK | RTMGRP_IPV4_IFADDR | RTMGRP_IPV6_IFADDR;
-        if (::bind(fd, reinterpret_cast<struct sockaddr *>(&sa), sizeof(sa)) < 0)
+        HANDLE h = nullptr;
+        DWORD ret = NotifyIpInterfaceChange(AF_UNSPEC, ifaceChangeCallback,
+                                            this, FALSE, &h);
+        if (ret != NO_ERROR)
         {
-            ::close(fd);
             monitorLoopPoll();
             return;
         }
-
-        char buf[4096];
+        notifyHandle = h;
+        // The callback fires on change; just keep the thread alive until stop()
         while (running.load())
-        {
-            struct pollfd pfd{fd, POLLIN, 0};
-            int pr = ::poll(&pfd, 1, 1000);
-            if (pr < 0) { if (errno == EINTR) continue; break; }
-            if (pr == 0) continue;
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-            ssize_t len = ::recv(fd, buf, sizeof(buf), MSG_DONTWAIT);
-            if (len < 0) continue;
-
-            for (auto *nh = reinterpret_cast<struct nlmsghdr *>(buf);
-                 len > 0 && NLMSG_OK(nh, static_cast<unsigned>(len));
-                 nh = NLMSG_NEXT(nh, len))
-            {
-                if (nh->nlmsg_type == NLMSG_DONE) break;
-                switch (nh->nlmsg_type)
-                {
-                case RTM_NEWADDR: case RTM_DELADDR:
-                case RTM_NEWLINK: case RTM_DELLINK:
-                    changed.store(true); break;
-                default: break;
-                }
-            }
-        }
-        ::close(fd);
+        CancelMibChangeNotify2(notifyHandle);
+        notifyHandle = nullptr;
     }
 };
 

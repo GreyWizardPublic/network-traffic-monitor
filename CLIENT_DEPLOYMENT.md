@@ -1,28 +1,47 @@
 # ntm-client Deployment Guide
 
+Covers deployment of `ntm-client` on **Linux** and **Windows 10/11**.
+
 ## Table of Contents
 
-1. [Prerequisites](#1-prerequisites)
-2. [Build](#2-build)
-3. [Directory layout](#3-directory-layout)
-4. [Packet capture privileges](#4-packet-capture-privileges)
-5. [Ed25519 identity key](#5-ed25519-identity-key)
-6. [TLS server verification](#6-tls-server-verification)
-7. [Configuration file](#7-configuration-file)
-8. [First run (foreground)](#8-first-run-foreground)
-9. [Running as a daemon](#9-running-as-a-daemon)
-10. [systemd service unit](#10-systemd-service-unit)
-11. [Behaviour reference](#11-behaviour-reference)
-12. [Security hardening checklist](#12-security-hardening-checklist)
-13. [Troubleshooting](#13-troubleshooting)
+- [Linux Deployment](#linux-deployment)
+  1. [Prerequisites](#1-linux-prerequisites)
+  2. [Install the binary](#2-linux-install-the-binary)
+  3. [Packet capture privileges](#3-linux-packet-capture-privileges)
+  4. [Ed25519 identity key](#4-ed25519-identity-key-linux)
+  5. [TLS server verification](#5-tls-server-verification)
+  6. [Configuration file](#6-linux-configuration-file)
+  7. [First run (foreground)](#7-linux-first-run-foreground)
+  8. [Running as a daemon](#8-running-as-a-daemon)
+  9. [systemd service unit](#9-systemd-service-unit)
+  10. [Security hardening checklist](#10-linux-security-hardening-checklist)
+  11. [Troubleshooting (Linux)](#11-troubleshooting-linux)
+
+- [Windows Deployment](#windows-deployment)
+  1. [Prerequisites](#1-windows-prerequisites)
+  2. [Install the binary](#2-windows-install-the-binary)
+  3. [Packet capture privileges](#3-windows-packet-capture-privileges)
+  4. [Ed25519 identity key](#4-ed25519-identity-key-windows)
+  5. [TLS server verification](#5-tls-server-verification-1)
+  6. [Configuration file](#6-windows-configuration-file)
+  7. [First run (foreground)](#7-windows-first-run-foreground)
+  8. [Running as a background service](#8-running-as-a-background-service)
+  9. [Security hardening checklist](#9-windows-security-hardening-checklist)
+  10. [Troubleshooting (Windows)](#10-troubleshooting-windows)
+
+- [Common Reference](#common-reference)
+  - [Behaviour reference](#behaviour-reference)
+  - [Configuration keys](#configuration-keys)
 
 ---
 
-## 1. Prerequisites
+# Linux Deployment
+
+## 1. Linux Prerequisites
 
 | Package | Arch Linux | Debian / Ubuntu |
-|---------|-----------|-----------------|
-| C++17 compiler | `gcc` or `clang` | `build-essential` |
+|---------|------------|-----------------|
+| C++17 compiler | `gcc` | `build-essential` |
 | CMake ≥ 3.16 | `cmake` | `cmake` |
 | OpenSSL ≥ 1.1.1 | `openssl` | `libssl-dev` |
 | libpcap | `libpcap` | `libpcap-dev` |
@@ -31,85 +50,56 @@ The client does **not** require libcurl, zlib, or cpp-httplib.
 
 ---
 
-## 2. Build
+## 2. Linux Install the Binary
 
 ```bash
-git clone <repo-url>
-cd network-traffic-monitor
-mkdir -p build && cd build
-cmake ..
-cmake --build .
-```
-
-Produces `build/ntm-client` (and `build/ntm-server`).
-
----
-
-## 3. Directory layout
-
-A minimal production layout:
-
-```
-/usr/local/bin/ntm-client          # binary
-/etc/ntmclient/
-    ntm-client.conf                # config file
-    client_private.pem             # Ed25519 private key (chmod 600) — mandatory
-    server_cert.pem                # server certificate for TLS verification — mandatory
-```
-
-```bash
-sudo install -m 755 build/ntm-client /usr/local/bin/ntm-client
+sudo install -m 755 build-linux/ntm-client /usr/local/bin/ntm-client
 sudo mkdir -p /etc/ntmclient
 ```
 
----
+Recommended directory layout:
 
-## 4. Packet capture privileges
-
-`ntm-client` captures packets via **libpcap** in promiscuous mode. Libpcap requires either:
-
-- **Root** (`sudo`), or
-- **`CAP_NET_RAW` and `CAP_NET_ADMIN` capabilities** granted to the process.
-
-### Option A — Run as root (simplest, not recommended for production)
-
-```bash
-sudo ntm-client --server 192.168.1.10
+```
+/usr/local/bin/ntm-client
+/etc/ntmclient/
+    ntm-client.conf          # config file
+    client_private.pem       # Ed25519 private key  (chmod 600)
+    server_cert.pem          # server certificate for TLS pinning
 ```
 
-### Option B — Capabilities on the binary (setcap)
+---
 
-This allows the binary to capture without running as root:
+## 3. Linux Packet Capture Privileges
+
+`ntm-client` uses **libpcap** in promiscuous mode, which requires elevated privileges.
+
+### Option A — Run as root (not recommended for production)
+
+```bash
+sudo ntm-client --config /etc/ntmclient/ntm-client.conf
+```
+
+### Option B — `setcap` on the binary
+
+Grants capture capabilities permanently to the binary so any user can run it:
 
 ```bash
 sudo setcap 'cap_net_raw,cap_net_admin+eip' /usr/local/bin/ntm-client
-```
-
-Verify:
-
-```bash
+# Verify:
 getcap /usr/local/bin/ntm-client
 # expected: /usr/local/bin/ntm-client cap_net_admin,cap_net_raw=eip
 ```
 
-> **Note:** `setcap` grants capabilities permanently to the binary. Any user can then run
-> `ntm-client` with those capabilities. Use a dedicated system user and the systemd service
-> unit (Section 10) to scope access.
+### Option C — systemd `AmbientCapabilities` (recommended)
 
-### Option C — systemd `AmbientCapabilities` (recommended for daemon mode)
-
-Grant capabilities only to the service process at runtime without modifying the binary. This
-is the approach used in `ntm-client.service.example` — see Section 10.
+Grants capabilities only to the service process at runtime without modifying the binary.
+See [Section 9](#9-systemd-service-unit) for the service unit that uses this approach.
 
 ---
 
-## 5. Ed25519 identity key
+## 4. Ed25519 Identity Key (Linux)
 
-An Ed25519 identity key is **mandatory**. The server always requires client authentication and
-will reject any connection where the client does not present a valid private key whose public
-key is listed in the server's `allowed_clients.txt`.
-
-### Generate a private key (run on the client machine)
+### Generate a private key
 
 ```bash
 openssl genpkey -algorithm ED25519 -out client_private.pem
@@ -117,193 +107,147 @@ chmod 600 client_private.pem
 sudo mv client_private.pem /etc/ntmclient/
 ```
 
-### Derive the public key for the server's allowlist
+### Derive the public key for the server allowlist
 
 ```bash
 openssl pkey -in /etc/ntmclient/client_private.pem -pubout -outform DER \
   | tail -c 32 | xxd -p -c 0
 ```
 
-Copy the 64-character hex output to a new line in the server's `allowed_clients.txt`. See
-`SERVER_DEPLOYMENT.md` Section 5 for the server-side steps.
+Copy the 64-character hex output to a new line in the server's `allowed_clients.txt`.
+See `SERVER_DEPLOYMENT.md` for the server-side steps.
 
 ### Key file permissions
-
-The client checks the identity file permissions at startup and warns if the key is
-group- or world-readable:
-
-```
-ntm-client: WARNING: identity key has group/world permissions; tighten with 'chmod 600'
-```
-
-Always keep the private key `600` (owner-read-only):
 
 ```bash
 sudo chmod 600 /etc/ntmclient/client_private.pem
 sudo chown ntmclient:ntmclient /etc/ntmclient/client_private.pem
 ```
 
+The client warns at startup if the key is group- or world-readable:
+
+```
+ntm-client: WARNING: identity key has group/world permissions; tighten with 'chmod 600'
+```
+
 ---
 
-## 6. TLS server verification
+## 5. TLS Server Verification
 
-TLS verification is **mandatory**. The server always requires TLS and will reject plain TCP
-connections, so the client must be configured with one of the two verification modes below.
-Without either, the client attempts plain TCP and the server immediately drops the connection.
+TLS is **mandatory**. The server rejects plain TCP connections. Configure one of the two
+modes below.
 
-### Mode A — CA bundle verification (`--ca`)
+### Mode A — CA bundle verification (`ca`)
 
-The client verifies the server certificate against a CA file (PEM bundle). Use this when the
-server uses a CA-signed certificate (Let's Encrypt or an internal CA):
+Use when the server has a CA-signed certificate (Let's Encrypt or an internal CA):
 
-```bash
-ntm-client --server 192.168.1.10 --ca /etc/ssl/certs/ca-certificates.crt
+```ini
+ca = /etc/ssl/certs/ca-certificates.crt
 ```
 
-Or for a self-signed CA that you generated yourself:
+Or for a self-signed CA you generated:
 
-```bash
-ntm-client --server 192.168.1.10 --ca /etc/ntmclient/server_cert.pem
+```ini
+ca = /etc/ntmclient/server_cert.pem
 ```
 
-### Mode B — Certificate pinning (`--server-cert`)
+### Mode B — Certificate pinning (`server_cert`)
 
-The client computes the SHA-256 fingerprint of the server's leaf certificate and compares it
-against a locally stored copy. Use this for a self-signed certificate where you want strict
-pinning rather than a CA chain:
+Use for a self-signed certificate where you want strict SHA-256 fingerprint pinning:
 
 ```bash
-# Copy the server certificate to each client machine once.
+# Copy the server's certificate to each client once.
 sudo cp server_cert.pem /etc/ntmclient/server_cert.pem
-
-ntm-client --server 192.168.1.10 --server-cert /etc/ntmclient/server_cert.pem
 ```
 
-> **When using pinning:** if you regenerate the server certificate, you must update and
-> redeploy the pinned copy to every client before the old certificate expires, or clients
-> will fail to reconnect.
+```ini
+server_cert = /etc/ntmclient/server_cert.pem
+```
+
+> If you regenerate the server certificate, redeploy the pinned copy to every client
+> before the old certificate expires or clients will be unable to reconnect.
 
 ### Hostname / IP verification
 
-After the TLS handshake, the client always checks that the server's certificate matches the
-value passed to `--server`:
+After the TLS handshake the client always checks that the server's certificate CN or SAN
+matches the `server` config value:
 
-- If `--server` is an **IP address**, the certificate's Subject Alternative Name IP entry
-  must match.
-- If `--server` is a **hostname**, the certificate's CN or SAN DNS entry must match.
-
-Ensure the certificate's CN or SAN matches what you pass as `--server`. For a self-signed
-cert generated with `-subj "/CN=192.168.1.10"`, use `--server 192.168.1.10`.
+- IP address → the certificate's SAN IP entry must match.
+- Hostname → the certificate's CN or SAN DNS entry must match.
 
 ---
 
-## 7. Configuration file
-
-Copy and edit the example:
+## 6. Linux Configuration File
 
 ```bash
 sudo cp ntm-client.conf.example /etc/ntmclient/ntm-client.conf
+sudo chmod 640 /etc/ntmclient/ntm-client.conf
+sudo chown root:ntmclient /etc/ntmclient/ntm-client.conf
 ```
 
-Full config reference:
+Minimal production config:
 
 ```ini
 # /etc/ntmclient/ntm-client.conf
 
-# Server host (IP or hostname). Default 127.0.0.1.
-server = 192.168.1.10
-
-# Server ingestion port (1-65535). Default 5555.
-port = 5555
-
-# Ed25519 private key for authentication. MANDATORY — server rejects connections without it.
-identity = /etc/ntmclient/client_private.pem
-
-# TLS verification. MANDATORY — server always requires TLS; plain TCP is rejected.
-# Choose one of ca or server_cert (not both).
-#
-# CA bundle to verify the server certificate (use for CA-signed certs):
-# ca = /etc/ntmclient/server_cert.pem
-#
-# Server certificate for SHA-256 fingerprint pinning (use for self-signed certs):
-server_cert = /etc/ntmclient/server_cert.pem
-
-# Send buffer in bytes (4096-2097152). Default 524288 (512 KiB).
-send_buffer_bytes = 524288
+server               = 192.168.1.10
+port                 = 5555
+identity             = /etc/ntmclient/client_private.pem
+server_cert          = /etc/ntmclient/server_cert.pem
+send_buffer_bytes    = 524288
 ```
 
-**Key precedence:** command-line flags override config file values, which override built-in
-defaults.
+CLI flags override config values, which override built-in defaults.
 
 ---
 
-## 8. First run (foreground)
-
-Run in the foreground first to confirm capture and connectivity before daemonising:
+## 7. Linux First Run (Foreground)
 
 ```bash
-sudo ntm-client \
-  --config /etc/ntmclient/ntm-client.conf \
-  --verbose
+sudo ntm-client --config /etc/ntmclient/ntm-client.conf --verbose
 ```
 
-Expected output on stderr:
-- Config values loaded (server, port, identity, TLS options).
-- `ntm-client: connected to <server>:<port> (TLS, session max 6h)` on successful connect.
-  If you see `(plain)` instead of `(TLS, ...)`, TLS is not configured on the client —
-  the server will drop the connection. Ensure `server_cert` or `ca` is set in the config.
-- One line per discovered interface that has addresses — sniffers start silently.
+Expected output:
 
-If the identity key permissions are too open you will see a warning; fix with `chmod 600`.
-If the server rejects the connection, confirm the client's public key is in the server's
-`allowed_clients.txt` and that TLS verification is configured correctly.
+```
+ntm-client: loaded config from /etc/ntmclient/ntm-client.conf (...)
+ntm-client: connecting to 192.168.1.10:5555 (identity=..., ...)
+ntm-client: connected to 192.168.1.10:5555 (TLS, session max 6h)
+```
 
-Press `Ctrl+C` to stop (sends `SIGINT`; the client stops all sniffers and closes the
-connection cleanly). If no errors appear, proceed to daemon mode.
+- If you see `(plain)` instead of `(TLS, ...)` — TLS is not configured; the server will
+  drop the connection. Add `server_cert` or `ca` to the config.
+- Press `Ctrl+C` to stop cleanly (`SIGINT`).
 
 ---
 
-## 9. Running as a daemon
+## 8. Running as a Daemon
 
 ```bash
-sudo ntm-client \
-  --daemon \
-  --config /etc/ntmclient/ntm-client.conf
+sudo ntm-client --daemon --config /etc/ntmclient/ntm-client.conf
 ```
 
-In daemon mode:
-- The process double-forks and detaches from the terminal.
-- All log output goes to **syslog** (`LOG_DAEMON` facility).
-- stderr/stdout are redirected to `/dev/null`.
-
-View logs:
+In daemon mode the process double-forks, detaches from the terminal, and logs to **syslog**
+(`LOG_DAEMON` facility). View logs:
 
 ```bash
-journalctl -t ntm-client -f        # systemd systems
-sudo tail -f /var/log/daemon.log    # traditional syslog
+journalctl -t ntm-client -f          # systemd systems
+sudo tail -f /var/log/daemon.log      # traditional syslog
 ```
 
 ---
 
-## 10. systemd service unit
-
-An annotated example unit file is provided at `ntm-client.service.example` in the project
-root. Copy and adapt it:
+## 9. systemd Service Unit
 
 ```bash
 sudo cp ntm-client.service.example /etc/systemd/system/ntm-client.service
 ```
 
-The service runs the client as an unprivileged dedicated user and grants only the two
-capabilities libpcap requires (`CAP_NET_RAW` and `CAP_NET_ADMIN`) via
-`AmbientCapabilities`, without making the binary setuid or granting any other privileges.
+The service runs as an unprivileged dedicated user and grants only `CAP_NET_RAW` and
+`CAP_NET_ADMIN` via `AmbientCapabilities`.
 
-As with the server, **`MemoryDenyWriteExecute` and `PrivateUsers` must not be enabled**:
-both silently break OpenSSL TLS (see `SERVER_DEPLOYMENT.md` Section 9 for the detailed
-explanation). `RestrictAddressFamilies` is set to `AF_INET AF_INET6 AF_PACKET` —
-`AF_PACKET` is required because libpcap uses raw packet sockets on Linux.
-
-Create the dedicated user and enable the service:
+> **Note:** Do **not** set `MemoryDenyWriteExecute` or `PrivateUsers` — both silently break
+> OpenSSL TLS. `RestrictAddressFamilies` must include `AF_PACKET` for libpcap.
 
 ```bash
 sudo useradd -r -s /sbin/nologin ntmclient
@@ -317,109 +261,452 @@ sudo systemctl status ntm-client
 
 ---
 
-## 11. Behaviour reference
+## 10. Linux Security Hardening Checklist
+
+- [ ] TLS configured: `server_cert` or `ca` set (server rejects plain TCP)
+- [ ] Ed25519 identity configured: `identity` set and public key in server's `allowed_clients.txt`
+- [ ] Identity key permissions `600` (owner-read-only)
+- [ ] Identity key owned by the service user (`ntmclient`)
+- [ ] Client runs as a dedicated unprivileged user with only `CAP_NET_RAW` and `CAP_NET_ADMIN`
+- [ ] Config file permissions prevent other users reading identity key path
+- [ ] Server certificate renewed before expiry if using pinning
+- [ ] systemd hardening applied (`PrivateTmp`, `ProtectSystem`, `NoNewPrivileges`,
+  `RestrictAddressFamilies=AF_INET AF_INET6 AF_PACKET`)
+- [ ] `MemoryDenyWriteExecute` and `PrivateUsers` are **not** set
+
+---
+
+## 11. Troubleshooting (Linux)
+
+**`pcap_findalldevs failed: permission denied`**
+The process has no packet capture privileges. Run with `sudo`, use `setcap`, or use the
+systemd service with `AmbientCapabilities` (Section 3).
+
+**`TLS handshake failed`**
+Server certificate CN/SAN does not match the `server` value, or the pinned cert is stale.
+Regenerate the server cert with the correct `-subj "/CN=<server-ip>"` and redeploy.
+
+**`server rejected authentication`**
+The client's public key is not in the server's `allowed_clients.txt`. Re-derive the hex key
+and add it to the allowlist; restart or `SIGHUP` the server.
+
+**`identity key has group/world permissions` warning**
+Run `chmod 600 /etc/ntmclient/client_private.pem`.
+
+**Client connects but server shows no traffic**
+Run with `--verbose` to confirm sniffers started. Verify interfaces have addresses
+(`ip addr show`) and carry traffic (`tcpdump -i <iface>`).
+
+**`connect() failed: Connection refused`**
+Server is not running or port mismatch. Check: `ss -tlnp | grep 5555` on the server host.
+
+---
+
+# Windows Deployment
+
+## 1. Windows Prerequisites
+
+| Requirement | Notes |
+|-------------|-------|
+| Windows 10 (1903+) or Windows 11 | x86-64 only |
+| **Npcap** | Packet capture driver — **must be installed** |
+| Administrator account | Required for packet capture |
+| OpenSSL for Windows | Only needed to generate the Ed25519 key |
+
+### Install Npcap
+
+Download the Npcap installer from **https://npcap.com/#download** and run it.
+Default installation options are sufficient. Npcap provides `wpcap.dll`, which
+`ntm-client.exe` loads at startup.
+
+> Npcap is a kernel-mode driver and cannot be statically linked into the exe — it must be
+> installed on every machine running `ntm-client.exe`. The installer is ~1 MB and supports
+> **silent installation** for automated deployment:
+> ```
+> npcap-1.xx.exe /S
+> ```
+
+### Install OpenSSL (for key generation only)
+
+`ntm-client.exe` does **not** require OpenSSL to be installed at runtime (it is statically
+linked). OpenSSL is only needed once to generate the Ed25519 identity key.
+
+Options:
+- **Git for Windows** ships with `openssl.exe` — use the Git Bash shell.
+- **Win64 OpenSSL** from https://slproweb.com/products/Win32OpenSSL.html
+- **Windows Subsystem for Linux (WSL)** — use the Linux `openssl` command.
+
+---
+
+## 2. Windows Install the Binary
+
+Copy `ntm-client.exe` to a permanent location:
+
+```
+C:\Program Files\ntm-client\ntm-client.exe
+```
+
+Create a configuration directory:
+
+```
+C:\ProgramData\ntmclient\
+    ntm-client.conf
+    client_private.pem
+    server_cert.pem
+```
+
+Using PowerShell (run as Administrator):
+
+```powershell
+New-Item -ItemType Directory -Path "C:\Program Files\ntm-client"
+Copy-Item ntm-client.exe "C:\Program Files\ntm-client\"
+
+New-Item -ItemType Directory -Path "C:\ProgramData\ntmclient"
+```
+
+---
+
+## 3. Windows Packet Capture Privileges
+
+On Windows, `ntm-client.exe` must be run as **Administrator** for Npcap to open interfaces
+in promiscuous mode.
+
+To launch from an elevated Command Prompt:
+
+```cmd
+"C:\Program Files\ntm-client\ntm-client.exe" --config "C:\ProgramData\ntmclient\ntm-client.conf"
+```
+
+Or right-click the executable and choose **Run as administrator**.
+
+> When running as a Windows Service via Task Scheduler (see Section 8), the task is
+> configured to run with the SYSTEM account which has the necessary privileges.
+
+---
+
+## 4. Ed25519 Identity Key (Windows)
+
+### Using Git Bash (recommended)
+
+Open **Git Bash** and run:
+
+```bash
+openssl genpkey -algorithm ED25519 -out client_private.pem
+```
+
+Move the key to the config directory:
+
+```bash
+mv client_private.pem /c/ProgramData/ntmclient/client_private.pem
+```
+
+### Using WSL
+
+```bash
+openssl genpkey -algorithm ED25519 -out /mnt/c/ProgramData/ntmclient/client_private.pem
+```
+
+### Derive the public key for the server allowlist
+
+```bash
+openssl pkey -in /c/ProgramData/ntmclient/client_private.pem -pubout -outform DER \
+  | tail -c 32 | xxd -p -c 0
+```
+
+Copy the 64-character hex output to the server's `allowed_clients.txt`.
+
+### Protect the key file
+
+Set NTFS permissions so only the SYSTEM account and Administrators can read the key.
+Using PowerShell (run as Administrator):
+
+```powershell
+$path = "C:\ProgramData\ntmclient\client_private.pem"
+$acl  = Get-Acl $path
+
+# Remove inherited permissions and existing entries
+$acl.SetAccessRuleProtection($true, $false)
+$acl.Access | ForEach-Object { $acl.RemoveAccessRule($_) | Out-Null }
+
+# Grant read access to SYSTEM and Administrators only
+$acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+    "SYSTEM","Read","Allow")))
+$acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+    "Administrators","Read","Allow")))
+
+Set-Acl $path $acl
+```
+
+> `ntm-client.exe` will print a reminder to protect the key file at startup. Restricting
+> the permissions via the ACL above silences this reminder in future versions.
+
+---
+
+## 5. TLS Server Verification (Windows)
+
+Same two modes as Linux — configure one in the config file using Windows paths.
+
+### Mode A — CA bundle verification
+
+```ini
+ca = C:\ProgramData\ntmclient\server_cert.pem
+```
+
+### Mode B — Certificate pinning (recommended for self-signed certs)
+
+Copy the server certificate to the client machine:
+
+```powershell
+Copy-Item server_cert.pem "C:\ProgramData\ntmclient\server_cert.pem"
+```
+
+```ini
+server_cert = C:\ProgramData\ntmclient\server_cert.pem
+```
+
+---
+
+## 6. Windows Configuration File
+
+Create `C:\ProgramData\ntmclient\ntm-client.conf`:
+
+```ini
+# ntm-client.conf — Windows paths use backslash or forward slash (both work)
+
+server               = 192.168.1.10
+port                 = 5555
+identity             = C:\ProgramData\ntmclient\client_private.pem
+server_cert          = C:\ProgramData\ntmclient\server_cert.pem
+send_buffer_bytes    = 524288
+```
+
+> Both `C:\path\to\file` and `C:/path/to/file` are accepted.
+
+---
+
+## 7. Windows First Run (Foreground)
+
+Open a **Command Prompt as Administrator** and run:
+
+```cmd
+"C:\Program Files\ntm-client\ntm-client.exe" ^
+    --config "C:\ProgramData\ntmclient\ntm-client.conf" ^
+    --verbose
+```
+
+Expected output on the console:
+
+```
+ntm-client: loaded config from C:\ProgramData\ntmclient\ntm-client.conf (...)
+ntm-client: connecting to 192.168.1.10:5555 (identity=..., ...)
+ntm-client: connected to 192.168.1.10:5555 (TLS, session max 6h)
+```
+
+- All log output goes to **stderr** (the console window). There is no syslog on Windows.
+- Press `Ctrl+C` to stop cleanly.
+- The `--daemon` flag is **not supported** on Windows and will print a warning.
+
+### Interface names
+
+On Windows, Npcap enumerates interfaces using internal device paths such as:
+
+```
+\Device\NPF_{4A5B6C7D-...}
+```
+
+These are logged at startup alongside the friendly name (e.g. `Ethernet`, `Wi-Fi`).
+The interface list is fixed at startup; a restart is required if interfaces change.
+
+---
+
+## 8. Running as a Background Service
+
+`ntm-client.exe` does not natively register as a Windows Service. The recommended approach
+is **Task Scheduler** with the SYSTEM account.
+
+### Using Task Scheduler (PowerShell, run as Administrator)
+
+```powershell
+$action  = New-ScheduledTaskAction `
+    -Execute  '"C:\Program Files\ntm-client\ntm-client.exe"' `
+    -Argument '--config "C:\ProgramData\ntmclient\ntm-client.conf"'
+
+$trigger = New-ScheduledTaskTrigger -AtStartup
+
+$settings = New-ScheduledTaskSettingsSet `
+    -ExecutionTimeLimit    (New-TimeSpan -Hours 0) `
+    -RestartCount          10 `
+    -RestartInterval       (New-TimeSpan -Minutes 1) `
+    -StartWhenAvailable
+
+$principal = New-ScheduledTaskPrincipal `
+    -UserId    "SYSTEM" `
+    -LogonType ServiceAccount `
+    -RunLevel  Highest
+
+Register-ScheduledTask `
+    -TaskName   "ntm-client" `
+    -Action     $action `
+    -Trigger    $trigger `
+    -Settings   $settings `
+    -Principal  $principal `
+    -Force
+```
+
+Start immediately without rebooting:
+
+```powershell
+Start-ScheduledTask -TaskName "ntm-client"
+```
+
+Check status:
+
+```powershell
+Get-ScheduledTask -TaskName "ntm-client" | Select-Object TaskName, State
+```
+
+Remove the task:
+
+```powershell
+Unregister-ScheduledTask -TaskName "ntm-client" -Confirm:$false
+```
+
+> Log output is written to **stderr**, which Task Scheduler discards by default.
+> Redirect to a file by changing the action argument to:
+> ```
+> --config "C:\ProgramData\ntmclient\ntm-client.conf" >> "C:\ProgramData\ntmclient\ntm-client.log" 2>&1
+> ```
+
+---
+
+## 9. Windows Security Hardening Checklist
+
+- [ ] Npcap installed (required for packet capture)
+- [ ] `ntm-client.exe` runs as SYSTEM or Administrator
+- [ ] TLS configured: `server_cert` or `ca` set (server rejects plain TCP)
+- [ ] Ed25519 identity configured: `identity` set and public key in server's `allowed_clients.txt`
+- [ ] `client_private.pem` ACL restricts read access to SYSTEM and Administrators only
+- [ ] Config directory `C:\ProgramData\ntmclient\` is not readable by standard users
+- [ ] Server certificate renewed before expiry if using pinning (redeploy to each client)
+- [ ] Task Scheduler task set to restart on failure (handles network unavailability at boot)
+- [ ] Npcap kept up to date (security fixes are released regularly)
+
+---
+
+## 10. Troubleshooting (Windows)
+
+**`pcap_findalldevs failed` or no interfaces captured**
+- Npcap is not installed, or the process is not running as Administrator.
+- Verify Npcap is installed: check **Add/Remove Programs** for "Npcap".
+- Run `ntm-client.exe` from an elevated Command Prompt.
+
+**`TLS handshake failed`**
+- Server certificate CN/SAN does not match the `server` value.
+- Pinned cert (`server_cert`) does not match the server's current certificate.
+- Confirm the path in `server_cert` or `ca` is correct and the file is readable by SYSTEM.
+
+**`server rejected authentication`**
+- The client public key is not in the server's `allowed_clients.txt`.
+- Re-derive the hex public key and add it to the server allowlist.
+
+**`ntm-client: NOTE: ensure identity key is protected via NTFS permissions`**
+- Set the ACL on `client_private.pem` as shown in Section 4.
+
+**Client connects but server shows no traffic**
+- Run with `--verbose` to confirm sniffers started and interfaces were found.
+- Confirm Npcap is installed and the process is running as Administrator.
+- Check that the listed interfaces are the ones carrying the traffic you expect.
+
+**`connect() failed (WSA ...)`**
+- Server is not running or the port is blocked by Windows Firewall.
+- Add an inbound rule on the **server** machine: `netsh advfirewall firewall add rule name="ntm-server" dir=in action=allow protocol=TCP localport=5555`.
+- Verify the server is reachable: `Test-NetConnection -ComputerName 192.168.1.10 -Port 5555`.
+
+**The scheduled task starts but exits immediately**
+- Enable output redirection in the task action (see Section 8) to capture the error message.
+- Run the binary manually from an elevated prompt first to see the error on screen.
+
+**`--daemon` flag has no effect**
+- Daemon mode is not supported on Windows. The flag prints a warning and the process
+  continues in the foreground. Use Task Scheduler for background operation.
+
+---
+
+# Common Reference
+
+## Behaviour Reference
 
 ### Interface discovery
 
-On startup, the client calls `pcap_findalldevs` and starts one `PacketSniffer` thread per
-interface that has at least one address assigned. Interfaces with no addresses (e.g. unconfigured
-physical ports) are skipped. The interface list is fixed at startup; adding or removing
-interfaces while the client is running requires a restart.
+At startup `ntm-client` calls `pcap_findalldevs` and starts one sniffer thread per
+interface that has at least one address assigned. Interfaces with no addresses are skipped.
+The interface list is **fixed at startup** — adding or removing interfaces while the client
+is running requires a restart.
 
 ### What is captured
 
-- **Link types:** Ethernet (`DLT_EN10MB`) and Linux cooked (`DLT_LINUX_SLL` / `DLT_LINUX_SLL2`).
-- **Protocol filter:** IPv4 and IPv6 only (`ip or ip6` BPF filter). Non-IP traffic is discarded.
-- **Snaplen:** only the first **192 bytes** of each packet are captured (enough for IP headers;
-  payload content is never read).
-- **Mode:** promiscuous — sees all traffic on the wire, not just traffic addressed to the host.
+| Property | Value |
+|----------|-------|
+| Link types (Linux) | Ethernet (`DLT_EN10MB`), Linux cooked (`DLT_LINUX_SLL`, `DLT_LINUX_SLL2`) |
+| Link types (Windows) | Ethernet (`DLT_EN10MB`) |
+| Protocol filter | IPv4 and IPv6 only (`ip or ip6` BPF filter) |
+| Snaplen | First **192 bytes** per packet — enough for IP headers; payload is never read |
+| Mode | Promiscuous — sees all traffic on the wire, not just traffic to/from the host |
 
 ### What is sent to the server
 
-For each packet, a single text line is sent:
+For each packet, a single text line:
 
 ```
 D <iface> <src_ip> <dst_ip> <bytes>\n
 ```
 
-No payload content, no port numbers, no protocol fields beyond IP addresses and total
-packet length.
+No payload, no port numbers, no protocol fields beyond IP addresses and total packet size.
 
 ### Send buffer and batching
 
-Captured packet metadata is accumulated in a fixed-size in-memory buffer (default 512 KiB,
-configurable via `send_buffer_bytes`). A background sender thread flushes the buffer to
-the server every **5 ms** or when it reaches **8 KiB**, whichever comes first. If the buffer
-fills before the sender flushes, excess packets are dropped silently (a sign that
-`send_buffer_bytes` should be increased or that the link to the server is saturated).
+Packet metadata accumulates in a fixed-size in-memory buffer (default 512 KiB,
+configurable via `send_buffer_bytes`). A background thread flushes the buffer every
+**5 ms** or when it reaches **8 KiB**, whichever comes first. Packets are silently
+dropped if the buffer fills before the sender can flush.
 
 ### Reconnection
 
-If the connection to the server is lost, the sender thread reconnects automatically on the
-next flush cycle (every 5 ms). There is no back-off; if the server is unreachable the client
-retries continuously and logs each failure to syslog.
+If the server connection is lost the sender thread reconnects automatically on the next
+flush cycle (~5 ms). There is no exponential back-off; failed attempts are logged
+continuously.
 
 ### TLS session lifetime
 
 Each TLS session is capped at **6 hours**. After that the client closes and re-establishes
-the connection with fresh session keys. This matches the server-side session limit.
+the connection with fresh session keys.
+
+### Network change detection
+
+| Platform | Method |
+|----------|--------|
+| Linux | `RTNETLINK` (`RTMGRP_LINK`, `RTMGRP_IPV4_IFADDR`, `RTMGRP_IPV6_IFADDR`), with `getifaddrs` polling fallback |
+| Windows | `NotifyIpInterfaceChange`, with `GetAdaptersAddresses` polling fallback |
+
+On any detected change the client re-announces its external IP and LAN addresses to the
+server (subject to a 30-second client-side cooldown).
 
 ---
 
-## 12. Security hardening checklist
+## Configuration Keys
 
-- [ ] TLS configured: `server_cert` or `ca` set (mandatory — server rejects plain TCP)
-- [ ] Ed25519 identity configured: `identity` set and matching public key added to server's
-  `allowed_clients.txt` (mandatory — server rejects unauthenticated connections)
-- [ ] Identity key permissions are `600` (owner-read-only)
-- [ ] Identity key is owned by the service user (`ntmclient`)
-- [ ] Client runs as a dedicated unprivileged user with only `CAP_NET_RAW` and
-  `CAP_NET_ADMIN` (not full root)
-- [ ] Config file permissions prevent other users from reading the identity key path
-- [ ] Server certificate renewed before expiry if using pinning (update pinned copy on each
-  client at the same time)
-- [ ] systemd hardening options applied (`PrivateTmp`, `ProtectSystem`, `NoNewPrivileges`,
-  `RestrictAddressFamilies`)
-- [ ] `MemoryDenyWriteExecute` and `PrivateUsers` are **not** set (breaks OpenSSL TLS)
+All keys are set in the config file (`key = value`) or overridden by CLI flags.
 
----
+| Key | CLI flag | Default | Description |
+|-----|----------|---------|-------------|
+| `server` | `--server` | `127.0.0.1` | Server hostname or IP |
+| `port` | `--port` | `5555` | Server ingestion port (1–65535) |
+| `identity` | `--identity` | *(none)* | Path to Ed25519 private key PEM |
+| `ca` | `--ca` | *(none)* | CA bundle to verify server certificate |
+| `server_cert` | `--server-cert` | *(none)* | Server cert for SHA-256 fingerprint pinning |
+| `send_buffer_bytes` | — | `524288` | Send buffer size in bytes (4096–2097152) |
+| `external_ip_url` | — | `http://checkip.amazonaws.com/` | URL used to detect external/WAN IP |
+| `external_ip_timeout_ms` | — | `5000` | Timeout for external IP check (500–30000 ms) |
+| `verbose` | `--verbose` | `false` | Enable verbose logging |
 
-## 13. Troubleshooting
-
-**`pcap_findalldevs failed: permission denied` or no interfaces found**
-- The process does not have packet capture privileges.
-- Run with `sudo`, use `setcap`, or use the systemd service with `AmbientCapabilities`
-  (see Section 4).
-- Confirm at least one interface has an IP address assigned: `ip addr show`.
-
-**`TLS handshake failed`**
-- The server certificate CN or SAN does not match the `--server` value — regenerate the
-  cert with the correct `-subj "/CN=<server-ip-or-hostname>"`.
-- For pinning (`--server-cert`): the pinned file does not match the server's current cert.
-- Confirm neither `ca` nor `server_cert` is accidentally omitted from the client config;
-  without one of them the client connects plain TCP and the server immediately drops it.
-
-**`server rejected authentication`**
-- The client's public key is not in the server's `allowed_clients.txt`.
-- Derive the public key hex again (`openssl pkey ... | tail -c 32 | xxd -p -c 0`) and
-  add it to the server's allowlist; then send `SIGHUP` or restart the server.
-
-**`identity key has group/world permissions` warning**
-- Run `chmod 600 /etc/ntmclient/client_private.pem` to remove the warning. The client
-  continues to operate, but the key is readable by other users on the system.
-
-**Client connects but server shows no traffic**
-- Run the client with `--verbose` in the foreground to confirm sniffers started.
-- Check that the interfaces being captured actually carry traffic (`ip link`, `tcpdump`).
-- Verify the BPF filter (`ip or ip6`) is not filtering out the traffic you expect to see.
-- Confirm `send_buffer_bytes` is large enough; a saturated buffer silently drops packets.
-
-**`connect() failed: Connection refused`**
-- The server is not running or is not listening on the expected port.
-- Verify the server is up: `ss -tlnp | grep 5555` on the server host.
-- Check that the port matches on both sides (`port` in client config vs `--port` on server).
-
-**Client exits with status 1 immediately**
-- No interfaces with addresses were found, or the initial connection to the server failed.
-- Check stderr or syslog for the specific error message.
-- Run in the foreground with `--verbose` to see the full startup sequence.
+Precedence: **CLI flags** > **config file** > **built-in defaults**.
