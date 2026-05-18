@@ -348,8 +348,8 @@ private:
 class PacketSniffer
 {
 public:
-    PacketSniffer(std::string iface, ClientConnection &connection)
-        : iface_(std::move(iface)), connection_(connection) {}
+    PacketSniffer(std::string iface, std::string label, ClientConnection &connection)
+        : iface_(std::move(iface)), label_(std::move(label)), connection_(connection) {}
 
     ~PacketSniffer() { stop(); }
 
@@ -430,7 +430,7 @@ private:
         }
 
         PacketMeta meta;
-        meta.iface  = iface_;
+        meta.iface  = label_;
         meta.srcIp  = srcBuf;
         meta.dstIp  = dstBuf;
         meta.bytes  = header->len;
@@ -511,7 +511,8 @@ private:
         }
     }
 
-    std::string       iface_;
+    std::string       iface_;   // pcap device name (passed to pcap_create)
+    std::string       label_;   // human-readable label sent in D lines
     ClientConnection &connection_;
     std::atomic<bool> running_{false};
     std::thread       worker_;
@@ -571,7 +572,13 @@ int runClient(bool daemonMode, const ClientConfig &config)
         if (!d->name) continue;
         if (platform::isLoopbackIface(reinterpret_cast<platform::pcap_if *>(d))) continue;
         if (!d->addresses) continue;
-        auto sniffer = std::make_unique<PacketSniffer>(std::string(d->name), connection);
+        // Use the human-readable description as the display label (e.g. "Intel Ethernet
+        // Connection" instead of "\Device\NPF_{GUID}" on Windows). Fall back to the
+        // raw device name when no description is available (typical on Linux).
+        std::string label = (d->description && d->description[0])
+                            ? std::string(d->description)
+                            : std::string(d->name);
+        auto sniffer = std::make_unique<PacketSniffer>(std::string(d->name), std::move(label), connection);
         sniffer->start();
         sniffers.push_back(std::move(sniffer));
     }
