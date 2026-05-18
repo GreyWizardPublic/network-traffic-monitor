@@ -422,6 +422,29 @@ static std::unordered_set<std::string> collectLanAddresses()
 }
 
 // ---------------------------------------------------------------------------
+// Linux-specific loopback interface detection
+// ---------------------------------------------------------------------------
+
+// Returns true if the interface should be excluded from traffic reporting.
+// On Linux the kernel always names the loopback device "lo"; PCAP_IF_LOOPBACK
+// is libpcap's flag for the same thing (set on activation, not just by name).
+// Both checks are included for robustness: the flag covers any additional
+// loopback-class interfaces the kernel may expose, while the name check
+// catches the common case even on older libpcap builds.
+//
+// Note: this function lives in client_linux.cpp deliberately — the loopback
+// interface name ("lo") and PCAP_IF_LOOPBACK semantics are Linux-specific.
+// Other OS implementations (macOS uses "lo0", OpenBSD uses "lo0", etc.)
+// would handle this in their own platform source files.
+static bool isLoopbackIface(const pcap_if_t *dev)
+{
+    if (!dev) return false;
+    if (dev->flags & PCAP_IF_LOOPBACK) return true;
+    // Fallback: Linux kernel always names the primary loopback "lo".
+    return dev->name && std::strcmp(dev->name, "lo") == 0;
+}
+
+// ---------------------------------------------------------------------------
 // External IP resolver
 // ---------------------------------------------------------------------------
 
@@ -1530,6 +1553,8 @@ int runClient(bool daemonMode, const ClientConfig &config)
     for (pcap_if_t *d = alldevs; d != nullptr; d = d->next)
     {
         if (!d->name)
+            continue;
+        if (isLoopbackIface(d))
             continue;
         if (!d->addresses)
             continue;
