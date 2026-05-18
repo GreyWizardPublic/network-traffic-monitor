@@ -575,9 +575,12 @@ int runClient(bool daemonMode, const ClientConfig &config)
         // Use the human-readable description as the display label (e.g. "Intel Ethernet
         // Connection" instead of "\Device\NPF_{GUID}" on Windows). Fall back to the
         // raw device name when no description is available (typical on Linux).
+        // Replace spaces with '-' so the label is safe for the whitespace-delimited
+        // wire protocol: "D <iface> <src> <dst> <bytes>\n".
         std::string label = (d->description && d->description[0])
                             ? std::string(d->description)
                             : std::string(d->name);
+        for (char &c : label) if (c == ' ') c = '-';
         auto sniffer = std::make_unique<PacketSniffer>(std::string(d->name), std::move(label), connection);
         sniffer->start();
         sniffers.push_back(std::move(sniffer));
