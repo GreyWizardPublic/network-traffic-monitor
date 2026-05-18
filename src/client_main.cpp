@@ -35,6 +35,9 @@ int main(int argc, char *argv[])
         {
             std::cout << "Usage: ntm-client [--config FILE] [--daemon] [--server HOST] [--port N]\n"
                          "             [--identity PEM_PATH] [--ca CA_FILE] [--server-cert SERVER_PEM]\n"
+                         "             [--reconnect-attempts N] [--reconnect-interval SECS]\n"
+                         "  --reconnect-attempts N    max consecutive reconnect failures before exit (default 10)\n"
+                         "  --reconnect-interval SECS seconds between reconnect attempts (default 60)\n"
                          "  All options can be set in the single config file (key=value); CLI overrides.\n";
             return 0;
         }
@@ -82,6 +85,42 @@ int main(int argc, char *argv[])
             tlsServerCertPath = argv[++i];
         else if (arg == "--verbose")
             opts.verbose = true;
+        else if (arg == "--reconnect-attempts" && i + 1 < argc)
+        {
+            try
+            {
+                unsigned long n = std::stoul(argv[++i]);
+                if (n < 1 || n > 1000)
+                {
+                    std::cerr << "ntm-client: reconnect-attempts must be 1-1000\n";
+                    return 1;
+                }
+                opts.reconnectMaxAttempts = static_cast<unsigned>(n);
+            }
+            catch (const std::exception &)
+            {
+                std::cerr << "ntm-client: invalid reconnect-attempts value\n";
+                return 1;
+            }
+        }
+        else if (arg == "--reconnect-interval" && i + 1 < argc)
+        {
+            try
+            {
+                unsigned long n = std::stoul(argv[++i]);
+                if (n < 1 || n > 3600)
+                {
+                    std::cerr << "ntm-client: reconnect-interval must be 1-3600\n";
+                    return 1;
+                }
+                opts.reconnectIntervalSec = static_cast<unsigned>(n);
+            }
+            catch (const std::exception &)
+            {
+                std::cerr << "ntm-client: invalid reconnect-interval value\n";
+                return 1;
+            }
+        }
         else if (arg == "--config" && i + 1 < argc)
             ++i;  // skip config path (already handled)
     }
@@ -115,8 +154,10 @@ int main(int argc, char *argv[])
     {
         char buf[512];
         std::snprintf(buf, sizeof(buf),
-            "ntm-client: effective settings (server=%s, port=%u, identity=%s, ca=%s, server-cert=%s)",
-            host.c_str(), static_cast<unsigned>(port), id, ca, sc);
+            "ntm-client: effective settings (server=%s, port=%u, identity=%s, ca=%s, server-cert=%s,"
+            " reconnect_max=%u, reconnect_interval_sec=%u)",
+            host.c_str(), static_cast<unsigned>(port), id, ca, sc,
+            opts.reconnectMaxAttempts, opts.reconnectIntervalSec);
         ntm::platform::ntmLog(ntm::platform::LogLevel::Info, daemonMode, buf);
     }
 

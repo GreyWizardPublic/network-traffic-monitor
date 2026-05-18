@@ -21,6 +21,8 @@ struct ClientConfig
     // Only queried when at least one LAN interface is present.
     std::string externalIpUrl{"http://checkip.amazonaws.com/"};
     unsigned externalIpTimeoutMs{5000};
+    unsigned reconnectMaxAttempts{10};
+    unsigned reconnectIntervalSec{60};
 };
 
 // Load from one config file (key=value, # comment). Returns defaults for missing keys. Returns false if file missing.

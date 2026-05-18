@@ -57,13 +57,19 @@ public:
                      std::string tlsServerCertPath = {},
                      std::size_t sendBufferBytes = 0,
                      std::string externalIpUrl = "http://checkip.amazonaws.com/",
-                     unsigned externalIpTimeoutMs = 5000)
+                     unsigned externalIpTimeoutMs = 5000,
+                     std::atomic<bool> *gRunning = nullptr,
+                     unsigned reconnectMaxAttempts = 10,
+                     unsigned reconnectIntervalSec = 60)
         : host_(std::move(host)), port_(port)
         , identityPath_(std::move(identityPath))
         , tlsCaPath_(std::move(tlsCaPath))
         , tlsServerCertPath_(std::move(tlsServerCertPath))
         , externalIpUrl_(std::move(externalIpUrl))
         , externalIpTimeoutMs_(externalIpTimeoutMs)
+        , reconnectMaxAttempts_(reconnectMaxAttempts)
+        , reconnectIntervalSec_(reconnectIntervalSec)
+        , g_runningPtr_(gRunning)
     {
         std::size_t bufSize =
             (sendBufferBytes >= kSendBufferMinBytes && sendBufferBytes <= kMaxIOBytes)
@@ -170,6 +176,11 @@ private:
     std::atomic<std::uint64_t> totalPcapDrop_{0};
     std::atomic<std::uint64_t> sendBufDrops_{0};
     mutable std::string      lastError_;
+    unsigned                 reconnectMaxAttempts_{10};
+    unsigned                 reconnectIntervalSec_{60};
+    unsigned                 reconnectFailures_{0};
+    std::chrono::steady_clock::time_point lastReconnectAttempt_{};
+    std::atomic<bool>       *g_runningPtr_{nullptr};
 
     platform::NetworkMonitor netMonitor_;
 
@@ -224,7 +235,37 @@ private:
                 std::lock_guard<std::mutex> connLock(connectionMutex_);
                 if (!platform::sockValid(fd_))
                 {
-                    if (!connectUnlocked()) continue;
+                    const auto now = std::chrono::steady_clock::now();
+                    const bool waitInterval = reconnectFailures_ > 0 &&
+                        std::chrono::duration_cast<std::chrono::seconds>(
+                            now - lastReconnectAttempt_).count()
+                            < static_cast<std::int64_t>(reconnectIntervalSec_);
+                    if (waitInterval) continue;
+
+                    lastReconnectAttempt_ = now;
+                    if (!connectUnlocked())
+                    {
+                        ++reconnectFailures_;
+                        std::cerr << "ntm-client: reconnect attempt " << reconnectFailures_
+                                  << "/" << reconnectMaxAttempts_ << " failed: "
+                                  << (lastError_.empty() ? "unknown" : lastError_) << "\n";
+                        if (reconnectFailures_ >= reconnectMaxAttempts_)
+                        {
+                            std::cerr << "ntm-client: server unreachable after "
+                                      << reconnectMaxAttempts_
+                                      << " attempt(s) — shutting down\n";
+                            if (g_runningPtr_) g_runningPtr_->store(false);
+                            runningSender_.store(false);
+                            return;
+                        }
+                        std::cerr << "ntm-client: next reconnect attempt in "
+                                  << reconnectIntervalSec_ << "s\n";
+                        continue;
+                    }
+                    if (reconnectFailures_ > 0)
+                        std::cerr << "ntm-client: reconnected successfully after "
+                                  << reconnectFailures_ << " failed attempt(s)\n";
+                    reconnectFailures_ = 0;
                 }
 
                 if (platform::sockValid(fd_) && netChanged)
@@ -586,19 +627,22 @@ int runClient(bool daemonMode, const ClientConfig &config)
         return 1;
     }
 
+    {
+        char rbuf[128];
+        std::snprintf(rbuf, sizeof(rbuf),
+            "ntm-client: reconnect policy: max %u attempt(s), interval %us",
+            config.reconnectMaxAttempts, config.reconnectIntervalSec);
+        platform::ntmLog(platform::LogLevel::Info, daemonMode, rbuf);
+    }
+
     ClientConnection connection(config.server, config.port,
                                 config.identityPath, config.tlsCaPath,
                                 config.tlsServerCertPath,
                                 config.sendBufferBytes,
-                                config.externalIpUrl, config.externalIpTimeoutMs);
-    if (!connection.connectOnce())
-    {
-        const std::string &err = connection.lastError();
-        platform::ntmLog(platform::LogLevel::Err, daemonMode,
-                         "ntm-client: failed to connect: " + (err.empty() ? "unknown" : err));
-        platform::cleanupPlatform();
-        return 1;
-    }
+                                config.externalIpUrl, config.externalIpTimeoutMs,
+                                &g_running,
+                                config.reconnectMaxAttempts,
+                                config.reconnectIntervalSec);
 
     // Enumerate capturable devices. Returns false only when pcap_findalldevs
     // itself errors (hard failure at startup); an empty result is valid and

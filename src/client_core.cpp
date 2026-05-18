@@ -311,6 +311,22 @@ static bool parseConfigLine(const std::string &key, const std::string &val,
         } catch (const std::exception &) {}
         return true;
     }
+    if (key == "reconnect_attempts")
+    {
+        try {
+            unsigned long n = std::stoul(v);
+            if (n >= 1 && n <= 1000) out.reconnectMaxAttempts = static_cast<unsigned>(n);
+        } catch (const std::exception &) {}
+        return true;
+    }
+    if (key == "reconnect_interval_sec")
+    {
+        try {
+            unsigned long n = std::stoul(v);
+            if (n >= 1 && n <= 3600) out.reconnectIntervalSec = static_cast<unsigned>(n);
+        } catch (const std::exception &) {}
+        return true;
+    }
     return false;
 }
 
