@@ -65,6 +65,7 @@ public:
             (sendBufferBytes >= kSendBufferMinBytes && sendBufferBytes <= kMaxIOBytes)
             ? sendBufferBytes : kSendBufferDefaultBytes;
         sendBuffer_.resize(bufSize);
+        flushBuffer_.resize(bufSize);
         contentEnd_ = 0;
 
         if (!tlsCaPath_.empty() || !tlsServerCertPath_.empty())
@@ -136,7 +137,8 @@ public:
 
 private:
     std::mutex               queueMutex_;
-    std::vector<char>        sendBuffer_;
+    std::vector<char>        sendBuffer_;   // sniffers write here (under queueMutex_)
+    std::vector<char>        flushBuffer_;  // sender reads from here (no lock needed)
     std::size_t              contentEnd_{0};
     std::condition_variable  queueCv_;
     std::atomic<bool>        runningSender_{false};
@@ -199,6 +201,9 @@ private:
                     if (!runningSender_.load()) break;
                     toSend = contentEnd_;
                     contentEnd_ = 0;
+                    // Swap buffers so sniffers can fill sendBuffer_ immediately
+                    // while the sender reads from flushBuffer_ without holding the lock.
+                    if (toSend > 0) std::swap(sendBuffer_, flushBuffer_);
                 }
 
                 const bool netChanged = netMonitor_.checkAndClear();
@@ -245,7 +250,7 @@ private:
                 }
 
                 if (toSend > 0 && platform::sockValid(fd_) &&
-                    !platform::writeExact(ssl_, fd_, sendBuffer_.data(), toSend))
+                    !platform::writeExact(ssl_, fd_, flushBuffer_.data(), toSend))
                     closeUnlocked();
             }
             catch (const std::exception &e)
