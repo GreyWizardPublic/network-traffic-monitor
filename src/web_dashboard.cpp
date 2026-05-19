@@ -201,13 +201,14 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
 
     std::string j;
     j.reserve(8192);
-    j += "{\n  \"window_start\": ";
-    j += std::to_string(windowEpoch);
-    j += ",\n  \"generated_at\": ";
-    j += std::to_string(nowEpoch);
+    j += "{\n  \"api_version\": 1";
     j += ",\n  \"server_version\": \"";
     j += kNtmVersion;
     j += "\"";
+    j += ",\n  \"window_start\": ";
+    j += std::to_string(windowEpoch);
+    j += ",\n  \"generated_at\": ";
+    j += std::to_string(nowEpoch);
 
     // Interfaces — unchanged
     j += ",\n  \"interfaces\": [";

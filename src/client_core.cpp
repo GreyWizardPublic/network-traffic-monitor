@@ -250,7 +250,7 @@ bool performClientAuth(void *sslVoid, std::uintptr_t rawFd,
     }
 
     std::uint8_t result = 0xff;
-    if (!platform::readExact(ssl, fd, &result, 1) || result != 0x00)
+    if (!platform::readExact(ssl, fd, &result, 1) || result != kAuthResultOk)
     {
         setErr("server rejected authentication (key not in server allowed list?)");
         std::cerr << "ntm-client: server rejected authentication\n";

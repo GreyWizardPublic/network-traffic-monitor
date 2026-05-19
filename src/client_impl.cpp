@@ -229,7 +229,8 @@ private:
                 const auto nowEpochSec = std::chrono::duration_cast<std::chrono::seconds>(
                     std::chrono::steady_clock::now().time_since_epoch()).count();
                 const bool healthDue =
-                    (nowEpochSec - lastHealthReportSec_.load(std::memory_order_relaxed)) >= 30;
+                    (nowEpochSec - lastHealthReportSec_.load(std::memory_order_relaxed)) >=
+                    static_cast<std::int64_t>(kHealthIntervalSec);
                 if (toSend == 0 && !netChanged && !healthDue) continue;
 
                 std::lock_guard<std::mutex> connLock(connectionMutex_);
@@ -270,7 +271,7 @@ private:
 
                 if (platform::sockValid(fd_) && netChanged)
                 {
-                    if (nowEpochSec - lastReannounceTime_ >= 30)
+                    if (nowEpochSec - lastReannounceTime_ >= static_cast<std::int64_t>(kAnnounceRateLimitSec))
                     {
                         lastReannounceTime_ = nowEpochSec;
                         if (!sendAnnounce(ssl_, fd_)) closeUnlocked();

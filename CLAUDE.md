@@ -25,3 +25,23 @@ dashboard and highlights any client whose version differs from the server's.
 4. **Bug-fix-only commits** (like race fixes or display glitches) are PATCH bumps.
 5. Current version is in `src/version.hpp`. Always read it before deciding the
    next version number — do not rely on memory or git log alone.
+
+## Protocol Governance
+
+Two protocol documents in `docs/` are the authoritative specifications:
+
+| Document | Covers |
+|---|---|
+| `docs/wire-protocol.md` | ntm-client ↔ ntm-server TCP ingestion channel |
+| `docs/api-protocol.md` | ntm-server ↔ dashboard clients HTTPS API |
+
+### Rules
+
+1. **Update the relevant protocol doc before the commit that changes either side.**
+   Never change a message format, field, or endpoint without updating the doc first.
+2. **Bump the protocol version** (`kWireProtoVersion` or `api_version`) when the
+   change classification in the doc requires it.
+3. **Both protocols are independent.** A wire-protocol change does not require an
+   API version bump, and vice versa — unless the same commit touches both sides.
+4. **The ntm software version bump** (§ Versioning above) still applies on top of
+   any protocol doc update.

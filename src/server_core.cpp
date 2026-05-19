@@ -88,8 +88,8 @@ struct ServerConfig
     std::size_t max_ifaces_per_client{256};
     std::size_t max_entity_lines_in_summary{50000};
     std::size_t max_snapshot_entries_for_print{200000};
-    std::size_t max_iface_len{64};
-    std::size_t max_ip_len{50};
+    std::size_t max_iface_len{kMaxIfaceLabelLen};
+    std::size_t max_ip_len{kMaxIpLabelLen};
     std::size_t max_concurrent_connections{1000};
     std::size_t max_connections_per_ip{20};
     unsigned idle_timeout_seconds{300};
@@ -236,8 +236,8 @@ bool parseDataLine(const std::string &line, PacketMeta &out,
         !nextTok(db, de) || !nextTok(bb, be))
         return false;
 
-    if (maxIfaceLen == 0) maxIfaceLen = 64;
-    if (maxIpLen == 0) maxIpLen = 50;
+    if (maxIfaceLen == 0) maxIfaceLen = kMaxIfaceLabelLen;
+    if (maxIpLen == 0) maxIpLen = kMaxIpLabelLen;
     const std::size_t ifaceLen = static_cast<std::size_t>(ie - ib);
     const std::size_t srcLen   = static_cast<std::size_t>(se - sb);
     const std::size_t dstLen   = static_cast<std::size_t>(de - db);
@@ -907,12 +907,10 @@ void connectionThread(int clientFd,
     clientId = verifyClientAuth(ssl, clientFd, allowedKeys);
     if (clientId.empty())
     {
-        std::uint8_t reject = 0x01;
-        writeExact(ssl, clientFd, &reject, 1);
+        writeExact(ssl, clientFd, &kAuthResultReject, 1);
         return;
     }
-    std::uint8_t ok = 0x00;
-    if (!writeExact(ssl, clientFd, &ok, 1))
+    if (!writeExact(ssl, clientFd, &kAuthResultOk, 1))
         return;
 
     // RAII guard: on any exit from this scope (normal, idle timeout, exception),
@@ -1048,7 +1046,7 @@ void connectionThread(int clientFd,
                 // Rate-limited to one accepted X per 30 s to resist replay / flood.
                 auto nowSecX = std::chrono::duration_cast<std::chrono::seconds>(
                     std::chrono::steady_clock::now().time_since_epoch()).count();
-                if (nowSecX - lastXLineSec >= 30)
+                if (nowSecX - lastXLineSec >= static_cast<std::int64_t>(kAnnounceRateLimitSec))
                 {
                     std::string extIp = line.substr(2);
                     while (!extIp.empty() && (extIp.back() == '\r' || extIp.back() == ' '))
