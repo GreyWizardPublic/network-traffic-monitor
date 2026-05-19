@@ -39,6 +39,8 @@ actor NTMClient {
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         if !config.bearerToken.isEmpty {
             req.setValue("Bearer \(config.bearerToken)", forHTTPHeaderField: "Authorization")
+        } else if let token = KeychainService.loadToken(for: base.absoluteString) {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
 
         let data: Data

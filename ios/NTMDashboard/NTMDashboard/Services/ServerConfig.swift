@@ -9,7 +9,7 @@ struct ServerConfig: Codable {
 
     static let `default` = ServerConfig(
         host: "",
-        port: 5556,
+        port: 8443,
         bearerToken: "",
         pinnedCertData: nil,
         pollingIntervalSec: 5

@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 struct SettingsView: View {
     @Environment(SettingsViewModel.self) private var vm
     @Environment(DashboardViewModel.self) private var dashVM
+    @Environment(AuthViewModel.self) private var authVM
     @State private var showCertPicker = false
 
     var body: some View {
@@ -17,7 +18,7 @@ struct SettingsView: View {
                     HStack {
                         Text("Port")
                         Spacer()
-                        TextField("5556", value: $vm.config.port, format: .number)
+                        TextField("8443", value: $vm.config.port, format: .number)
                             .multilineTextAlignment(.trailing)
                             .keyboardType(.numberPad)
                     }
@@ -57,6 +58,13 @@ struct SettingsView: View {
                     Button("Save & reconnect") {
                         vm.save()
                         Task { await dashVM.applyNewConfig(vm.config) }
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+
+                Section {
+                    Button("Sign out", role: .destructive) {
+                        Task { await authVM.logout() }
                     }
                     .frame(maxWidth: .infinity)
                 }
