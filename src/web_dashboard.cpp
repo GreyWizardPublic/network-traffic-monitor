@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <deque>
 #include <mutex>
 #include <string>
@@ -133,6 +134,24 @@ static std::string jsonGetString(const std::string &json, const std::string &key
     return {};
 }
 
+// Extract session token from Authorization: Bearer header or ntm_session cookie.
+static std::string sessionFromRequest(const httplib::Request &req)
+{
+    auto auth = req.get_header_value("Authorization");
+    if (auth.size() > 7 && auth.substr(0, 7) == "Bearer ")
+        return auth.substr(7);
+    auto cookie = req.get_header_value("Cookie");
+    const std::string prefix = "ntm_session=";
+    auto pos = cookie.find(prefix);
+    if (pos != std::string::npos)
+    {
+        auto start = pos + prefix.size();
+        auto end   = cookie.find(';', start);
+        return cookie.substr(start, end == std::string::npos ? std::string::npos : end - start);
+    }
+    return {};
+}
+
 // ---------------------------------------------------------------------------
 // Summary JSON builder
 // ---------------------------------------------------------------------------
@@ -201,7 +220,7 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
 
     std::string j;
     j.reserve(8192);
-    j += "{\n  \"api_version\": 1";
+    j += "{\n  \"api_version\": 2";
     j += ",\n  \"server_version\": \"";
     j += kNtmVersion;
     j += "\"";
@@ -442,6 +461,125 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
     j += "\n}\n";
     return j;
 }
+
+// ---------------------------------------------------------------------------
+// Embedded login/registration HTML/CSS/JS (WebAuthn passkey flow)
+// ---------------------------------------------------------------------------
+
+static const char kLoginHtml[] = R"HTML(<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NTM Dashboard &#8212; Sign In</title>
+<style>
+*{box-sizing:border-box}
+body{font-family:monospace;background:#0e0e14;color:#ccc;margin:0;display:flex;
+  justify-content:center;align-items:center;min-height:100vh;padding:16px}
+.card{background:#111118;border:1px solid #252535;border-radius:6px;padding:28px 32px;
+  width:100%;max-width:400px}
+h1{font-size:1.05em;color:#7af;margin:0 0 20px}
+.section{color:#7af;font-size:0.78em;text-transform:uppercase;letter-spacing:.06em;margin:20px 0 8px}
+.lbl{font-size:0.8em;color:#888;margin-bottom:4px}
+input[type=password],input[type=text]{background:#0e0e14;border:1px solid #3a3a5a;color:#ccc;
+  padding:7px 10px;font-family:monospace;font-size:0.85em;border-radius:3px;width:100%;
+  margin-bottom:10px;outline:none}
+input:focus{border-color:#7af}
+button{font-family:monospace;font-size:0.82em;padding:7px 16px;border-radius:3px;
+  border:1px solid #3a3a5a;cursor:pointer;outline:none;width:100%}
+.btn-p{background:#1a1a2e;color:#7af;border-color:#4a4a7a}
+.btn-p:hover{background:#222240;color:#adf}
+.btn-s{background:#111118;color:#888;border-color:#252535;margin-top:8px}
+.btn-s:hover{color:#ccc}
+button:disabled{opacity:0.5;cursor:default}
+.divider{border:none;border-top:1px solid #252535;margin:20px 0}
+#msg{font-size:0.8em;margin-top:12px;min-height:1.2em}
+.err{color:#c44}.ok{color:#4c4}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Network Traffic Monitor</h1>
+  <div class="section">Sign In</div>
+  <button class="btn-p" id="bl" onclick="doLogin()">Sign in with a passkey</button>
+  <hr class="divider">
+  <div class="section">Register a New Device</div>
+  <div class="lbl">Admin password</div>
+  <input type="password" id="pwd" placeholder="Admin password" autocomplete="off">
+  <div class="lbl">Device label (optional)</div>
+  <input type="text" id="lbl" placeholder="e.g. iPhone 15" maxlength="64">
+  <button class="btn-s" id="br" onclick="doRegister()">Register this device</button>
+  <div id="msg"></div>
+</div>
+<script>
+function msg(t,e){const m=document.getElementById('msg');m.textContent=t;m.className=e?'err':t?'ok':'';}
+function b2b(s){
+  s=s.replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';
+  const b=atob(s),a=new Uint8Array(b.length);
+  for(let i=0;i<b.length;i++)a[i]=b.charCodeAt(i);return a.buffer;
+}
+function bb2(b){
+  const a=new Uint8Array(b),s=Array.from(a,x=>String.fromCharCode(x)).join('');
+  return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
+function hex(b){return Array.from(new Uint8Array(b),x=>x.toString(16).padStart(2,'0')).join('');}
+async function doLogin(){
+  msg('','');const btn=document.getElementById('bl');btn.disabled=true;
+  try{
+    const r1=await fetch('/auth/login/begin',{cache:'no-store'});
+    const d=await r1.json();if(d.error)throw new Error(d.error);
+    const ac=(d.credential_ids||[]).map(id=>({type:'public-key',id:b2b(id)}));
+    const a=await navigator.credentials.get({publicKey:{
+      challenge:b2b(d.challenge),rpId:d.rp_id,allowCredentials:ac,
+      userVerification:'preferred',timeout:60000}});
+    const r2=await fetch('/auth/login/complete',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({session_key:d.session_key,
+        credential_id:bb2(a.rawId),
+        authenticator_data:bb2(a.response.authenticatorData),
+        client_data_json:bb2(a.response.clientDataJSON),
+        signature:bb2(a.response.signature)})});
+    const d2=await r2.json();if(!r2.ok||d2.error)throw new Error(d2.error||'Auth failed');
+    msg('Signed in — redirecting…',false);
+    setTimeout(()=>location.href='/',800);
+  }catch(e){msg(e.message||String(e),true);btn.disabled=false;}
+}
+async function doRegister(){
+  msg('','');const btn=document.getElementById('br');btn.disabled=true;
+  const pw=document.getElementById('pwd').value;
+  const lb=document.getElementById('lbl').value||'My Device';
+  if(!pw){msg('Admin password required.',true);btn.disabled=false;return;}
+  try{
+    const r1=await fetch('/auth/register/begin',{cache:'no-store'});
+    const d=await r1.json();if(d.error)throw new Error(d.error);
+    const pwb=new TextEncoder().encode(pw);
+    const bk=await crypto.subtle.importKey('raw',pwb,'PBKDF2',false,['deriveBits']);
+    const db=await crypto.subtle.deriveBits({name:'PBKDF2',salt:b2b(d.pbkdf2_salt),
+      iterations:d.pbkdf2_iterations,hash:'SHA-256'},bk,256);
+    const hk=await crypto.subtle.importKey('raw',db,{name:'HMAC',hash:'SHA-256'},false,['sign']);
+    const proof=hex(await crypto.subtle.sign('HMAC',hk,b2b(d.admin_nonce)));
+    const cred=await navigator.credentials.create({publicKey:{
+      challenge:b2b(d.challenge),
+      rp:{id:d.rp_id,name:d.rp_name},
+      user:{id:b2b(d.user_id),name:'admin',displayName:'Admin'},
+      pubKeyCredParams:[{type:'public-key',alg:-7}],
+      authenticatorSelection:{authenticatorAttachment:'platform',
+        residentKey:'preferred',requireResidentKey:false,userVerification:'preferred'},
+      timeout:60000,attestation:'none'}});
+    const r2=await fetch('/auth/register/complete',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({session_key:d.session_key,admin_proof:proof,
+        attestation_object:bb2(cred.response.attestationObject),
+        client_data_json:bb2(cred.response.clientDataJSON),label:lb})});
+    const d2=await r2.json();if(!r2.ok||d2.error)throw new Error(d2.error||'Registration failed');
+    msg('Device registered — you can now sign in.',false);
+  }catch(e){msg(e.message||String(e),true);}
+  btn.disabled=false;
+}
+</script>
+</body>
+</html>
+)HTML";
 
 // ---------------------------------------------------------------------------
 // Embedded dashboard HTML/CSS/JS
@@ -810,18 +948,13 @@ void webServerThread(httplib::SSLServer &svr,
     // Separate, much stricter limiter for the admin purge endpoint.
     WebRateLimiter adminRateLimiter(5);
 
-    // Pre-routing: LAN check, rate limit, optional bearer token.
+    // Pre-routing: authentication, rate limit, security headers.
     svr.set_pre_routing_handler(
         [&](const httplib::Request &req, httplib::Response &res) -> httplib::Server::HandlerResponse
         {
-            const std::string &ip = req.remote_addr;
-            if (!isLanIP(ip))
-            {
-                res.status = 403;
-                res.set_content("{\"error\":\"forbidden: LAN clients only\"}\n",
-                                "application/json");
-                return httplib::Server::HandlerResponse::Handled;
-            }
+            const std::string &ip   = req.remote_addr;
+            const std::string &path = req.path;
+
             if (!rateLimiter.tryAcquire(ip))
             {
                 res.status = 429;
@@ -829,29 +962,66 @@ void webServerThread(httplib::SSLServer &svr,
                 res.set_content("{\"error\":\"rate limit exceeded\"}\n", "application/json");
                 return httplib::Server::HandlerResponse::Handled;
             }
-            if (!config.token.empty())
+
+            if (config.webauthn && config.webauthn->enabled())
             {
-                auto auth = req.get_header_value("Authorization");
-                const std::string expected = "Bearer " + config.token;
-                // Constant-time compare (same approach as the admin password
-                // check) so the bearer token can't be recovered byte-by-byte
-                // via response-timing on equal-length guesses.
-                const bool authOk =
-                    (auth.size() == expected.size()) &&
-                    (CRYPTO_memcmp(auth.data(), expected.data(),
-                                   expected.size()) == 0);
-                if (!authOk)
+                // WebAuthn mode: passkey session required for all paths except the
+                // auth/login paths themselves (Cloudflare Tunnel connects from loopback;
+                // no source-IP restriction needed).
+                bool isAuthPath = (path == "/login") ||
+                                  (path.size() >= 6 && path.substr(0, 6) == "/auth/") ||
+                                  (path == "/.well-known/apple-app-site-association");
+                if (!isAuthPath)
                 {
-                    res.status = 401;
-                    res.set_header("WWW-Authenticate", "Bearer realm=\"ntm\"");
-                    res.set_content("{\"error\":\"unauthorized\"}\n", "application/json");
-                    return httplib::Server::HandlerResponse::Handled;
+                    std::string token = sessionFromRequest(req);
+                    if (token.empty() || !config.webauthn->isValidSession(token))
+                    {
+                        bool isApiReq = (path.size() >= 4 && path.substr(0, 4) == "/api") ||
+                                        req.method != "GET";
+                        if (isApiReq)
+                        {
+                            res.status = 401;
+                            res.set_content("{\"error\":\"authentication required\"}\n",
+                                            "application/json");
+                        }
+                        else
+                        {
+                            res.status = 302;
+                            res.set_header("Location", "/login");
+                        }
+                        return httplib::Server::HandlerResponse::Handled;
+                    }
                 }
             }
+            else
+            {
+                // Legacy mode: LAN-only + optional bearer token.
+                if (!isLanIP(ip))
+                {
+                    res.status = 403;
+                    res.set_content("{\"error\":\"forbidden: LAN clients only\"}\n",
+                                    "application/json");
+                    return httplib::Server::HandlerResponse::Handled;
+                }
+                if (!config.token.empty())
+                {
+                    auto auth = req.get_header_value("Authorization");
+                    const std::string expected = "Bearer " + config.token;
+                    const bool authOk =
+                        (auth.size() == expected.size()) &&
+                        (CRYPTO_memcmp(auth.data(), expected.data(), expected.size()) == 0);
+                    if (!authOk)
+                    {
+                        res.status = 401;
+                        res.set_header("WWW-Authenticate", "Bearer realm=\"ntm\"");
+                        res.set_content("{\"error\":\"unauthorized\"}\n", "application/json");
+                        return httplib::Server::HandlerResponse::Handled;
+                    }
+                }
+            }
+
             // Security headers on every response.
             res.set_header("X-Content-Type-Options", "nosniff");
-            // The dashboard uses inline <style> and <script> blocks; both must be
-            // permitted explicitly — default-src 'self' alone would block them.
             res.set_header("Content-Security-Policy",
                            "default-src 'self'; "
                            "script-src 'self' 'unsafe-inline'; "
@@ -864,8 +1034,18 @@ void webServerThread(httplib::SSLServer &svr,
         res.set_content(kDashboardHtml, "text/html; charset=utf-8");
     });
 
-    // GET /admin — embedded admin page (only registered when admin password is configured)
-    if (!config.admin_password.empty())
+    // GET /login — passkey login/registration page (WebAuthn mode only)
+    if (config.webauthn && config.webauthn->enabled())
+    {
+        svr.Get("/login", [](const httplib::Request &, httplib::Response &res) {
+            res.set_content(kLoginHtml, "text/html; charset=utf-8");
+        });
+    }
+
+    // GET /admin — embedded admin page
+    const bool adminAvailable = !config.admin_password.empty() ||
+                                 (config.webauthn && config.webauthn->enabled());
+    if (adminAvailable)
     {
         svr.Get("/admin", [](const httplib::Request &, httplib::Response &res) {
             res.set_content(kAdminHtml, "text/html; charset=utf-8");
@@ -881,8 +1061,8 @@ void webServerThread(httplib::SSLServer &svr,
                             "application/json");
         });
 
-    // POST /api/admin/purge — erase one client's data (only registered when password is set)
-    if (!config.admin_password.empty())
+    // POST /api/admin/purge — erase one client's data
+    if (adminAvailable)
     {
         svr.Post("/api/admin/purge",
             [&stats, &config, &adminRateLimiter](const httplib::Request &req,
@@ -899,32 +1079,43 @@ void webServerThread(httplib::SSLServer &svr,
                     return;
                 }
 
-                // Parse JSON body for password and client fields.
+                // Parse JSON body.
                 const std::string &body = req.body;
-                std::string password = jsonGetString(body, "password");
                 std::string clientName = jsonGetString(body, "client");
 
-                if (password.empty() || clientName.empty())
+                if (clientName.empty())
                 {
                     res.status = 400;
-                    res.set_content("{\"error\":\"bad request: password and client required\"}\n",
+                    res.set_content("{\"error\":\"bad request: client field required\"}\n",
                                     "application/json");
                     return;
                 }
 
-                // Constant-time password comparison to prevent timing side-channels.
-                const std::string &stored = config.admin_password;
-                bool pwdOk = (password.size() == stored.size()) &&
-                             (CRYPTO_memcmp(password.data(), stored.data(), stored.size()) == 0);
-                if (!pwdOk)
+                // In legacy mode the request body must contain the admin password.
+                if (!config.webauthn || !config.webauthn->enabled())
                 {
-                    serverLog(LogLevel::Warn,
-                              "ntm-server: admin purge REJECTED from %s (wrong password, client='%s')",
-                              ip.c_str(), clientName.c_str());
-                    res.status = 401;
-                    res.set_content("{\"error\":\"unauthorized\"}\n", "application/json");
-                    return;
+                    std::string password = jsonGetString(body, "password");
+                    if (password.empty())
+                    {
+                        res.status = 400;
+                        res.set_content("{\"error\":\"bad request: password required\"}\n",
+                                        "application/json");
+                        return;
+                    }
+                    const std::string &stored = config.admin_password;
+                    bool pwdOk = (password.size() == stored.size()) &&
+                                 (CRYPTO_memcmp(password.data(), stored.data(), stored.size()) == 0);
+                    if (!pwdOk)
+                    {
+                        serverLog(LogLevel::Warn,
+                                  "ntm-server: admin purge REJECTED from %s (wrong password, client='%s')",
+                                  ip.c_str(), clientName.c_str());
+                        res.status = 401;
+                        res.set_content("{\"error\":\"unauthorized\"}\n", "application/json");
+                        return;
+                    }
                 }
+                // In WebAuthn mode: session already verified by pre-routing handler.
 
                 // Resolve display name → hex client ID.
                 // Try nickname reverse lookup first, then accept a raw 64-char hex ID directly.
@@ -967,6 +1158,111 @@ void webServerThread(httplib::SSLServer &svr,
                 resp += "\",\"message\":\"client data purged\"}\n";
                 res.set_content(resp, "application/json");
             });
+    }
+
+    // WebAuthn authentication endpoints (only registered when WebAuthn is enabled).
+    if (config.webauthn && config.webauthn->enabled())
+    {
+        // GET /auth/register/begin — server returns challenge + PBKDF2 params
+        svr.Get("/auth/register/begin",
+            [&config](const httplib::Request &, httplib::Response &res) {
+                res.set_header("Cache-Control", "no-store");
+                std::string key;
+                res.set_content(config.webauthn->beginRegistration(key), "application/json");
+            });
+
+        // POST /auth/register/complete — verify admin proof + WebAuthn credential
+        svr.Post("/auth/register/complete",
+            [&config, &adminRateLimiter](const httplib::Request &req, httplib::Response &res) {
+                if (!adminRateLimiter.tryAcquire(req.remote_addr))
+                {
+                    res.status = 429;
+                    res.set_header("Retry-After", "60");
+                    res.set_content("{\"error\":\"rate limit exceeded\"}\n", "application/json");
+                    return;
+                }
+                const std::string &b = req.body;
+                std::string sessionKey = jsonGetString(b, "session_key");
+                std::string proof      = jsonGetString(b, "admin_proof");
+                std::string attObj     = jsonGetString(b, "attestation_object");
+                std::string cdJson     = jsonGetString(b, "client_data_json");
+                std::string label      = jsonGetString(b, "label");
+                if (sessionKey.empty() || proof.empty() || attObj.empty() || cdJson.empty())
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"missing required fields\"}\n", "application/json");
+                    return;
+                }
+                std::string err = config.webauthn->completeRegistration(
+                    sessionKey, proof, attObj, cdJson, label);
+                if (!err.empty())
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"" + jsonEsc(err) + "\"}\n", "application/json");
+                    return;
+                }
+                res.set_content("{\"ok\":true}\n", "application/json");
+            });
+
+        // GET /auth/login/begin — server returns WebAuthn challenge
+        svr.Get("/auth/login/begin",
+            [&config](const httplib::Request &, httplib::Response &res) {
+                res.set_header("Cache-Control", "no-store");
+                std::string key;
+                res.set_content(config.webauthn->beginAuthentication(key), "application/json");
+            });
+
+        // POST /auth/login/complete — verify assertion, set session cookie + return Bearer token
+        svr.Post("/auth/login/complete",
+            [&config](const httplib::Request &req, httplib::Response &res) {
+                const std::string &b = req.body;
+                std::string sessionKey = jsonGetString(b, "session_key");
+                std::string credId     = jsonGetString(b, "credential_id");
+                std::string authData   = jsonGetString(b, "authenticator_data");
+                std::string cdJson     = jsonGetString(b, "client_data_json");
+                std::string sig        = jsonGetString(b, "signature");
+                if (sessionKey.empty() || credId.empty() || authData.empty() ||
+                    cdJson.empty()      || sig.empty())
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"missing required fields\"}\n", "application/json");
+                    return;
+                }
+                std::string errOut;
+                std::string token = config.webauthn->completeAuthentication(
+                    sessionKey, credId, authData, cdJson, sig, errOut);
+                if (token.empty())
+                {
+                    res.status = 401;
+                    res.set_content("{\"error\":\"" + jsonEsc(errOut) + "\"}\n", "application/json");
+                    return;
+                }
+                // Browser: HttpOnly cookie. iOS app: Bearer token in JSON body.
+                res.set_header("Set-Cookie",
+                    "ntm_session=" + token +
+                    "; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=86400");
+                res.set_content("{\"ok\":true,\"token\":\"" + token + "\"}\n", "application/json");
+            });
+
+        // POST /auth/logout — invalidate session
+        svr.Post("/auth/logout",
+            [&config](const httplib::Request &req, httplib::Response &res) {
+                std::string token = sessionFromRequest(req);
+                if (!token.empty()) config.webauthn->invalidateSession(token);
+                res.set_header("Set-Cookie",
+                    "ntm_session=; HttpOnly; Secure; SameSite=Strict; Path=/; "
+                    "Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT");
+                res.set_content("{\"ok\":true}\n", "application/json");
+            });
+
+        // GET /.well-known/apple-app-site-association — for iOS passkey domain association
+        if (!config.webauthn->aasaJson().empty())
+        {
+            svr.Get("/.well-known/apple-app-site-association",
+                [&config](const httplib::Request &, httplib::Response &res) {
+                    res.set_content(config.webauthn->aasaJson(), "application/json");
+                });
+        }
     }
 
     // All other paths → 404

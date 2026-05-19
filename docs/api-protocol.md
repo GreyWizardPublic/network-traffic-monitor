@@ -1,7 +1,7 @@
-# NTM Dashboard API Protocol — Specification v1
+# NTM Dashboard API Protocol — Specification v2
 
-**API version:** 1  
-**Software version where introduced:** ntm 1.2.0  
+**API version:** 2  
+**Software version where introduced:** ntm 1.3.0  
 **File owner:** This document is the authoritative specification for the HTTPS
 API between `ntm-server` and any dashboard client (iOS app, web browser, or
 third-party tool). Update it **before** changing any endpoint, field, or
@@ -28,15 +28,34 @@ This API is **independent** of the client data-ingestion wire protocol (see
 |---|---|
 | Protocol | HTTPS only; TLS 1.2 minimum |
 | Default port | 8443 (configurable via `web_port`) |
-| Network scope | **LAN IPs only.** The server rejects requests from non-RFC-1918 / non-loopback source addresses with `403`. |
-| Certificate | Same cert/key as the client ingestion port. Clients may pin by SHA-256 fingerprint. |
+| Network scope | **WebAuthn mode**: no source-IP restriction (authenticated by passkey session). **Legacy mode**: LAN IPs only; requests from non-RFC-1918 / non-loopback addresses → `403`. |
+| Certificate | Same cert/key as the client ingestion port. |
 
 ---
 
 ## 3. Authentication
 
-Bearer token authentication is **optional**. When a token is configured on the
-server (`web_token`), every request must include:
+Two authentication modes exist depending on server configuration:
+
+### 3a. WebAuthn passkey mode (recommended)
+
+Enabled when `webauthn_rp_id` is set in the server config. All endpoints
+(except `/login`, `/auth/*`, and `/.well-known/apple-app-site-association`)
+require a valid session.
+
+**Browser:** session established via the `/login` page; server sets an
+`HttpOnly; Secure; SameSite=Strict` cookie `ntm_session=<token>`.
+
+**iOS app:** session token returned as JSON from `/auth/login/complete`;
+sent in subsequent requests as `Authorization: Bearer <token>`.
+
+Unauthenticated browser GET requests → `302` redirect to `/login`.  
+Unauthenticated API requests → `401`.
+
+### 3b. Legacy bearer-token mode
+
+If `webauthn_rp_id` is **not** set and `web_token` is configured, every
+request must include:
 
 ```
 Authorization: Bearer <token>
@@ -44,10 +63,7 @@ Authorization: Bearer <token>
 
 Missing or incorrect token → `401` with `WWW-Authenticate: Bearer realm="ntm"`.
 
-When no token is configured the API is accessible to any LAN client.
-
-**iOS app:** The bearer token is stored in the iOS Keychain, never in
-`UserDefaults` or application logs.
+When neither is configured the API is accessible to any LAN client.
 
 ---
 
@@ -55,7 +71,8 @@ When no token is configured the API is accessible to any LAN client.
 
 | Endpoint group | Limit |
 |---|---|
-| All endpoints | 60 requests / IP / minute |
+| All endpoints | 30 requests / IP / minute |
+| `POST /auth/register/complete` | 5 requests / IP / minute (admin rate limit) |
 | `POST /api/admin/purge` | 5 requests / IP / minute |
 
 Exceeded → `429` with `Retry-After: 60`.
@@ -67,7 +84,7 @@ Exceeded → `429` with `Retry-After: 60`.
 Every response from `/api/summary` includes:
 
 ```json
-"api_version": 1
+"api_version": 2
 ```
 
 This integer identifies the API contract revision, independent of the ntm
@@ -90,6 +107,13 @@ software version (`server_version`).
 | Add a new endpoint | Bump `api_version`; old clients simply never call it |
 | Change a field's type or semantics | Breaking change; bump `api_version`; support old version in parallel for one release cycle |
 
+### Change log
+
+| Version | Change |
+|---|---|
+| 2 | Added WebAuthn passkey authentication; auth endpoints `/auth/*`; `/login` page; AASA endpoint. Bumped `api_version` field to `2`. |
+| 1 | Initial version (ntm 1.2.0) |
+
 ---
 
 ## 6. Common Response Conventions
@@ -111,9 +135,10 @@ All non-`200` responses return JSON regardless of endpoint:
 | Code | Meaning |
 |---|---|
 | `200` | Success |
+| `302` | Redirect to `/login` (unauthenticated browser request, WebAuthn mode) |
 | `400` | Malformed request body (missing required fields) |
-| `401` | Missing or incorrect bearer token / admin password |
-| `403` | Request source IP is not in LAN range |
+| `401` | Authentication required or failed |
+| `403` | Request source IP is not in LAN range (legacy mode only) |
 | `404` | Resource not found (e.g. unknown client ID on purge) |
 | `429` | Rate limit exceeded |
 
@@ -126,7 +151,131 @@ Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; 
 
 ---
 
-## 7. Data Signals (read-only)
+## 7. Authentication Endpoints (WebAuthn mode only)
+
+These endpoints are always accessible without a session (they establish one).
+
+### `GET /auth/register/begin`
+
+Starts passkey registration. Returns a server challenge and PBKDF2 parameters
+for the admin proof step. The admin proof ensures that only the operator (who
+knows the admin password) can register new passkeys.
+
+**Response** (`200`):
+
+```json
+{
+  "session_key":       "<opaque pending-session token>",
+  "challenge":         "<base64url, 32 random bytes — WebAuthn challenge>",
+  "admin_nonce":       "<base64url, 32 random bytes — nonce for PBKDF2 proof>",
+  "pbkdf2_salt":       "<base64url, 16 bytes>",
+  "pbkdf2_iterations": 200000,
+  "rp_id":             "<RP ID, e.g. ntm.happyhomelives.me>",
+  "rp_name":           "<display name>",
+  "user_id":           "<base64url, 16 random bytes>"
+}
+```
+
+The client computes the admin proof as follows (never transmitting the password):
+
+```
+key   = PBKDF2-HMAC-SHA256(adminPassword, pbkdf2_salt, pbkdf2_iterations)  // 32 bytes
+proof = HMAC-SHA256(key, admin_nonce)  // 32 bytes, hex-encoded
+```
+
+### `POST /auth/register/complete`
+
+Completes passkey registration.
+
+**Request body** (`Content-Type: application/json`):
+
+```json
+{
+  "session_key":        "<from beginRegistration>",
+  "admin_proof":        "<64-hex-char HMAC-SHA256 proof>",
+  "attestation_object": "<base64url from WebAuthn response>",
+  "client_data_json":   "<base64url from WebAuthn response>",
+  "label":              "<human-readable device name>"
+}
+```
+
+**Success response** (`200`): `{"ok": true}`
+
+**Error responses:**
+
+| Status | Reason |
+|---|---|
+| `400` | Missing fields, session expired, challenge mismatch, wrong origin, CBOR parse error |
+| `400` | Admin proof incorrect |
+| `429` | Rate limit exceeded |
+
+### `GET /auth/login/begin`
+
+Starts passkey authentication. Returns a challenge and the list of registered
+credential IDs to pass to `navigator.credentials.get()`.
+
+**Response** (`200`):
+
+```json
+{
+  "session_key":    "<opaque pending-session token>",
+  "challenge":      "<base64url, 32 random bytes>",
+  "rp_id":          "<RP ID>",
+  "credential_ids": ["<base64url>", ...]
+}
+```
+
+### `POST /auth/login/complete`
+
+Verifies the WebAuthn assertion. On success, sets a session cookie for the
+browser and returns the Bearer token for the iOS app.
+
+**Request body** (`Content-Type: application/json`):
+
+```json
+{
+  "session_key":        "<from beginAuthentication>",
+  "credential_id":      "<base64url rawId from assertion>",
+  "authenticator_data": "<base64url from assertion response>",
+  "client_data_json":   "<base64url from assertion response>",
+  "signature":          "<base64url DER-encoded ECDSA-P256 signature>"
+}
+```
+
+**Success response** (`200`):
+
+```json
+{ "ok": true, "token": "<Bearer token for iOS app>" }
+```
+
+Browser: `Set-Cookie: ntm_session=<token>; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=86400`
+
+**Error response:** `401` with error message.
+
+### `POST /auth/logout`
+
+Invalidates the current session.
+
+**Response** (`200`): `{"ok": true}`. Clears the `ntm_session` cookie.
+
+---
+
+## 8. Static Endpoints
+
+### `GET /login`
+
+Serves the embedded passkey login and device-registration HTML page (WebAuthn
+mode only). Redirected to automatically when an unauthenticated browser visits
+any protected path.
+
+### `GET /.well-known/apple-app-site-association`
+
+Serves the Apple App Site Association JSON for iOS passkey domain binding.
+Only registered when `webauthn_ios_app_id` is configured.
+
+---
+
+## 9. Data Signals (read-only)
 
 ### `GET /api/summary`
 
@@ -142,8 +291,8 @@ recognise. New optional fields may be added at any `api_version` without a bump.
 
 ```json
 {
-  "api_version":    <integer>,      // API contract revision; starts at 1
-  "server_version": <string>,       // ntm software version, e.g. "1.2.0"
+  "api_version":    <integer>,      // API contract revision; currently 2
+  "server_version": <string>,       // ntm software version, e.g. "1.3.0"
   "window_start":   <integer>,      // unix epoch: start of the rolling stats window
   "generated_at":   <integer>,      // unix epoch: when this response was built
 
@@ -201,25 +350,26 @@ arrived yet. Clients must handle this without error.
 
 ---
 
-## 8. Control Signals (write)
+## 10. Control Signals (write)
 
 ### `POST /api/admin/purge`
 
-Permanently deletes all historical traffic data for one client. The admin UI
-is **only available** when the server has `admin_password_file` configured.
+Permanently deletes all historical traffic data for one client. Available when
+`admin_password_file` or `webauthn_rp_id` is configured.
 
 This action is **irreversible**. The iOS app must require explicit user
 confirmation before sending this request.
 
-**Authentication:** The request body contains the admin password (distinct from
-the bearer token). Both must be correct if both are configured.
+**Authentication:**
+- **WebAuthn mode**: session required (verified by pre-routing). No additional password needed.
+- **Legacy mode**: request body must contain `password` matching the configured admin password.
 
 **Request body** (`Content-Type: application/json`):
 
 ```json
 {
-  "password": "<admin password>",
-  "client":   "<display name or 64-hex-char client ID>"
+  "client":   "<display name or 64-hex-char client ID>",
+  "password": "<admin password>"   // required in legacy mode only
 }
 ```
 
@@ -237,19 +387,19 @@ the bearer token). Both must be correct if both are configured.
 
 | Status | Reason |
 |---|---|
-| `400` | `password` or `client` field missing from body |
-| `401` | Wrong admin password |
+| `400` | `client` field missing; or `password` missing (legacy mode) |
+| `401` | Wrong admin password (legacy mode) |
 | `404` | Client name / ID not found in current data |
 | `429` | Admin rate limit exceeded (5 req / IP / min) |
 
 ---
 
-## 9. Stability Contract
+## 11. Stability Contract
 
-- All fields documented in § 7 and § 8 are **stable at `api_version: 1`**.
+- All fields documented in § 9 and § 10 are **stable at `api_version: 2`**.
   No field will be removed or renamed without a version bump.
 - New **optional** fields may be added at any `api_version` without bumping;
   clients must tolerate extra fields.
-- Servers built before ntm 1.2.0 do not emit `api_version`. A missing
-  `api_version` field must be treated as version 1 by clients.
+- Servers at `api_version: 1` (ntm < 1.3.0) do not have WebAuthn endpoints.
+  A client receiving `api_version: 1` must not call `/auth/*`.
 - The protocol doc is updated **before** the commit that changes either side.

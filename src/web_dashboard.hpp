@@ -5,6 +5,7 @@
 // server_core populates WebConfig from ServerConfig at thread-launch time.
 
 #include "ntm_types.hpp"
+#include "webauthn.hpp"
 
 // httplib requires this macro to compile TLS support (OpenSSL backend).
 #ifndef CPPHTTPLIB_OPENSSL_SUPPORT
@@ -27,19 +28,21 @@ struct WebConfig
 {
     std::uint16_t port{8443};
     std::string   bind{"0.0.0.0"};
-    std::string   token;              // empty = no bearer-token auth
+    std::string   token;              // legacy bearer-token (ignored when webauthn is set)
     unsigned      rate_limit_rpm{30};
     std::size_t   max_entity_lines{50000};
     // Display-time nickname substitution: lowercase 64-hex pubkey → human-readable name.
     // The internal clientId in TrafficStats is always the raw hex; lookup happens only at
     // JSON serialisation so renaming a client never orphans historical data.
     std::unordered_map<std::string, std::string> client_nicknames;
-    // Admin purge password loaded from admin_password_file at startup.
-    // Empty string = admin endpoints disabled (silently return 404).
+    // Legacy admin purge password (plain-text path, pre-WebAuthn). Empty = disabled.
     std::string admin_password;
     // Shared registry for per-client health stats (pcap / send-buffer drop counters).
     // Null = health section omitted from the API response.
     std::shared_ptr<ClientRegistry> registry;
+
+    // WebAuthn RP (null = WebAuthn disabled; LAN-only + optional bearer token used instead).
+    std::shared_ptr<WebAuthnRP> webauthn;
 };
 
 // Thread function: registers HTTP routes on svr, then blocks in svr.listen().

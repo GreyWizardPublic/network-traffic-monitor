@@ -18,6 +18,7 @@ if(NOT WIN32)
     add_executable(ntm-server
         src/server_core.cpp
         src/web_dashboard.cpp
+        src/webauthn.cpp
     )
     target_compile_definitions(ntm-server PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
     target_link_libraries(ntm-server

@@ -76,25 +76,71 @@ This produces two binaries in `build/`:
 `ntm-server` includes an embedded HTTPS web dashboard. Open it in any browser
 on your LAN — no extra software required.
 
-> ### ⚠ Current limitation: no per-user authentication
->
-> The web dashboard currently has **no login, no password, and no bearer-token
-> requirement**. Any device on your LAN that can reach the server on the web
-> port (default `8443`) can view the dashboard.
->
-> The only access control in place is:
-> - **HTTPS** — encrypted transport, prevents passive eavesdropping.
-> - **LAN-only IP filter** — connections from RFC 1918 private address ranges
->   (`10.x.x.x`, `172.16–31.x.x`, `192.168.x.x`) and loopback only; all public
->   internet IPs are rejected at the application layer regardless of bind address.
->
-> **Planned enhancement:** per-user authentication (configurable bearer tokens,
-> and optionally mutual-TLS client certificates) will be added in a future release.
-> Until then, treat the dashboard as LAN-visible information.
->
-> **Do not expose `ntm-server` directly to the internet.** The LAN-only filter
-> is not user-configurable in this version; there is no brute-force protection.
-> Keep the server inside your LAN or behind a VPN.
+### Authentication modes
+
+**WebAuthn passkey authentication** (recommended for WAN/cloud access):
+
+Set `webauthn_rp_id` in the server config to enable. The dashboard requires a
+registered FIDO2 passkey (Face ID, Touch ID, Windows Hello, hardware key) to
+sign in. No password is ever sent over the network — only a cryptographic proof.
+
+Suitable for access through a [Cloudflare Tunnel](scripts/setup-cloudflare-tunnel.sh)
+or any HTTPS reverse proxy. The server does not need to be directly exposed to
+the internet.
+
+**Legacy LAN-only mode** (default, no config needed):
+
+When `webauthn_rp_id` is not set, the dashboard is accessible to any device on
+your LAN (RFC 1918 address ranges and loopback). Optionally add `web_token` for
+bearer-token protection.
+
+> **Do not expose ntm-server directly to the internet without WebAuthn enabled.**
+> The LAN-only filter is bypassed when requests arrive from localhost (e.g. via
+> a tunnel), so always pair a tunnel with WebAuthn authentication.
+
+### Setting up WebAuthn passkeys
+
+1. **Choose a domain** — passkeys require an HTTPS domain. Example: `ntm.example.com`
+   served through a Cloudflare Tunnel (see `scripts/setup-cloudflare-tunnel.sh`).
+
+2. **Create an admin password file** — this bootstraps the first passkey registration:
+
+   ```bash
+   echo 'your-strong-admin-password' > /etc/ntm-server/admin-password.txt
+   chmod 600 /etc/ntm-server/admin-password.txt
+   ```
+
+   > **Security note:** The plaintext password file is a temporary bootstrap mechanism.
+   > On first startup with `webauthn_admin_cred_file` configured, the server
+   > automatically derives a PBKDF2-HMAC-SHA256 hash, writes it to the cred file,
+   > then **zeros and unlinks** the plaintext file. After migration the plaintext
+   > file no longer exists.
+   >
+   > **Risk window:** If the server is compromised _between_ writing the plaintext
+   > file and the first startup, the password could be read. Mitigate by:
+   > - Creating the plaintext file immediately before starting the server.
+   > - Ensuring the file has mode `600` and is owned by the server user.
+   > - Deleting it manually if startup is delayed.
+
+3. **Add to your config file** (`/etc/ntm-server/ntm-server.conf`):
+
+   ```ini
+   webauthn_rp_id             = ntm.example.com
+   webauthn_rp_name           = NTM Dashboard
+   webauthn_credentials_file  = /etc/ntm-server/webauthn-credentials.json
+   webauthn_admin_cred_file   = /etc/ntm-server/webauthn-admin.json
+   admin_password_file        = /etc/ntm-server/admin-password.txt
+
+   # Optional: iOS App ID for passkey domain binding (requires Phase 4 iOS build)
+   # webauthn_ios_app_id = TEAMID1234.com.ntm.NTMDashboard
+   ```
+
+4. **Start the server.** It will migrate the admin password automatically.
+
+5. **Open `https://ntm.example.com/login`** in a browser and register your first
+   passkey using the admin password.
+
+6. **Sign in** with your registered passkey. Subsequent sign-ins are passwordless.
 
 ### Setting up TLS for the web dashboard
 

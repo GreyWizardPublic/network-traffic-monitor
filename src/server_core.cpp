@@ -5,7 +5,7 @@
 #include "proto_client_server.hpp"
 #include "ntm_types.hpp"
 #include "version.hpp"
-#include "web_dashboard.hpp"
+#include "web_dashboard.hpp"     // transitively includes webauthn.hpp
 // httplib.h comes transitively via web_dashboard.hpp
 
 #include <arpa/inet.h>
@@ -95,7 +95,19 @@ struct ServerConfig
     unsigned idle_timeout_seconds{300};
     unsigned max_d_lines_per_second_per_connection{20000};
     // Admin API: path to plain-text password file. Empty = admin endpoints disabled.
+    // On startup, if webauthn_admin_cred_file is also configured, the plaintext is
+    // migrated to PBKDF2 and this file is securely erased (idempotent).
     std::string admin_password_file;
+
+    // WebAuthn passkey authentication (FIDO2 / passkeys).
+    // Set webauthn_rp_id to enable; the other keys configure behaviour.
+    std::string webauthn_rp_id;              // RP ID, e.g. "ntm.happyhomelives.me"
+    std::string webauthn_rp_name;            // display name, e.g. "NTM Dashboard"
+    std::string webauthn_credentials_file;   // JSON file persisting registered passkeys
+    std::string webauthn_admin_cred_file;    // JSON file storing PBKDF2 admin credential
+    std::string webauthn_ios_app_id;         // "<TeamID>.<BundleID>" for AASA
+    std::string webauthn_allowed_origins;    // comma-separated; default: "https://<rpId>"
+    unsigned    webauthn_session_ttl_hours{24};
 };
 
 // Tracks concurrent connections per client IP to limit one host exhausting the connection pool.
@@ -525,6 +537,10 @@ static const std::set<std::string> &knownServerConfigKeys()
         "max_concurrent_connections", "max_connections_per_ip",
         "idle_timeout_seconds", "max_d_lines_per_second_per_connection",
         "admin_password_file",
+        "webauthn_rp_id", "webauthn_rp_name",
+        "webauthn_credentials_file", "webauthn_admin_cred_file",
+        "webauthn_ios_app_id", "webauthn_allowed_origins",
+        "webauthn_session_ttl_hours",
     };
     return keys;
 }
@@ -638,6 +654,18 @@ static ServerConfig loadServerConfig(const std::string &configPath, bool *ok = n
             else if (key == "admin_password_file")
             {
                 cfg.admin_password_file = val;
+            }
+            else if (key == "webauthn_rp_id")        { cfg.webauthn_rp_id = val; }
+            else if (key == "webauthn_rp_name")       { cfg.webauthn_rp_name = val; }
+            else if (key == "webauthn_credentials_file") { cfg.webauthn_credentials_file = val; }
+            else if (key == "webauthn_admin_cred_file")  { cfg.webauthn_admin_cred_file = val; }
+            else if (key == "webauthn_ios_app_id")    { cfg.webauthn_ios_app_id = val; }
+            else if (key == "webauthn_allowed_origins") { cfg.webauthn_allowed_origins = val; }
+            else if (key == "webauthn_session_ttl_hours")
+            {
+                u = std::stoul(val);
+                cfg.webauthn_session_ttl_hours =
+                    static_cast<unsigned>(std::min(720ul, std::max(1ul, u)));
             }
             else if (key == "aggregation_window_days")
             {
@@ -1547,8 +1575,38 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
     // read by the web thread at render time to resolve entity strings in the dashboard.
     auto clientRegistry = std::make_shared<ClientRegistry>();
 
-    // Load admin password from file (plain text, secured via filesystem permissions).
-    // If unconfigured or unreadable the admin web UI is silently disabled.
+    // ── WebAuthn RP initialisation ────────────────────────────────────────────
+    // Build the WebAuthnRP before the admin-password migration so it holds the
+    // credential store and admin-cred file paths ready for the migration step.
+    std::shared_ptr<WebAuthnRP> webAuthnRP;
+    if (!config.webauthn_rp_id.empty())
+    {
+        WebAuthnConfig waCfg;
+        waCfg.rpId              = config.webauthn_rp_id;
+        waCfg.rpName            = config.webauthn_rp_name.empty()
+                                      ? config.webauthn_rp_id : config.webauthn_rp_name;
+        waCfg.credentialsFile   = config.webauthn_credentials_file;
+        waCfg.adminCredFile     = config.webauthn_admin_cred_file;
+        waCfg.iosAppId          = config.webauthn_ios_app_id;
+        waCfg.sessionTtlHours   = config.webauthn_session_ttl_hours;
+        // Parse comma-separated allowed origins
+        if (!config.webauthn_allowed_origins.empty())
+        {
+            std::istringstream iss(config.webauthn_allowed_origins);
+            std::string tok;
+            while (std::getline(iss, tok, ','))
+            {
+                while (!tok.empty() && tok.front() == ' ') tok.erase(tok.begin());
+                while (!tok.empty() && tok.back()  == ' ') tok.pop_back();
+                if (!tok.empty()) waCfg.allowedOrigins.push_back(tok);
+            }
+        }
+        webAuthnRP = std::make_shared<WebAuthnRP>(std::move(waCfg));
+        serverLog(LogLevel::Warn, "ntm-server: WebAuthn enabled, RP ID = %s",
+                  config.webauthn_rp_id.c_str());
+    }
+
+    // ── Admin password: load (legacy) or migrate to PBKDF2 (WebAuthn path) ──
     std::string adminPassword;
     if (!config.admin_password_file.empty())
     {
@@ -1556,30 +1614,70 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
         if (!apf)
         {
             serverLog(LogLevel::Warn,
-                      "ntm-server: admin_password_file '%s' cannot be opened; admin UI disabled",
+                      "ntm-server: admin_password_file '%s' cannot be opened",
                       config.admin_password_file.c_str());
         }
         else
         {
             std::getline(apf, adminPassword);
-            // Trim trailing CR/LF/spaces
             while (!adminPassword.empty() &&
                    (adminPassword.back() == '\r' || adminPassword.back() == '\n' ||
                     adminPassword.back() == ' '))
                 adminPassword.pop_back();
+            apf.close();
+
             if (adminPassword.empty())
+            {
                 serverLog(LogLevel::Warn,
-                          "ntm-server: admin_password_file '%s' is empty; admin UI disabled",
+                          "ntm-server: admin_password_file '%s' is empty",
                           config.admin_password_file.c_str());
-            else
-                serverLog(LogLevel::Warn, "ntm-server: admin UI enabled (password loaded from %s)",
-                          config.admin_password_file.c_str());
+            }
+            else if (webAuthnRP && !config.webauthn_admin_cred_file.empty())
+            {
+                // Migrate plaintext → PBKDF2 hash, then securely erase the original file.
+                // SECURITY NOTE (see README): if the server is compromised before migration
+                // runs, the plaintext file is at risk. Consider pre-migrating manually.
+                std::string migErr = webAuthnRP->migrateAdminPassword(adminPassword);
+                if (!migErr.empty())
+                {
+                    serverLog(LogLevel::Warn,
+                              "ntm-server: admin password migration failed: %s", migErr.c_str());
+                }
+                else
+                {
+                    // Securely overwrite then unlink the plaintext password file.
+                    {
+                        std::fstream wipe(config.admin_password_file,
+                                          std::ios::in | std::ios::out | std::ios::binary);
+                        if (wipe)
+                        {
+                            wipe.seekg(0, std::ios::end);
+                            auto fsize = static_cast<std::size_t>(wipe.tellg());
+                            wipe.seekp(0, std::ios::beg);
+                            std::vector<char> zeros(fsize, '\0');
+                            wipe.write(zeros.data(), static_cast<std::streamsize>(fsize));
+                            wipe.flush();
+                        }
+                    }
+                    std::remove(config.admin_password_file.c_str());
+                    adminPassword.clear();
+                    serverLog(LogLevel::Warn,
+                              "ntm-server: admin password migrated to PBKDF2 and plaintext file erased");
+                }
+            }
+            else if (!webAuthnRP)
+            {
+                serverLog(LogLevel::Warn, "ntm-server: admin UI enabled (legacy password)");
+            }
         }
     }
-    else
-    {
-        serverLog(LogLevel::Warn, "ntm-server: admin_password_file not set; admin UI disabled");
-    }
+
+    if (webAuthnRP && webAuthnRP->hasAdminCred())
+        serverLog(LogLevel::Warn, "ntm-server: WebAuthn admin credential loaded");
+    else if (webAuthnRP)
+        serverLog(LogLevel::Warn,
+                  "ntm-server: WebAuthn enabled but no admin credential — "
+                  "set admin_password_file to register devices");
 
     TrafficStats stats(config.aggregation_window_days,
                        config.max_flow_entries_per_key,
@@ -1700,22 +1798,37 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                     webCfg.client_nicknames = clientNicknames;
                     webCfg.admin_password   = adminPassword;
                     webCfg.registry         = clientRegistry;
+                    webCfg.webauthn         = webAuthnRP;
 
                     webThread = std::thread(webServerThread,
                                             std::ref(*webSvr),
                                             std::ref(stats),
                                             webCfg);
-                    serverLog(LogLevel::Warn,
-                              "ntm-server: HTTPS web dashboard on %s:%u (LAN-only, rate-limit %u rpm)",
-                              config.web_bind.c_str(),
-                              static_cast<unsigned>(config.web_port),
-                              config.web_rate_limit_rpm);
-                    if (!config.web_token.empty())
-                        serverLog(LogLevel::Warn, "ntm-server: web dashboard bearer token auth enabled");
-                    else
+                    if (webAuthnRP && webAuthnRP->enabled())
+                    {
                         serverLog(LogLevel::Warn,
-                                  "ntm-server: web dashboard has no bearer token; "
-                                  "access restricted to LAN IPs only");
+                                  "ntm-server: HTTPS web dashboard on %s:%u "
+                                  "(WebAuthn passkey auth, rate-limit %u rpm)",
+                                  config.web_bind.c_str(),
+                                  static_cast<unsigned>(config.web_port),
+                                  config.web_rate_limit_rpm);
+                    }
+                    else
+                    {
+                        serverLog(LogLevel::Warn,
+                                  "ntm-server: HTTPS web dashboard on %s:%u "
+                                  "(LAN-only, rate-limit %u rpm)",
+                                  config.web_bind.c_str(),
+                                  static_cast<unsigned>(config.web_port),
+                                  config.web_rate_limit_rpm);
+                        if (!config.web_token.empty())
+                            serverLog(LogLevel::Warn,
+                                      "ntm-server: web dashboard bearer token auth enabled");
+                        else
+                            serverLog(LogLevel::Warn,
+                                      "ntm-server: web dashboard has no bearer token; "
+                                      "access restricted to LAN IPs only");
+                    }
                 }
             }
             catch (const std::exception &e)
