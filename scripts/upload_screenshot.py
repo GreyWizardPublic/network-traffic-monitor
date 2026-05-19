@@ -7,7 +7,18 @@ from cryptography.hazmat.primitives.asymmetric import ec
 
 KEY_ID    = "C82T3FP775"
 ISSUER_ID = "f3b8ff90-b4c2-4ef0-a8af-aac3b9baa775"
-KEY_PATH  = "/Users/greywizard/.appstoreconnect/private_keys/AuthKey_C82T3FP775.p8"
+# Key is stored in macOS Keychain: service=appstoreconnect-api-key, account=<KEY_ID>
+
+import subprocess
+
+def _load_key_pem() -> bytes:
+    """Retrieve .p8 PEM from macOS Keychain (stored as hex by `security`)."""
+    hex_pw = subprocess.check_output([
+        "security", "find-generic-password",
+        "-s", "appstoreconnect-api-key",
+        "-a", KEY_ID, "-w"
+    ]).decode().strip()
+    return bytes.fromhex(hex_pw)
 
 SCREENSHOT_PATH = "/tmp/ntm_67.png"
 APP_ID   = "6771022122"
@@ -21,8 +32,7 @@ def make_jwt() -> str:
     now     = int(time.time())
     payload = b64url(json.dumps({"iss":ISSUER_ID,"iat":now,"exp":now+1100,"aud":"appstoreconnect-v1"}).encode())
     msg     = f"{header}.{payload}".encode()
-    with open(KEY_PATH, "rb") as f:
-        key = serialization.load_pem_private_key(f.read(), password=None)
+    key = serialization.load_pem_private_key(_load_key_pem(), password=None)
     sig = key.sign(msg, ec.ECDSA(hashes.SHA256()))
     import cryptography.hazmat.primitives.asymmetric.utils as asn1
     r, s = asn1.decode_dss_signature(sig)
