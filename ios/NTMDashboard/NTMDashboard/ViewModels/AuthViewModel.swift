@@ -139,7 +139,7 @@ final class AuthViewModel {
         derivedKey.withUnsafeMutableBytes { derivedBytes in
             password.withCString { passwordPtr in
                 salt.withUnsafeBytes { saltBytes in
-                    CCKeyDerivationPBKDF(
+                    _ = CCKeyDerivationPBKDF(
                         CCPBKDFAlgorithm(kCCPBKDF2),
                         passwordPtr, strlen(passwordPtr),
                         saltBytes.baseAddress, salt.count,
