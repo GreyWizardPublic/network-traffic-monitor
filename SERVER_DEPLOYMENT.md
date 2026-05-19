@@ -446,8 +446,10 @@ closed and the client reconnects with fresh session keys.
 - [ ] `web_token` set to a strong random secret
 - [ ] Server binary runs as a dedicated unprivileged user (`ntm-server`)
 - [ ] `server_key.pem` permissions are `640` (owner `ntm-server`, group `ntm-server`)
-- [ ] `web_port` blocked at the firewall from reaching the internet
-- [ ] `port` (ingestion) blocked at the firewall unless remote clients are used
+- [ ] `web_bind` set to `127.0.0.1` (Cloudflare Tunnel deployment) or the server's LAN IP — do **not** leave as `0.0.0.0` in WebAuthn mode; the LAN-only source-IP filter is bypassed when WebAuthn is active
+- [ ] `web_port` additionally blocked at the firewall from reaching the internet
+- [ ] `client_bind` set to the server's LAN IP (or `127.0.0.1` if all clients are local) rather than `0.0.0.0`
+- [ ] `port` (ingestion) additionally blocked at the firewall unless remote clients are used
 - [ ] TLS certificate expiry reminder set (self-signed default is 365 days)
 - [ ] `ip_db_auto_update=true` or a cron job in place to refresh the ASN database
 - [ ] systemd hardening options applied (`PrivateTmp`, `ProtectSystem`, `NoNewPrivileges`)
