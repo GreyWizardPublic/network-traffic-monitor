@@ -495,3 +495,68 @@ closed and the client reconnects with fresh session keys.
 - Another process is bound to `port` (5555) or `web_port` (8443).
 - Run `sudo ss -tlnp | grep 5555` to identify it, then either stop it or change the port in
   config.
+
+**WebAuthn: "admin credentials not configured" on the login page**
+
+The server could not read or create the admin credential file. Three distinct
+failure modes exist — all are non-fatal (the server keeps running) but leave
+WebAuthn registration disabled:
+
+| Symptom | Root cause | Fix |
+|---|---|---|
+| `"admin credentials not configured"` at register time | `webauthn_admin_cred_file` is missing from config, the file itself is absent, or unreadable | See steps below |
+| Registration appears to succeed but passkeys are gone after a restart | `webauthn_credentials_file` is unwritable — credentials are kept in memory but cannot be persisted | Fix file permissions (see below); after fixing, re-register |
+| `journalctl` shows `"admin password migration failed"` | `admin_password_file` is readable but `webauthn_admin_cred_file` target path is unwritable | Fix write permission on the target directory/file |
+
+**Diagnosing with journalctl:**
+
+```bash
+journalctl -u ntm-server --since "10 minutes ago" | grep -i "webauthn\|admin\|migrat\|credentials"
+```
+
+Key log messages to look for:
+
+| Log message | Meaning |
+|---|---|
+| `admin password migrated to PBKDF2 and plaintext file erased` | Migration succeeded — normal first-run output |
+| `admin password migration failed: cannot write <path>` | `webauthn_admin_cred_file` is not writable |
+| `ntm WebAuthn: cannot write credentials file '<path>'` | `webauthn_credentials_file` is not writable — passkeys will be lost on restart |
+| `failed to read admin password file` (Warn) | `admin_password_file` is missing or unreadable |
+
+**Setting up correct file ownership and permissions:**
+
+The server process runs as the `ntm` user (or whichever user `User=` is set to
+in the systemd unit). All WebAuthn files must be owned by that user:
+
+```bash
+# Replace ntm with your service user if different
+sudo chown ntm:ntm /etc/ntm/webauthn-admin.json
+sudo chown ntm:ntm /etc/ntm/webauthn-credentials.json
+sudo chmod 600 /etc/ntm/webauthn-admin.json
+sudo chmod 600 /etc/ntm/webauthn-credentials.json
+
+# If the files do not exist yet, create empty placeholders first:
+sudo -u ntm touch /etc/ntm/webauthn-admin.json /etc/ntm/webauthn-credentials.json
+sudo chmod 600 /etc/ntm/webauthn-admin.json /etc/ntm/webauthn-credentials.json
+```
+
+The directory itself must also be writable by the service user if the files do
+not yet exist:
+
+```bash
+sudo chown ntm:ntm /etc/ntm
+sudo chmod 750 /etc/ntm
+```
+
+After correcting permissions, restart the server:
+
+```bash
+sudo systemctl restart ntm-server
+journalctl -fu ntm-server   # watch for the migration success message
+```
+
+**Important:** The server **does not exit** when it cannot read or write these
+files — it continues running in a degraded state where passkey registration is
+disabled. This is intentional so that an existing authenticated session can
+still access the dashboard. Always confirm via `journalctl` that migration
+succeeded on first run before attempting passkey registration.

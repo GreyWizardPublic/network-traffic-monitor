@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -803,7 +804,12 @@ void WebAuthnRP::saveCredentials() const
 {
     if (cfg_.credentialsFile.empty()) return;
     std::ofstream f(cfg_.credentialsFile, std::ios::trunc);
-    if (!f) return;
+    if (!f)
+    {
+        fprintf(stderr, "ntm WebAuthn: cannot write credentials file '%s': %s\n",
+                cfg_.credentialsFile.c_str(), strerror(errno));
+        return;
+    }
 
     f << "{\"version\":1,\"credentials\":[\n";
     bool first = true;
