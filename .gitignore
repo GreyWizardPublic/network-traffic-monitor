@@ -60,5 +60,8 @@ coverage/
 # Cursor agent local working files
 .cursor/
 
+# Claude Code agent session files
+.claude/
+
 # Misc OS noise
 Thumbs.db
