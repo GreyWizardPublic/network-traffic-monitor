@@ -9,7 +9,14 @@
 # port=5555
 
 # Bind address for the client ingestion port. Empty = 0.0.0.0 (all interfaces).
-# client_bind=
+#
+# Recommended: set to the server's LAN IP (e.g. 192.168.1.x) to restrict
+# client connections to the LAN interface only. Use 127.0.0.1 if all ntm-client
+# instances run on the same machine as the server. For WAN clients, consider
+# WireGuard VPN and bind to the VPN interface IP rather than exposing this port
+# to the internet directly.
+#
+# client_bind=192.168.1.x
 
 # Path to file with allowed Ed25519 public keys (one 64-char hex line per client).
 # MANDATORY: the server refuses to start if this is not set or the file contains no valid keys.
@@ -27,9 +34,7 @@ key=/etc/ntm-server/server_key.pem
 # ── HTTPS web dashboard ──────────────────────────────────────────────────────
 #
 # The web dashboard is an HTTPS-only endpoint that serves a browser-based
-# monitoring UI.  Connections are accepted from RFC 1918 LAN addresses only
-# (10.x.x.x, 172.16-31.x.x, 192.168.x.x, loopback); all other source IPs are
-# rejected at the application layer regardless of bind address.
+# monitoring UI.
 #
 # IMPORTANT: the web dashboard requires cert= and key= to be set. If they are
 # absent, the web dashboard is disabled (no plaintext fallback is created).
@@ -38,8 +43,16 @@ key=/etc/ntm-server/server_key.pem
 # web_port=8443
 
 # Bind address for the web dashboard (IPv4). Default 0.0.0.0 (all interfaces).
-# The LAN-only IP filter enforces the security boundary regardless of this setting.
-# web_bind=0.0.0.0
+#
+# Cloudflare Tunnel deployment (recommended): set to 127.0.0.1 — cloudflared
+# connects from localhost so the port is never exposed on the network at all.
+#
+# Direct LAN access (no tunnel): set to the server's LAN IP (e.g. 192.168.1.x)
+# to restrict to that interface only, or leave as 0.0.0.0 and rely on firewall rules.
+#
+# WebAuthn mode: the application-layer LAN-IP filter is bypassed (authentication
+# is handled by passkey sessions). Binding tightly here is your main perimeter.
+web_bind=127.0.0.1
 
 # Optional static bearer token.  When set, every web request must include:
 #   Authorization: Bearer <token>
