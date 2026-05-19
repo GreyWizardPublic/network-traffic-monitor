@@ -1,0 +1,44 @@
+name: NTMDashboard
+options:
+  bundleIdPrefix: com.ntm
+  minimumXcodeVersion: "16.0"
+  defaultConfig: Debug
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "18.0"
+    ENABLE_PREVIEWS: YES
+    SWIFT_STRICT_CONCURRENCY: complete
+
+configs:
+  Debug: debug
+  Release: release
+
+targets:
+  NTMDashboard:
+    type: application
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: NTMDashboard/NTMDashboard
+        excludes:
+          - "**/*.md"
+    resources:
+      - path: NTMDashboard/NTMDashboard/Resources/Assets.xcassets
+    info:
+      path: NTMDashboard/NTMDashboard/Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ntm.NTMDashboard
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+      configs:
+        Debug:
+          DEBUG_INFORMATION_FORMAT: dwarf
+        Release:
+          DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
+          SWIFT_OPTIMIZATION_LEVEL: "-O"
+    scheme:
+      testTargets: []
