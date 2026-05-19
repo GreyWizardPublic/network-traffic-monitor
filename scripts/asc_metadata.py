@@ -8,7 +8,18 @@ from cryptography.hazmat.primitives.asymmetric import ec
 
 KEY_ID    = "REDACTED_OLD_KEY_ID"
 ISSUER_ID = "REDACTED_ISSUER_ID"
-KEY_PATH  = "/Users/greywizard/.appstoreconnect/private_keys/AuthKey_REDACTED_OLD_KEY_ID.p8"
+# Key is stored in macOS Keychain: service=appstoreconnect-api-key, account=<KEY_ID>
+
+import subprocess
+
+def _load_key_pem() -> bytes:
+    """Retrieve .p8 PEM from macOS Keychain (stored as hex by `security`)."""
+    hex_pw = subprocess.check_output([
+        "security", "find-generic-password",
+        "-s", "appstoreconnect-api-key",
+        "-a", KEY_ID, "-w"
+    ]).decode().strip()
+    return bytes.fromhex(hex_pw)
 
 def b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
@@ -18,8 +29,7 @@ def make_jwt() -> str:
     now     = int(time.time())
     payload = b64url(json.dumps({"iss":ISSUER_ID,"iat":now,"exp":now+1100,"aud":"appstoreconnect-v1"}).encode())
     msg     = f"{header}.{payload}".encode()
-    with open(KEY_PATH, "rb") as f:
-        key = serialization.load_pem_private_key(f.read(), password=None)
+    key = serialization.load_pem_private_key(_load_key_pem(), password=None)
     sig = key.sign(msg, ec.ECDSA(hashes.SHA256()))
     # DER → raw (r||s)
     import cryptography.hazmat.primitives.asymmetric.utils as asn1
