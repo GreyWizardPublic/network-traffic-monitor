@@ -144,6 +144,52 @@ both `allowed_keys` and `webauthn_rp_id` are set.
 
 ---
 
+## Packet capture
+
+Tap **Start capture** on the Status tab to activate the `NEPacketTunnelProvider` extension.
+This intercepts all IP traffic on the device and streams D-line observations to ntm-server.
+
+### Requirements
+
+- An Apple Developer account with the **Network Extensions** capability enabled for your App ID.
+- The `packet-tunnel-provider` entitlement must be present in both the main app and the
+  extension target (already included in the project).
+
+### First use
+
+On first tap iOS displays a system alert asking permission to add a VPN configuration.
+Tap **Allow**. This is a local VPN profile — no traffic leaves the device except through
+the normal network stack.
+
+### Known limitations
+
+| Limitation | Detail |
+|---|---|
+| **TCP internet broken while active** | TCP packets are observed (D-lines sent) but not forwarded. HTTP/HTTPS and other TCP-based apps will not work while capture is running. |
+| **UDP forwarded (DNS works)** | UDP packets including DNS (port 53) are forwarded through the extension. DNS resolution continues to work. |
+| **Custom DNS replaced** | The system DNS servers are overridden with `8.8.8.8` and `1.1.1.1` while capture is active. |
+| **IPv6 UDP not forwarded** | IPv6 UDP packets are observed (D-lines) but not forwarded in this release. |
+| **Simulator not supported** | Packet tunnel extensions cannot run in the iOS Simulator. Device required. |
+
+### How it works
+
+1. Main app passes the Ed25519 private key and server config to the extension via
+   `NETunnelProviderProtocol.providerConfiguration` (encoded as base64).
+2. The extension opens its own wire-protocol connection to ntm-server.
+3. All IP traffic on the device is routed through the virtual tunnel interface.
+4. The extension parses each IP packet and sends a `D utun <src> <dst> <bytes>` line to
+   ntm-server, and forwards UDP payloads directly to the destination.
+5. While the VPN is active, the main app's wire connection is paused to avoid two
+   simultaneous connections from the same Ed25519 key.
+6. When the VPN stops, the main app resumes its own wire connection (heartbeats only).
+
+### D-line rate
+
+The server accepts up to 20,000 D-lines per second per connection; excess lines are silently
+dropped. At typical household traffic rates this limit is not reached.
+
+---
+
 ## Troubleshooting
 
 **Status shows "No key pair generated"**  

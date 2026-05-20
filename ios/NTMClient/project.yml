@@ -25,6 +25,7 @@ targets:
       - path: NTMClient
         excludes:
           - "**/*.md"
+      - path: Shared
     resources:
       - path: NTMClient/Resources/Assets.xcassets
     info:
@@ -36,5 +37,29 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
     entitlements:
       path: NTMClient/NTMClient.entitlements
+    dependencies:
+      - target: NTMClientPacketTunnel
+        embed: true
     scheme:
       testTargets: []
+
+  NTMClientPacketTunnel:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: PacketTunnel
+        excludes:
+          - "**/*.md"
+      - path: Shared
+    info:
+      path: PacketTunnel/Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ntm.NTMClient.PacketTunnel
+        SWIFT_VERSION: "6.0"
+        IPHONEOS_DEPLOYMENT_TARGET: "18.0"
+        # Minimal concurrency: NEPacketTunnelProvider is callback-based Obj-C, not Swift-concurrency-native.
+        SWIFT_STRICT_CONCURRENCY: minimal
+    entitlements:
+      path: PacketTunnel/PacketTunnel.entitlements
