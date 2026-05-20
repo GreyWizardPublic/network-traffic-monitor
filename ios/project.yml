@@ -27,6 +27,8 @@ targets:
           - "**/*.md"
     resources:
       - path: NTMDashboard/NTMDashboard/Resources/Assets.xcassets
+    entitlements:
+      path: NTMDashboard/NTMDashboard/NTMDashboard.entitlements
     info:
       path: NTMDashboard/NTMDashboard/Info.plist
     settings:
