@@ -6,6 +6,9 @@ import UIKit
 final class PasskeyService: NSObject {
     private var registrationContinuation: CheckedContinuation<ASAuthorizationPlatformPublicKeyCredentialRegistration, Error>?
     private var assertionContinuation: CheckedContinuation<ASAuthorizationPlatformPublicKeyCredentialAssertion, Error>?
+    // Must be retained for the lifetime of the request — ASAuthorizationController does not
+    // retain itself, so releasing it cancels the operation silently.
+    private var activeController: ASAuthorizationController?
 
     func performRegistration(
         challenge: Data,
@@ -24,6 +27,7 @@ final class PasskeyService: NSObject {
             let controller = ASAuthorizationController(authorizationRequests: [request])
             controller.delegate = self
             controller.presentationContextProvider = self
+            self.activeController = controller
             controller.performRequests()
         }
     }
@@ -43,6 +47,7 @@ final class PasskeyService: NSObject {
             let controller = ASAuthorizationController(authorizationRequests: [request])
             controller.delegate = self
             controller.presentationContextProvider = self
+            self.activeController = controller
             controller.performRequests()
         }
     }
@@ -54,6 +59,7 @@ extension PasskeyService: ASAuthorizationControllerDelegate {
         didCompleteWithAuthorization authorization: ASAuthorization
     ) {
         Task { @MainActor in
+            self.activeController = nil
             if let reg = authorization.credential as? ASAuthorizationPlatformPublicKeyCredentialRegistration {
                 self.registrationContinuation?.resume(returning: reg)
                 self.registrationContinuation = nil
@@ -69,6 +75,7 @@ extension PasskeyService: ASAuthorizationControllerDelegate {
         didCompleteWithError error: Error
     ) {
         Task { @MainActor in
+            self.activeController = nil
             self.registrationContinuation?.resume(throwing: error)
             self.registrationContinuation = nil
             self.assertionContinuation?.resume(throwing: error)
