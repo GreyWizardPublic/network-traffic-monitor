@@ -1,7 +1,9 @@
+import CryptoKit
 import Foundation
 
 final class CertificatePinner: NSObject, URLSessionDelegate, @unchecked Sendable {
     private let pinnedCertData: Data?
+    private(set) var lastSeenCert: Data?
 
     init(pinnedCertData: Data?) {
         self.pinnedCertData = pinnedCertData
@@ -19,23 +21,27 @@ final class CertificatePinner: NSObject, URLSessionDelegate, @unchecked Sendable
             return
         }
 
-        guard let pinnedData = pinnedCertData else {
-            // No pinning configured — accept based on system trust evaluation
-            completionHandler(.useCredential, URLCredential(trust: serverTrust))
-            return
+        // Always capture leaf cert so TOFU flow can inspect it after failure
+        if let chain = SecTrustCopyCertificateChain(serverTrust) as? [SecCertificate],
+           let first = chain.first {
+            lastSeenCert = SecCertificateCopyData(first) as Data
         }
 
-        guard let chain = SecTrustCopyCertificateChain(serverTrust) as? [SecCertificate],
-              let serverCert = chain.first else {
-            completionHandler(.cancelAuthenticationChallenge, nil)
-            return
-        }
-
-        let serverCertData = SecCertificateCopyData(serverCert) as Data
-        if serverCertData == pinnedData {
-            completionHandler(.useCredential, URLCredential(trust: serverTrust))
+        if let pinned = pinnedCertData {
+            if lastSeenCert == pinned {
+                completionHandler(.useCredential, URLCredential(trust: serverTrust))
+            } else {
+                completionHandler(.cancelAuthenticationChallenge, nil)
+            }
         } else {
-            completionHandler(.cancelAuthenticationChallenge, nil)
+            // No pinning — accept based on system CA trust
+            completionHandler(.useCredential, URLCredential(trust: serverTrust))
         }
+    }
+
+    static func fingerprint(_ data: Data) -> String {
+        let digest = SHA256.hash(data: data)
+        let hex = digest.map { String(format: "%02X", $0) }
+        return hex.prefix(8).joined(separator: ":") + "…"
     }
 }

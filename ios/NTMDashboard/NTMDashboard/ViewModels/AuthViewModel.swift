@@ -9,8 +9,11 @@ final class AuthViewModel {
     var isAuthenticated = false
     var isLoading = false
     var errorMessage: String?
+    var untrustedCertFingerprint: String?
 
     private let passkeyService = PasskeyService()
+    private var capturedCert: Data?
+    private var lastPinner: CertificatePinner?
 
     init() {
         let cfg = ServerConfig.load()
@@ -26,11 +29,12 @@ final class AuthViewModel {
     func login() async {
         let cfg = ServerConfig.load()
         guard let base = cfg.baseURL else {
-            errorMessage = "Server not configured — add host in Settings"
+            errorMessage = "Server not configured — enter server URL"
             return
         }
         isLoading = true
         errorMessage = nil
+        untrustedCertFingerprint = nil
         defer { isLoading = false }
 
         do {
@@ -60,14 +64,19 @@ final class AuthViewModel {
             KeychainService.saveToken(token, for: base.absoluteString)
             isAuthenticated = true
         } catch {
-            errorMessage = error.localizedDescription
+            if isCertError(error), let cert = lastPinner?.lastSeenCert {
+                capturedCert = cert
+                untrustedCertFingerprint = CertificatePinner.fingerprint(cert)
+            } else {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
     func register(adminPassword: String, deviceLabel: String) async {
         let cfg = ServerConfig.load()
         guard let base = cfg.baseURL else {
-            errorMessage = "Server not configured — add host in Settings"
+            errorMessage = "Server not configured — enter server URL"
             return
         }
         isLoading = true
@@ -113,9 +122,21 @@ final class AuthViewModel {
                 label: deviceLabel
             )
             try await completeRegistration(session: session, base: base, body: body)
+            // Registration succeeded — proceed directly to passkey sign-in
+            await login()
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    func trustCertAndRetry() async {
+        guard let cert = capturedCert else { return }
+        var cfg = ServerConfig.load()
+        cfg.pinnedCertData = cert
+        cfg.save()
+        capturedCert = nil
+        untrustedCertFingerprint = nil
+        await login()
     }
 
     func logout() async {
@@ -159,6 +180,7 @@ final class AuthViewModel {
 
     private func makeSession(_ cfg: ServerConfig) -> URLSession {
         let pinner = CertificatePinner(pinnedCertData: cfg.pinnedCertData)
+        lastPinner = pinner
         return URLSession(configuration: .ephemeral, delegate: pinner, delegateQueue: nil)
     }
 
@@ -210,6 +232,14 @@ final class AuthViewModel {
     private func checkHTTP(_ response: URLResponse) throws {
         guard let http = response as? HTTPURLResponse, http.statusCode != 200 else { return }
         throw AuthError.httpError(http.statusCode)
+    }
+
+    private func isCertError(_ e: Error) -> Bool {
+        let code = (e as NSError).code
+        return [NSURLErrorServerCertificateUntrusted,
+                NSURLErrorServerCertificateHasUnknownRoot,
+                NSURLErrorServerCertificateNotYetValid,
+                NSURLErrorServerCertificateHasBadDate].contains(code)
     }
 }
 

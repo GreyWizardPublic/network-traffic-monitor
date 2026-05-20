@@ -11,7 +11,7 @@ struct DashboardView: View {
                         VStack(spacing: 16) {
                             ConnectionBar(
                                 isConnected: true,
-                                serverHost: ServerConfig.load().host,
+                                serverHost: ServerConfig.load().baseURL?.host() ?? "",
                                 lastUpdated: vm.lastUpdated
                             )
                             InterfacesSection(interfaces: snap.interfaces)

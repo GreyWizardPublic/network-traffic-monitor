@@ -6,7 +6,6 @@ struct RegisterDeviceView: View {
 
     @State private var adminPassword = ""
     @State private var deviceLabel = ""
-    @State private var showSuccessAlert = false
 
     var body: some View {
         NavigationStack {
@@ -25,9 +24,6 @@ struct RegisterDeviceView: View {
                     Button {
                         Task {
                             await authVM.register(adminPassword: adminPassword, deviceLabel: deviceLabel)
-                            if authVM.errorMessage == nil {
-                                showSuccessAlert = true
-                            }
                         }
                     } label: {
                         if authVM.isLoading {
@@ -56,15 +52,6 @@ struct RegisterDeviceView: View {
             }
             .onAppear {
                 deviceLabel = UIDevice.current.name
-            }
-            .alert("Device registered", isPresented: $showSuccessAlert) {
-                Button("Sign in now") {
-                    dismiss()
-                    Task { await authVM.login() }
-                }
-                Button("Done") { dismiss() }
-            } message: {
-                Text("This device has been registered. Sign in with your passkey.")
             }
         }
     }
