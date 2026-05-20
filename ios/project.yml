@@ -29,6 +29,9 @@ targets:
       - path: NTMDashboard/NTMDashboard/Resources/Assets.xcassets
     entitlements:
       path: NTMDashboard/NTMDashboard/NTMDashboard.entitlements
+      properties:
+        com.apple.developer.associated-domains:
+          - webcredentials:ntm.happyhomelives.me
     info:
       path: NTMDashboard/NTMDashboard/Info.plist
     settings:
@@ -36,7 +39,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.ntm.NTMDashboard
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
-        DEVELOPMENT_TEAM: 2F447K4U9Z
+        DEVELOPMENT_TEAM: W65LG3MSG6
         CODE_SIGN_STYLE: Automatic
         MARKETING_VERSION: "1.0"
         CURRENT_PROJECT_VERSION: "3"
