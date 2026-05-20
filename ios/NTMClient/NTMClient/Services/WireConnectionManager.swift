@@ -69,6 +69,11 @@ final class WireViewModel {
     // MARK: - Connection loop
 
     private func runLoop(config: ServerConfig) async {
+        guard let privateKey = WireKeyService.loadPrivateKey() else {
+            state = .failed(WireError.noKeyPair.localizedDescription!)
+            return
+        }
+
         var backoff: Double = 2
         var sessionStart: Date = .now
 
@@ -79,7 +84,8 @@ final class WireViewModel {
                 try await client.connect(
                     host: config.host,
                     port: UInt16(config.wirePort),
-                    pinnedCertData: config.pinnedCertData
+                    pinnedCertData: config.pinnedCertData,
+                    privateKey: privateKey
                 )
 
                 state = .connected

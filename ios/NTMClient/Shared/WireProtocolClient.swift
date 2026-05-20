@@ -36,12 +36,9 @@ actor WireProtocolClient {
     // MARK: - Public API
 
     // Connects, completes TLS, performs Ed25519 auth. Throws on any failure.
-    func connect(host: String, port: UInt16, pinnedCertData: Data?) async throws {
-        // Load private key before opening the socket so we fail fast.
-        guard let privateKey = WireKeyService.loadPrivateKey() else {
-            throw WireError.noKeyPair
-        }
-
+    // The caller is responsible for supplying the private key.
+    func connect(host: String, port: UInt16, pinnedCertData: Data?,
+                 privateKey: Curve25519.Signing.PrivateKey) async throws {
         let endpoint = NWEndpoint.hostPort(
             host: NWEndpoint.Host(host),
             port: NWEndpoint.Port(rawValue: port)!

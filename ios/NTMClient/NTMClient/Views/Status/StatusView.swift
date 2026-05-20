@@ -1,14 +1,15 @@
 import SwiftUI
 
 struct StatusView: View {
-    @Environment(WireViewModel.self)  private var wireVM
-    @Environment(SetupViewModel.self) private var setupVM
+    @Environment(WireViewModel.self)   private var wireVM
+    @Environment(SetupViewModel.self)  private var setupVM
+    @Environment(TunnelManager.self)   private var tunnelVM
 
     var body: some View {
         NavigationStack {
             List {
                 Section("Wire connection") {
-                    connectionRow
+                    stateRow(wireVM.state.label, color: wireStateColor)
                     if let since = wireVM.connectedSince {
                         LabeledContent("Connected since") {
                             Text(since, style: .relative)
@@ -16,9 +17,27 @@ struct StatusView: View {
                         }
                     }
                     LabeledContent("Server") {
-                        Text(setupVM.config.host.isEmpty ? "—" : "\(setupVM.config.host):\(setupVM.config.wirePort)")
+                        Text(setupVM.config.host.isEmpty
+                             ? "—"
+                             : "\(setupVM.config.host):\(setupVM.config.wirePort)")
                             .foregroundStyle(.secondary)
                     }
+                }
+
+                Section("Packet capture") {
+                    stateRow(tunnelVM.state.label, color: tunnelStateColor)
+                    Button(tunnelVM.state.isActive ? "Stop capture" : "Start capture") {
+                        if tunnelVM.state.isActive {
+                            tunnelVM.stop()
+                        } else {
+                            Task { try? await tunnelVM.start(config: setupVM.config) }
+                        }
+                    }
+                    .disabled(!setupVM.isReadyToConnect && !tunnelVM.state.isActive)
+
+                    Label("TCP traffic paused while capture is active", systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
                 }
 
                 Section("Key") {
@@ -51,16 +70,14 @@ struct StatusView: View {
     }
 
     @ViewBuilder
-    private var connectionRow: some View {
+    private func stateRow(_ label: String, color: Color) -> some View {
         HStack(spacing: 10) {
-            Circle()
-                .fill(stateColor)
-                .frame(width: 10, height: 10)
-            Text(wireVM.state.label)
+            Circle().fill(color).frame(width: 10, height: 10)
+            Text(label)
         }
     }
 
-    private var stateColor: Color {
+    private var wireStateColor: Color {
         switch wireVM.state {
         case .connected:   return .green
         case .connecting:  return .yellow
@@ -69,10 +86,20 @@ struct StatusView: View {
         }
     }
 
+    private var tunnelStateColor: Color {
+        switch tunnelVM.state {
+        case .connected:     return .green
+        case .connecting,
+             .disconnecting: return .yellow
+        case .failed:        return .red
+        default:             return .gray
+        }
+    }
+
     private var setupNotice: String {
-        if !setupVM.config.isConfigured  { return "Server not configured" }
-        if setupVM.pubkeyHex == nil      { return "No key pair generated" }
-        if !setupVM.isRegistered         { return "Key not registered on server" }
+        if !setupVM.config.isConfigured { return "Server not configured" }
+        if setupVM.pubkeyHex == nil     { return "No key pair generated" }
+        if !setupVM.isRegistered        { return "Key not registered on server" }
         return ""
     }
 }
