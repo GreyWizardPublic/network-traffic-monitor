@@ -62,11 +62,13 @@ struct SettingsView: View {
                     .frame(maxWidth: .infinity)
                 }
 
-                Section {
-                    Button("Sign out", role: .destructive) {
-                        Task { await authVM.logout() }
+                if authVM.isAuthenticated {
+                    Section {
+                        Button("Sign out", role: .destructive) {
+                            Task { await authVM.logout() }
+                        }
+                        .frame(maxWidth: .infinity)
                     }
-                    .frame(maxWidth: .infinity)
                 }
             }
             .navigationTitle("Settings")
