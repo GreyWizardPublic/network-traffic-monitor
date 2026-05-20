@@ -1,7 +1,7 @@
-# NTM Dashboard API Protocol — Specification v2
+# NTM Dashboard API Protocol — Specification v3
 
-**API version:** 2  
-**Software version where introduced:** ntm 1.3.0  
+**API version:** 3  
+**Software version where introduced:** ntm 1.5.0  
 **File owner:** This document is the authoritative specification for the HTTPS
 API between `ntm-server` and any dashboard client (iOS app, web browser, or
 third-party tool). Update it **before** changing any endpoint, field, or
@@ -74,6 +74,7 @@ When neither is configured the API is accessible to any LAN client.
 | All endpoints | 30 requests / IP / minute |
 | `POST /auth/register/complete` | 5 requests / IP / minute (admin rate limit) |
 | `POST /api/admin/purge` | 5 requests / IP / minute |
+| `POST /api/admin/client/register` | 5 requests / IP / minute |
 
 Exceeded → `429` with `Retry-After: 60`.
 
@@ -84,7 +85,7 @@ Exceeded → `429` with `Retry-After: 60`.
 Every response from `/api/summary` includes:
 
 ```json
-"api_version": 2
+"api_version": 3
 ```
 
 This integer identifies the API contract revision, independent of the ntm
@@ -111,7 +112,8 @@ software version (`server_version`).
 
 | Version | Change |
 |---|---|
-| 2 | Added WebAuthn passkey authentication; auth endpoints `/auth/*`; `/login` page; AASA endpoint. Bumped `api_version` field to `2`. |
+| 3 | Added `POST /api/admin/client/register` — enrol Ed25519 wire-protocol client keys at runtime via the HTTPS API (ntm 1.5.0). |
+| 2 | Added WebAuthn passkey authentication; auth endpoints `/auth/*`; `/login` page; AASA endpoint. Bumped `api_version` field to `2` (ntm 1.3.0). |
 | 1 | Initial version (ntm 1.2.0) |
 
 ---
@@ -291,7 +293,7 @@ recognise. New optional fields may be added at any `api_version` without a bump.
 
 ```json
 {
-  "api_version":    <integer>,      // API contract revision; currently 2
+  "api_version":    <integer>,      // API contract revision; currently 3
   "server_version": <string>,       // ntm software version, e.g. "1.3.0"
   "window_start":   <integer>,      // unix epoch: start of the rolling stats window
   "generated_at":   <integer>,      // unix epoch: when this response was built
@@ -392,14 +394,67 @@ confirmation before sending this request.
 | `404` | Client name / ID not found in current data |
 | `429` | Admin rate limit exceeded (5 req / IP / min) |
 
+### `POST /api/admin/client/register`
+
+Enrolls a new Ed25519 public key so the corresponding `ntm-client` can
+immediately authenticate over the wire protocol, **without a server restart**.
+The key is appended to the configured `allowed_keys` file for persistence across
+restarts. Available when `admin_password_file` or `webauthn_rp_id` is
+configured **and** `allowed_keys` is set in the server config.
+
+**Authentication:** same as `/api/admin/purge`.
+
+**Request body** (`Content-Type: application/json`):
+
+```json
+{
+  "pubkey":   "<64 lowercase hex characters — Ed25519 raw public key>",
+  "nickname": "<optional human-readable name, max 64 chars>"
+}
+```
+
+**Field rules:**
+- `pubkey`: exactly 64 lowercase hexadecimal characters (32 bytes Ed25519 key).
+  Uppercase hex is rejected.
+- `nickname`: optional. Maximum 64 characters. Must not contain `|` or any ASCII
+  control character (< 0x20). Omit the field or send `""` for no nickname.
+
+**Success response** (`200`):
+
+```json
+{
+  "ok":        true,
+  "client_id": "<the registered 64-hex pubkey>"
+}
+```
+
+**Error responses:**
+
+| Status | Reason |
+|---|---|
+| `400` | `pubkey` not exactly 64 chars, non-lowercase-hex, or invalid nickname |
+| `409` | This pubkey is already in the allowed-keys list |
+| `500` | Server could not write the `allowed_keys` file (check file permissions) |
+| `429` | Admin rate limit exceeded (5 req / IP / min) |
+
+**iOS client workflow:**
+
+1. Generate an Ed25519 key pair (CryptoKit `Curve25519.Signing`); store the
+   private key in the standard Keychain.
+2. Export the 32-byte raw public key and hex-encode it.
+3. POST this endpoint (authenticated with the operator's passkey session).
+4. After `200`, the iOS app can connect to the wire-protocol port immediately.
+
 ---
 
 ## 11. Stability Contract
 
-- All fields documented in § 9 and § 10 are **stable at `api_version: 2`**.
+- All fields documented in § 9 and § 10 are **stable at `api_version: 3`**.
   No field will be removed or renamed without a version bump.
 - New **optional** fields may be added at any `api_version` without bumping;
   clients must tolerate extra fields.
 - Servers at `api_version: 1` (ntm < 1.3.0) do not have WebAuthn endpoints.
   A client receiving `api_version: 1` must not call `/auth/*`.
+- Servers at `api_version: 2` (ntm < 1.5.0) do not have `/api/admin/client/register`.
+  A client receiving `api_version: 2` must fall back to manual key file management.
 - The protocol doc is updated **before** the commit that changes either side.

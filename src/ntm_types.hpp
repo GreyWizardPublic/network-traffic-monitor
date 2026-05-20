@@ -17,6 +17,8 @@
 #include <deque>
 #include <iostream>
 #include <mutex>
+#include <set>
+#include <shared_mutex>
 #include <string>
 #include <syslog.h>
 #include <unordered_map>
@@ -85,6 +87,19 @@ struct ClientRegistry
         clientToExternalIp.erase(clientId);
         clientHealth.erase(clientId);
     }
+};
+
+// Shared store for wire-protocol client authentication.
+// Populated at startup from the allowed-keys file; new entries appended at
+// runtime via POST /api/admin/client/register without server restart.
+// Connection threads hold a shared_lock during key lookup; the web endpoint
+// holds a unique_lock during insert to prevent torn reads.
+struct AllowedClientsStore
+{
+    mutable std::shared_mutex mu;
+    std::set<std::string>                          keys;      // raw 32-byte binary keys
+    std::unordered_map<std::string, std::string>   nicknames; // lowercase hex64 → display name
+    std::string                                    filePath;
 };
 
 inline constexpr unsigned kAggregationWindowDaysDefault = 7;

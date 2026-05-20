@@ -278,12 +278,11 @@ bool parseDataLine(const std::string &line, PacketMeta &out,
 //     to avoid leaking which keys are present through string-compare timing.
 // NEW-N7: malformed entries are reported via serverLog so operators don't silently
 //     drop keys due to fat-fingered hex.
-using AllowedKeysSet = std::set<std::string>;
-
 // M5: constant-time membership check. Walks every entry and uses CRYPTO_memcmp on
 // equal-length keys; cost is O(N * 32) but the set is typically tiny (<<1000) and
 // auth happens once per connection, so this is negligible vs network RTT.
-static bool allowedKeysContains(const AllowedKeysSet &keys, const std::string &needle)
+// Caller must hold at least a shared_lock on the store's mutex.
+static bool allowedKeysContains(const std::set<std::string> &keys, const std::string &needle)
 {
     if (needle.size() != kAuthPubkeyLen)
         return false;
@@ -303,17 +302,19 @@ static bool allowedKeysContains(const AllowedKeysSet &keys, const std::string &n
     return found != 0u;
 }
 
-static AllowedKeysSet loadAllowedKeys(const std::string &path,
-                                      std::unordered_map<std::string, std::string> &nicknames)
+static std::shared_ptr<AllowedClientsStore> loadAllowedKeys(const std::string &path)
 {
-    AllowedKeysSet out;
+    auto store = std::make_shared<AllowedClientsStore>();
+    store->filePath = path;
+    auto &out      = store->keys;
+    auto &nicknames = store->nicknames;
     if (path.empty())
-        return out;
+        return store;
     std::ifstream f(path);
     if (!f)
     {
         serverLog(LogLevel::Err, "ntm-server: cannot open allowed-keys file: %s", path.c_str());
-        return out;
+        return store;
     }
     std::string line;
     std::size_t lineNo = 0;
@@ -406,7 +407,7 @@ static AllowedKeysSet loadAllowedKeys(const std::string &path,
             }
         }
     }
-    return out;
+    return store;
 }
 
 // Read exactly n bytes via SSL_read (or recv if ssl is null). Returns true if read succeeded.
@@ -454,9 +455,10 @@ static bool writeExact(SSL *ssl, int fd, const void *buf, std::size_t n)
 }
 
 // Verify auth message and return clientId (hex of pubkey) or empty on failure.
-static std::string verifyClientAuth(SSL *ssl, int clientFd, const AllowedKeysSet &allowedKeys)
+static std::string verifyClientAuth(SSL *ssl, int clientFd, const AllowedClientsStore &store)
 {
-    if (allowedKeys.empty())
+    std::shared_lock<std::shared_mutex> lk(store.mu);
+    if (store.keys.empty())
         return {};
 
     std::uint8_t version = 0;
@@ -492,7 +494,7 @@ static std::string verifyClientAuth(SSL *ssl, int clientFd, const AllowedKeysSet
 
         std::string pubkeyRaw(reinterpret_cast<const char *>(resp), kAuthPubkeyLen);
         // M5: constant-time membership check (avoids std::set::find timing leak).
-        if (!allowedKeysContains(allowedKeys, pubkeyRaw))
+        if (!allowedKeysContains(store.keys, pubkeyRaw))
             return {};
 
         std::string toVerify(reinterpret_cast<const char *>(kAuthSignPrefixV2), kAuthSignPrefixV2Len);
@@ -821,8 +823,7 @@ std::string formatBytes(std::uint64_t bytes)
 void connectionThread(int clientFd,
                       std::string peerAddr,
                       std::string clientIp,
-                      const AllowedKeysSet &allowedKeys,
-                      const std::unordered_map<std::string, std::string> &clientNicknames,
+                      std::shared_ptr<AllowedClientsStore> clientsStore,
                       std::shared_ptr<ClientRegistry> registry,
                       TrafficStats &stats,
                       IPDataUpdater &ipDataUpdater,
@@ -928,11 +929,7 @@ void connectionThread(int clientFd,
     const auto sessionStart = std::chrono::steady_clock::now();
 
     std::string clientId;
-    if (allowedKeys.empty())
-    {
-        return;
-    }
-    clientId = verifyClientAuth(ssl, clientFd, allowedKeys);
+    clientId = verifyClientAuth(ssl, clientFd, *clientsStore);
     if (clientId.empty())
     {
         writeExact(ssl, clientFd, &kAuthResultReject, 1);
@@ -1551,11 +1548,10 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                   "ntm-server: require_tls is obsolete — TLS is always mandatory; ignoring");
 
     // NEW-H1: fail-closed authentication.
-    std::unordered_map<std::string, std::string> clientNicknames;
-    AllowedKeysSet allowedKeys = loadAllowedKeys(allowedKeysPath, clientNicknames);
+    auto clientsStore = loadAllowedKeys(allowedKeysPath);
     if (!allowedKeysPath.empty())
     {
-        if (allowedKeys.empty())
+        if (clientsStore->keys.empty())
         {
             serverLog(LogLevel::Err,
                       "ntm-server: --allowed-keys/allowed_keys is set to '%s' but loaded 0 valid keys; "
@@ -1564,7 +1560,7 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
             if (sslCtx) SSL_CTX_free(sslCtx);
             return 1;
         }
-        serverLog(LogLevel::Warn, "ntm-server: loaded %zu allowed client key(s)", allowedKeys.size());
+        serverLog(LogLevel::Warn, "ntm-server: loaded %zu allowed client key(s)", clientsStore->keys.size());
     }
     else
     {
@@ -1799,10 +1795,11 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                     webCfg.token            = config.web_token;
                     webCfg.rate_limit_rpm   = config.web_rate_limit_rpm;
                     webCfg.max_entity_lines = config.max_entity_lines_in_summary;
-                    webCfg.client_nicknames = clientNicknames;
+                    webCfg.client_nicknames = clientsStore->nicknames;
                     webCfg.admin_password   = adminPassword;
                     webCfg.registry         = clientRegistry;
                     webCfg.webauthn         = webAuthnRP;
+                    webCfg.clients_store    = clientsStore;
 
                     webThread = std::thread(webServerThread,
                                             std::ref(*webSvr),
@@ -1848,7 +1845,7 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
     }
 
     std::thread printer(statsPrinterThread, std::ref(stats), config.max_snapshot_entries_for_print,
-                        clientNicknames);
+                        clientsStore->nicknames);
     std::thread keyWatcher;
     if (!daemonMode)
     {
@@ -1987,8 +1984,7 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                           clientFd,
                           peerAddr,
                           clientIpStr,
-                          std::cref(allowedKeys),
-                          std::cref(clientNicknames),
+                          clientsStore,
                           clientRegistry,
                           std::ref(stats),
                           std::ref(ipDataUpdater),

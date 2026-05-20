@@ -6,11 +6,14 @@
 #include "version.hpp"
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <deque>
+#include <fstream>
 #include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -220,7 +223,7 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
 
     std::string j;
     j.reserve(8192);
-    j += "{\n  \"api_version\": 2";
+    j += "{\n  \"api_version\": 3";
     j += ",\n  \"server_version\": \"";
     j += kNtmVersion;
     j += "\"";
@@ -1156,6 +1159,129 @@ void webServerThread(httplib::SSLServer &svr,
                 std::string resp = "{\"ok\":true,\"client_id\":\"";
                 resp += jsonEsc(hexId);
                 resp += "\",\"message\":\"client data purged\"}\n";
+                res.set_content(resp, "application/json");
+            });
+    }
+
+    // POST /api/admin/client/register — enroll a new Ed25519 wire-protocol client key
+    if (adminAvailable && config.clients_store)
+    {
+        svr.Post("/api/admin/client/register",
+            [&config, &adminRateLimiter](const httplib::Request &req, httplib::Response &res)
+            {
+                const std::string &ip = req.remote_addr;
+                if (!adminRateLimiter.tryAcquire(ip))
+                {
+                    res.status = 429;
+                    res.set_header("Retry-After", "60");
+                    res.set_content("{\"error\":\"rate limit exceeded\"}\n", "application/json");
+                    return;
+                }
+
+                const std::string &body = req.body;
+                std::string pubkeyHex = jsonGetString(body, "pubkey");
+                std::string nickname  = jsonGetString(body, "nickname");
+
+                if (pubkeyHex.size() != 64)
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"pubkey must be 64 hex characters\"}\n",
+                                    "application/json");
+                    return;
+                }
+                for (char c : pubkeyHex)
+                {
+                    if (!((c>='0'&&c<='9')||(c>='a'&&c<='f')))
+                    {
+                        res.status = 400;
+                        res.set_content("{\"error\":\"pubkey must be lowercase hex\"}\n",
+                                        "application/json");
+                        return;
+                    }
+                }
+                if (nickname.size() > 64)
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"nickname too long (max 64 characters)\"}\n",
+                                    "application/json");
+                    return;
+                }
+                for (char c : nickname)
+                {
+                    if (c == '|' || static_cast<unsigned char>(c) < 0x20u)
+                    {
+                        res.status = 400;
+                        res.set_content("{\"error\":\"nickname contains invalid characters\"}\n",
+                                        "application/json");
+                        return;
+                    }
+                }
+
+                // Decode hex to 32-byte raw key
+                std::string rawKey;
+                rawKey.reserve(32);
+                for (std::size_t i = 0; i < 64; i += 2)
+                {
+                    auto h = [](char c) -> int {
+                        return (c>='a') ? c-'a'+10 : (c>='A') ? c-'A'+10 : c-'0';
+                    };
+                    rawKey.push_back(static_cast<char>((h(pubkeyHex[i]) << 4) | h(pubkeyHex[i+1])));
+                }
+
+                auto &store = *config.clients_store;
+                {
+                    std::unique_lock<std::shared_mutex> lk(store.mu);
+
+                    if (store.keys.count(rawKey))
+                    {
+                        res.status = 409;
+                        res.set_content("{\"error\":\"pubkey already registered\"}\n",
+                                        "application/json");
+                        return;
+                    }
+
+                    // Append to file before updating memory — fail fast if unwritable.
+                    if (!store.filePath.empty())
+                    {
+                        std::ofstream f(store.filePath, std::ios::app);
+                        if (!f)
+                        {
+                            serverLog(LogLevel::Err,
+                                      "ntm-server: client/register: cannot write to allowed-keys file '%s': %s",
+                                      store.filePath.c_str(), strerror(errno));
+                            res.status = 500;
+                            res.set_content("{\"error\":\"server error: cannot write keys file\"}\n",
+                                            "application/json");
+                            return;
+                        }
+                        f << pubkeyHex;
+                        if (!nickname.empty())
+                            f << " " << nickname;
+                        f << "\n";
+                        if (!f)
+                        {
+                            serverLog(LogLevel::Err,
+                                      "ntm-server: client/register: write error on allowed-keys file '%s'",
+                                      store.filePath.c_str());
+                            res.status = 500;
+                            res.set_content("{\"error\":\"server error: cannot write keys file\"}\n",
+                                            "application/json");
+                            return;
+                        }
+                    }
+
+                    store.keys.insert(rawKey);
+                    if (!nickname.empty())
+                        store.nicknames[pubkeyHex] = nickname;
+                }
+
+                serverLog(LogLevel::Warn,
+                          "ntm-server: client registered from %s: pubkey=%.16s... nickname='%s'",
+                          ip.c_str(), pubkeyHex.c_str(), nickname.c_str());
+
+                std::string resp = "{\"ok\":true,\"client_id\":\"";
+                resp += jsonEsc(pubkeyHex);
+                resp += "\"}\n";
                 res.set_content(resp, "application/json");
             });
     }
