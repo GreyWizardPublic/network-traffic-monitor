@@ -62,6 +62,12 @@ struct SettingsView: View {
                     .frame(maxWidth: .infinity)
                 }
 
+                Section("Wire protocol client") {
+                    NavigationLink("Manage wire client key") {
+                        WireClientView()
+                    }
+                }
+
                 Section {
                     Button("Sign out", role: .destructive) {
                         Task { await authVM.logout() }
