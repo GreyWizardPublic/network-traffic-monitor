@@ -96,7 +96,24 @@ health.
 - Configurable polling interval; pull-to-refresh
 - Requires WebAuthn mode on the server (`webauthn_rp_id` set)
 
-→ **[iOS app deployment guide](IOS_DEPLOYMENT.md)**
+→ **[iOS Dashboard deployment guide](IOS_DEPLOYMENT.md)**
+
+---
+
+### NTM Client — iOS packet capture agent
+
+Native SwiftUI app that acts as a wire-protocol client on iPhone and iPad.
+Connects to `ntm-server` over TLS using an Ed25519 key pair and streams
+traffic observations (the same protocol as `ntm-client` on Linux/Windows).
+
+**Key properties:**
+- iOS 18+ / Xcode 16+; Swift 6 strict concurrency
+- Ed25519 key pair generated and stored in Keychain; registered on server via the HTTPS API
+- Wire-protocol TCP/TLS connection to ntm-server port 5555
+- Appears in the server dashboard's **Client health** section
+- Self-healing: automatic reconnect with exponential backoff
+
+→ **[iOS Client deployment guide](IOS_CLIENT_DEPLOYMENT.md)**
 
 ---
 
@@ -170,7 +187,8 @@ authentication, and service configuration.
 |---|---|
 | [SERVER_DEPLOYMENT.md](SERVER_DEPLOYMENT.md) | Full server setup: TLS, Ed25519, WebAuthn, systemd, hardening checklist |
 | [CLIENT_DEPLOYMENT.md](CLIENT_DEPLOYMENT.md) | Client setup for Linux (systemd) and Windows (Task Scheduler) |
-| [IOS_DEPLOYMENT.md](IOS_DEPLOYMENT.md) | iOS app build, passkey registration, certificate pinning |
+| [IOS_DEPLOYMENT.md](IOS_DEPLOYMENT.md) | NTM Dashboard (iOS): build, passkey registration, certificate pinning |
+| [IOS_CLIENT_DEPLOYMENT.md](IOS_CLIENT_DEPLOYMENT.md) | NTM Client (iOS): build, key registration, wire-protocol agent |
 | [docs/wire-protocol.md](docs/wire-protocol.md) | Wire protocol specification (ntm-client ↔ ntm-server) |
 | [docs/api-protocol.md](docs/api-protocol.md) | API protocol specification (dashboard clients ↔ ntm-server) |
 
