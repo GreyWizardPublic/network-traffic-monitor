@@ -39,12 +39,11 @@
 ```bash
 git clone <repo-url>
 cd network-traffic-monitor
-mkdir -p build && cd build
-cmake ..
-cmake --build .
+cmake -B build-linux -DCMAKE_BUILD_TYPE=Release .
+cmake --build build-linux -j$(nproc)
 ```
 
-Produces `build/ntm-server` and `build/ntm-client`.
+Produces `build-linux/ntm-server` and `build-linux/ntm-client`.
 
 ---
 
@@ -59,12 +58,14 @@ A minimal production layout:
     server_cert.pem                # TLS certificate
     server_key.pem                 # TLS private key (chmod 600)
     allowed_clients.txt            # Ed25519 public keys (one per line)
+    webauthn-admin.json            # WebAuthn: PBKDF2 admin credential (WebAuthn mode only)
+    webauthn-credentials.json      # WebAuthn: registered passkeys   (WebAuthn mode only)
 /var/lib/ntm-server/
     ip2asn-combined.tsv.gz         # IP→ASN cache (auto-downloaded on first start)
 ```
 
 ```bash
-sudo install -m 755 build/ntm-server /usr/local/bin/ntm-server
+sudo install -m 755 build-linux/ntm-server /usr/local/bin/ntm-server
 sudo mkdir -p /etc/ntm-server /var/lib/ntm-server
 ```
 
@@ -73,8 +74,7 @@ sudo mkdir -p /etc/ntm-server /var/lib/ntm-server
 ## 4. TLS certificate
 
 The **same cert/key pair** is used for both the client data-ingestion port and the HTTPS web
-dashboard. Both are mandatory — the server refuses to start without a valid cert/key pair, and
-plain TCP connections on the ingestion port are always refused.
+dashboard. **TLS is mandatory** — the server refuses to start without a valid cert/key pair.
 
 ### Option A — Self-signed (typical LAN deployment)
 
@@ -167,29 +167,53 @@ Copy and edit the example:
 sudo cp ntm-server.conf.example /etc/ntm-server/ntm-server.conf
 ```
 
-Minimal production config (all other keys use built-in defaults):
+### Minimal config — WebAuthn mode (recommended)
 
 ```ini
 # /etc/ntm-server/ntm-server.conf
 
 # ── Data ingestion ────────────────────────────────────────────────────────────
-# cert, key, and allowed_keys are all mandatory — the server refuses to start without them.
+# cert, key, and allowed_keys are mandatory — the server refuses to start without them.
 port            = 5555
 cert            = /etc/ntm-server/server_cert.pem
 key             = /etc/ntm-server/server_key.pem
 allowed_keys    = /etc/ntm-server/allowed_clients.txt
+client_bind     = 192.168.1.x    # restrict ingestion to LAN interface
 
 # ── Web dashboard ─────────────────────────────────────────────────────────────
 web_port        = 8443
-web_token       = change-me-to-a-strong-secret
+web_bind        = 127.0.0.1      # Cloudflare Tunnel connects from localhost
 
-# ── Admin interface (optional) ────────────────────────────────────────────────
-# admin_password_file = /etc/ntm-server/admin_password   # uncomment to enable
+# ── WebAuthn passkey authentication ──────────────────────────────────────────
+webauthn_rp_id             = ntm.example.com
+webauthn_rp_name           = NTM Dashboard
+webauthn_credentials_file  = /etc/ntm-server/webauthn-credentials.json
+webauthn_admin_cred_file   = /etc/ntm-server/webauthn-admin.json
+admin_password_file        = /etc/ntm-server/admin-password.txt   # erased after first start
 
 # ── Aggregation ───────────────────────────────────────────────────────────────
 aggregation_window_days = 7
 
 # ── IP database ───────────────────────────────────────────────────────────────
+ip_db_path                 = /var/lib/ntm-server/ip2asn-combined.tsv.gz
+ip_db_auto_update          = true
+ip_db_update_interval_days = 7
+```
+
+### Minimal config — legacy LAN mode
+
+```ini
+# /etc/ntm-server/ntm-server.conf
+
+port            = 5555
+cert            = /etc/ntm-server/server_cert.pem
+key             = /etc/ntm-server/server_key.pem
+allowed_keys    = /etc/ntm-server/allowed_clients.txt
+
+web_port        = 8443
+web_token       = change-me-to-a-strong-secret   # optional but recommended
+
+aggregation_window_days = 7
 ip_db_path                 = /var/lib/ntm-server/ip2asn-combined.tsv.gz
 ip_db_auto_update          = true
 ip_db_update_interval_days = 7
@@ -211,16 +235,22 @@ sudo ntm-server \
 ```
 
 Expected startup output on stderr:
-- Confirmation that the TLS cert/key loaded successfully and plain TCP is refused.
+- Confirmation that the TLS cert/key loaded successfully.
 - Number of allowed Ed25519 keys loaded.
 - IP database loaded, or a download triggered if the cache file is missing.
+- In WebAuthn mode: `admin password migrated to PBKDF2 and plaintext file erased` (first run only).
 - Listening ports for ingestion and the web dashboard.
 
 If `cert`, `key`, or `allowed_keys` are missing the server exits immediately with an error
 before opening any port.
 
-Open `https://<server-ip>:8443` in a browser on the same LAN to confirm the dashboard loads,
-then press `Ctrl+C` to stop. If no errors appear, proceed to daemon mode.
+**Accessing the dashboard after first run:**
+
+- **WebAuthn mode:** open `https://ntm.example.com` (your tunnel domain). The server is
+  bound to `127.0.0.1`, so `https://<server-ip>:8443` will not work.
+- **Legacy LAN mode:** open `https://<server-ip>:8443` from any device on the same LAN.
+
+Press `Ctrl+C` to stop. If no errors appear, proceed to daemon mode.
 
 ---
 
@@ -264,11 +294,11 @@ while the ingestion port continues running. `PrivateUsers` causes the same failu
 namespace interference with OpenSSL socket operations. `RestrictAddressFamilies` is used
 instead to provide equivalent attack-surface reduction without breaking TLS.
 
-Full contents of `/etc/systemd/system/ntm-server.service`:
+Full contents of `ntm-server.service.example`:
 
 ```ini
 [Unit]
-Description=NTM network traffic aggregation server
+Description=Network Monitor Server Daemon
 After=network-online.target
 Wants=network-online.target
 
@@ -280,16 +310,29 @@ ExecStart=/usr/local/bin/ntm-server \
 Restart=on-failure
 RestartSec=5s
 
-# Lock down the service
 User=ntm-server
 Group=ntm-server
+WorkingDirectory=/var/lib/ntm-server
 RuntimeDirectory=ntm-server
 StateDirectory=ntm-server
 LogsDirectory=ntm-server
+
+# Allow the server to read its config and write WebAuthn credential files.
+ReadWritePaths=/var/lib/ntm-server /etc/ntm-server
+
+NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/ntm-server /etc/ntm-server
-NoNewPrivileges=true
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+PrivateDevices=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_INET AF_INET6
 
 [Install]
 WantedBy=multi-user.target
@@ -333,6 +376,16 @@ aggregation continues normally.
 
 ## 11. Web dashboard access
 
+### WebAuthn mode
+
+Open `https://ntm.example.com` (your Cloudflare Tunnel or reverse-proxy domain) from any
+device. The server redirects unauthenticated visits to `/login` automatically.
+
+Since the server is bound to `127.0.0.1`, it is **not** reachable directly via
+`https://<server-ip>:8443` — all access goes through the tunnel.
+
+### Legacy LAN mode
+
 Navigate to `https://<server-ip>:8443` from any device on the LAN.
 
 The page auto-refreshes every 30 seconds and shows:
@@ -340,38 +393,30 @@ The page auto-refreshes every 30 seconds and shows:
 - **Interfaces** — per-client, per-interface packet and byte totals over the aggregation window.
 - **Entity flows** — top (src ASN, dst ASN) pairs sorted by bytes.
 
-### Access controls in the current version
+### Access controls summary
 
-| Control | Status |
-|---|---|
-| HTTPS (TLS) | Always enforced (mandatory — server refuses to start without cert/key) |
-| RFC 1918 LAN-only IP filter | Always enforced (hard-coded, not configurable) |
-| Bearer token (`web_token`) | Optional; strongly recommended |
-| Per-user login / password | Not yet implemented (planned) |
-| Rate limiting | 30 req/min per IP (configurable via `web_rate_limit_rpm`) |
+| Control | WebAuthn mode | Legacy mode |
+|---|---|---|
+| HTTPS (TLS) | Always enforced (mandatory) | Always enforced (mandatory) |
+| RFC 1918 LAN-only IP filter | **Bypassed** — authentication handled by passkey session | Always enforced |
+| Passkey session | Required for all protected endpoints | Not available |
+| Bearer token (`web_token`) | Not used (superseded by passkey sessions) | Optional; recommended |
+| Rate limiting | 30 req/min per IP (configurable via `web_rate_limit_rpm`) | Same |
 
-When `web_token` is set, every request must include:
+### Admin data purge
 
-```
-Authorization: Bearer <your-token>
-```
+An admin page at `https://<host>/admin` lets an operator permanently purge all historical
+traffic data for a selected client.
 
-> **Do not expose `web_port` to the internet.** The LAN filter is the only perimeter and there
-> is no brute-force protection on the token.
+**WebAuthn mode:** no password entry required — the existing passkey session is sufficient.
+Navigate to `/admin` after signing in.
 
-### Admin interface and data purge
-
-The server exposes an optional admin page at `https://<server-ip>:8443/admin` that lets an
-operator select a client and permanently purge all its historical traffic data. The feature is
-disabled (the endpoint silently returns 404) unless an admin password file is configured.
-
-**Setting up the admin password:**
+**Legacy mode:** the feature is disabled (returns 404) unless `admin_password_file` is
+configured. To set up:
 
 ```bash
-# 1. Write a strong password into the file (no quotes, just the password on one line)
+# Write a strong password into the file (no quotes, no newline issues)
 echo "your-strong-admin-password" | sudo tee /etc/ntm-server/admin_password > /dev/null
-
-# 2. Lock down permissions so only the service account can read it
 sudo chown ntm-server:ntm-server /etc/ntm-server/admin_password
 sudo chmod 600 /etc/ntm-server/admin_password
 ```
@@ -382,32 +427,14 @@ Add to the config file:
 admin_password_file = /etc/ntm-server/admin_password
 ```
 
-The server reads the first line of the file at startup, trims trailing whitespace, and stores
-it in memory for the life of the process. The file is not re-read while the server is running;
-restart the server to pick up a password change.
+The server reads the first line of the file at startup and stores it in memory.
+The admin password is **stored as plain text** in the file and protected solely by
+filesystem permissions (`chmod 600`). In WebAuthn mode, set up `admin_password_file`
+only temporarily to bootstrap — it is migrated to PBKDF2 and the plaintext erased on
+first start.
 
-> **Security warning — plain-text password storage**
->
-> The admin password is stored **in plain text** inside the password file and is **solely
-> protected by Linux filesystem access rights** (`chmod 600` / `chown ntm-server`). If an
-> attacker gains read access to the file (e.g. through a backup leak, a misconfigured ACL, or
-> a privilege-escalation vulnerability), the password is directly exposed.
->
-> This limitation is a known interim measure. Secure password storage (e.g. bcrypt hashing,
-> a secrets manager, or mutual-TLS client certificates for admin access) should be implemented
-> before deploying in a high-security or multi-operator environment.
-
-**Accessing the admin page:**
-
-1. Open `https://<server-ip>:8443/admin` in a browser (requires the same bearer token header
-   as the main dashboard if `web_token` is set).
-2. The page lists all clients that have data in the aggregation window.
-3. Click a client row to select it, then click **Purge selected client**.
-4. Enter the admin password in the confirmation panel and click **Confirm Purge**.
-5. On success, all data for that client is erased and accumulation restarts on next connection.
-
-**Rate limiting:** the `/api/admin/purge` endpoint has a separate, stricter rate limit of
-5 requests per minute per IP to slow brute-force password attempts.
+**Rate limiting:** the `/api/admin/purge` endpoint has a stricter rate limit of
+5 requests per minute per IP.
 
 ---
 
@@ -443,18 +470,20 @@ closed and the client reconnects with fresh session keys.
 - [ ] TLS configured: `cert` and `key` set (mandatory — server refuses to start without them)
 - [ ] Ed25519 auth configured: `allowed_keys` set (mandatory — server refuses to start without it)
 - [ ] Each client started with `--identity` matching a key in `allowed_clients.txt`
-- [ ] `web_token` set to a strong random secret
-- [ ] Server binary runs as a dedicated unprivileged user (`ntm-server`)
-- [ ] `server_key.pem` permissions are `640` (owner `ntm-server`, group `ntm-server`)
-- [ ] `web_bind` set to `127.0.0.1` (Cloudflare Tunnel deployment) or the server's LAN IP — do **not** leave as `0.0.0.0` in WebAuthn mode; the LAN-only source-IP filter is bypassed when WebAuthn is active
+- [ ] `web_bind` set to `127.0.0.1` (Cloudflare Tunnel / WebAuthn deployment) or the server's LAN IP — do **not** leave as `0.0.0.0` in WebAuthn mode; the LAN-only source-IP filter is bypassed when WebAuthn is active
 - [ ] `web_port` additionally blocked at the firewall from reaching the internet
 - [ ] `client_bind` set to the server's LAN IP (or `127.0.0.1` if all clients are local) rather than `0.0.0.0`
 - [ ] `port` (ingestion) additionally blocked at the firewall unless remote clients are used
+- [ ] **WebAuthn mode:** `webauthn_rp_id`, `webauthn_credentials_file`, and `webauthn_admin_cred_file` all set
+- [ ] **WebAuthn mode:** `webauthn-admin.json` and `webauthn-credentials.json` owned by service account with `chmod 600`
+- [ ] **WebAuthn mode:** admin password migration confirmed in `journalctl` on first start (`admin password migrated to PBKDF2 and plaintext file erased`)
+- [ ] **Legacy mode:** `web_token` set to a strong random secret
+- [ ] **Legacy mode:** if admin interface enabled, `admin_password` file is `chmod 600`, owned by service account
+- [ ] **Legacy mode:** admin password file excluded from backups or backup ACLs restricted (plain-text storage)
+- [ ] `server_key.pem` permissions are `640` (owner `ntm-server`, group `ntm-server`)
 - [ ] TLS certificate expiry reminder set (self-signed default is 365 days)
 - [ ] `ip_db_auto_update=true` or a cron job in place to refresh the ASN database
-- [ ] systemd hardening options applied (`PrivateTmp`, `ProtectSystem`, `NoNewPrivileges`)
-- [ ] If admin interface is enabled: `admin_password` file is `chmod 600`, owned by service account, and contains a strong password
-- [ ] Admin password file is excluded from backups or backup ACLs are restricted (plain-text storage — see [Section 11 admin warning](#admin-interface-and-data-purge))
+- [ ] systemd hardening options applied (`PrivateTmp`, `ProtectSystem`, `NoNewPrivileges`, `RestrictAddressFamilies`)
 
 ---
 
@@ -469,6 +498,8 @@ closed and the client reconnects with fresh session keys.
 - Confirm `cert` and `key` are correctly set and the files are readable by the service user.
 - Use `https://` not `http://` in the browser address bar.
 - For self-signed certs, import or accept the certificate in the browser first.
+- In WebAuthn mode, use the tunnel domain URL (`https://ntm.example.com`), not the server IP
+  directly — the server is bound to `127.0.0.1` and is not reachable on the LAN interface.
 
 **`allowed_keys` set but 0 keys loaded at startup**
 - Check the file path and that the server process can read it.
@@ -527,27 +558,29 @@ Key log messages to look for:
 
 **Setting up correct file ownership and permissions:**
 
-The server process runs as the `ntm` user (or whichever user `User=` is set to
+The server process runs as the `ntm-server` user (or whichever user `User=` is set to
 in the systemd unit). All WebAuthn files must be owned by that user:
 
 ```bash
-# Replace ntm with your service user if different
-sudo chown ntm:ntm /etc/ntm/webauthn-admin.json
-sudo chown ntm:ntm /etc/ntm/webauthn-credentials.json
-sudo chmod 600 /etc/ntm/webauthn-admin.json
-sudo chmod 600 /etc/ntm/webauthn-credentials.json
+# Replace ntm-server with your service user if different
+sudo chown ntm-server:ntm-server /etc/ntm-server/webauthn-admin.json
+sudo chown ntm-server:ntm-server /etc/ntm-server/webauthn-credentials.json
+sudo chmod 600 /etc/ntm-server/webauthn-admin.json
+sudo chmod 600 /etc/ntm-server/webauthn-credentials.json
 
 # If the files do not exist yet, create empty placeholders first:
-sudo -u ntm touch /etc/ntm/webauthn-admin.json /etc/ntm/webauthn-credentials.json
-sudo chmod 600 /etc/ntm/webauthn-admin.json /etc/ntm/webauthn-credentials.json
+sudo -u ntm-server touch /etc/ntm-server/webauthn-admin.json \
+                         /etc/ntm-server/webauthn-credentials.json
+sudo chmod 600 /etc/ntm-server/webauthn-admin.json \
+               /etc/ntm-server/webauthn-credentials.json
 ```
 
 The directory itself must also be writable by the service user if the files do
 not yet exist:
 
 ```bash
-sudo chown ntm:ntm /etc/ntm
-sudo chmod 750 /etc/ntm
+sudo chown ntm-server:ntm-server /etc/ntm-server
+sudo chmod 750 /etc/ntm-server
 ```
 
 After correcting permissions, restart the server:
