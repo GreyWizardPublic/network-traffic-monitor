@@ -8,7 +8,7 @@ enum NTMError: Error, LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .notConfigured:        return "Server not configured — add host in Settings"
+        case .notConfigured:        return "Server not configured — enter server URL"
         case .httpError(let code):  return "HTTP \(code)"
         case .decodingError(let e): return "Decode error: \(e.localizedDescription)"
         case .networkError(let e):  return e.localizedDescription

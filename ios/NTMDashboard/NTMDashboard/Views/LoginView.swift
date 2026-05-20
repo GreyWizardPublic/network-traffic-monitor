@@ -1,12 +1,13 @@
 import SwiftUI
 
 struct LoginView: View {
-    @Environment(AuthViewModel.self)    private var authVM
+    @Environment(AuthViewModel.self)     private var authVM
     @Environment(SettingsViewModel.self) private var settingsVM
     @State private var showRegister = false
     @State private var showSettings = false
+    @State private var serverURLInput: String = ServerConfig.load().serverURL
 
-    private var serverConfigured: Bool { !ServerConfig.load().host.isEmpty }
+    private var serverConfigured: Bool { !serverURLInput.isEmpty }
 
     var body: some View {
         NavigationStack {
@@ -24,13 +25,14 @@ struct LoginView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                if !serverConfigured {
-                    Label("Server not configured — tap the gear to add server details.", systemImage: "exclamationmark.triangle")
-                        .font(.callout)
-                        .foregroundStyle(.orange)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 32)
-                }
+                TextField("https://ntm.yourserver.com:8443", text: $serverURLInput)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+                    .textFieldStyle(.roundedBorder)
+                    .padding(.horizontal, 32)
+                    .onSubmit { saveURL() }
+                    .onChange(of: serverURLInput) { saveURL() }
 
                 VStack(spacing: 12) {
                     Button {
@@ -51,7 +53,20 @@ struct LoginView: View {
                 }
                 .padding(.horizontal, 32)
 
-                if let error = authVM.errorMessage {
+                if let fp = authVM.untrustedCertFingerprint {
+                    VStack(spacing: 8) {
+                        Label("Certificate not trusted", systemImage: "lock.trianglebadge.exclamationmark")
+                            .foregroundStyle(.orange)
+                        Text("SHA-256: \(fp)")
+                            .font(.caption2)
+                            .monospaced()
+                        Button("Trust this server's certificate") {
+                            Task { await authVM.trustCertAndRetry() }
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .padding(.horizontal, 32)
+                } else if let error = authVM.errorMessage {
                     Text(error)
                         .foregroundStyle(.red)
                         .font(.caption)
@@ -79,5 +94,12 @@ struct LoginView: View {
                 SettingsView()
             }
         }
+    }
+
+    private func saveURL() {
+        var cfg = ServerConfig.load()
+        cfg.serverURL = serverURLInput
+        cfg.save()
+        settingsVM.config.serverURL = serverURLInput
     }
 }
