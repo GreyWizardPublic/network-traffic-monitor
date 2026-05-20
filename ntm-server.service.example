@@ -7,38 +7,39 @@
 #
 # Prerequisites:
 #   - Binary installed at /usr/local/bin/ntm-server
-#   - Config file at /etc/ntmserver/ntm-server.conf
+#   - Config file at /etc/ntm-server/ntm-server.conf
 #   - Dedicated unprivileged user and group created:
-#       sudo useradd -r -s /sbin/nologin -d /var/lib/ntmserver ntmserver
+#       sudo useradd -r -s /sbin/nologin -d /var/lib/ntm-server ntm-server
 #   - Directories created and ownership set:
-#       sudo mkdir -p /etc/ntmserver /var/lib/ntmserver
-#       sudo chown -R ntmserver:ntmserver /etc/ntmserver /var/lib/ntmserver
-#       sudo chmod 640 /etc/ntmserver/server_key.pem
+#       sudo mkdir -p /etc/ntm-server /var/lib/ntm-server
+#       sudo chown -R ntm-server:ntm-server /etc/ntm-server /var/lib/ntm-server
+#       sudo chmod 640 /etc/ntm-server/server_key.pem
 #
 # See SERVER_DEPLOYMENT.md for full setup instructions.
 
 [Unit]
 Description=Network Monitor Server Daemon
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
-User=ntmserver
-Group=ntmserver
+Type=forking
+ExecStart=/usr/local/bin/ntm-server \
+    --daemon \
+    --config /etc/ntm-server/ntm-server.conf
+Restart=on-failure
+RestartSec=5s
 
-ExecStart=/usr/local/bin/ntm-server --config /etc/ntmserver/ntm-server.conf
+User=ntm-server
+Group=ntm-server
+WorkingDirectory=/var/lib/ntm-server
+RuntimeDirectory=ntm-server
+StateDirectory=ntm-server
+LogsDirectory=ntm-server
 
-# Uncomment if the server needs raw packet capture capabilities on the ingestion
-# host itself (not normally required; ntm-client handles capture on client machines).
-#AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
-#CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
-
-ReadWritePaths=/var/lib/ntmserver
-WorkingDirectory=/var/lib/ntmserver
-RuntimeDirectory=ntmserver
-StateDirectory=ntmserver
-LogsDirectory=ntmserver
-
-Restart=always
+# Allow the server to read its config and write WebAuthn credential files.
+# Required because ProtectSystem=strict makes the filesystem read-only by default.
+ReadWritePaths=/var/lib/ntm-server /etc/ntm-server
 
 # ── Security hardening ────────────────────────────────────────────────────────
 
@@ -63,7 +64,7 @@ PrivateDevices=true
 # PrivateUsers must NOT be enabled. It creates a user namespace that interferes
 # with OpenSSL privilege checks and socket operations, producing the same silent
 # dashboard failure as MemoryDenyWriteExecute. It is also redundant here because
-# the service already runs as the unprivileged dedicated user ntmserver.
+# the service already runs as the unprivileged dedicated user ntm-server.
 # PrivateUsers=true   # <-- do not uncomment
 
 ProtectProc=invisible

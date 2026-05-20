@@ -13,7 +13,7 @@ For full step-by-step production deployment guides (TLS, Ed25519 auth, systemd, 
 Headless, extensible **client–server network traffic monitor** written in **C++**.
 
 - **Client (`ntm-client`)**: runs on devices, captures packets via `libpcap`, and sends **metadata only** to the server.
-- **Server (`ntm-server`)**: runs as a headless aggregator, maintaining per-interface, per-flow, and per-entity aggregates. Includes an embedded **HTTPS web dashboard** accessible from any browser on your LAN.
+- **Server (`ntm-server`)**: runs as a headless aggregator, maintaining per-interface, per-flow, and per-entity aggregates. Includes an embedded **HTTPS web dashboard** accessible from any browser.
 
 Both binaries can run either in the **foreground** (for debugging) or as **Unix daemons**.
 
@@ -30,7 +30,7 @@ Both binaries can run either in the **foreground** (for debugging) or as **Unix 
 
 - **ntm-server**
   - Listens on one **client data-ingestion TCP port** (default `5555`) for `ntm-client` connections.
-  - Optional **Ed25519 authentication**: when started with `--allowed-keys FILE`, each connecting client must prove identity with an Ed25519 key; the server uses the public key as the client identifier in aggregation.
+  - **TLS and Ed25519 authentication are both mandatory.** The server refuses to start without a valid cert/key pair and an `allowed_keys` file. Each connecting client must prove identity with an Ed25519 key listed in that file.
   - Consumes `D ...` data lines from clients and aggregates:
     - Per-interface totals (packets, bytes).
     - Per-flow `(src IP, dst IP)`.
@@ -57,28 +57,36 @@ Both binaries can run either in the **foreground** (for debugging) or as **Unix 
 From the project root:
 
 ```bash
-mkdir -p build
-cd build
-cmake ..
-cmake --build .
+# Linux
+cmake -B build-linux -DCMAKE_BUILD_TYPE=Release .
+cmake --build build-linux -j$(nproc)
 ```
 
-This produces two binaries in `build/`:
+This produces two binaries in `build-linux/`:
 
 - `ntm-server`
 - `ntm-client`
+
+For a Windows cross-compiled client (from Linux with MinGW-w64 and the Npcap SDK):
+
+```bash
+cmake -B build-windows \
+  -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-mingw64.cmake \
+  -DNPCAP_SDK=/opt/npcap-sdk \
+  -DCMAKE_BUILD_TYPE=Release .
+cmake --build build-windows -j$(nproc)
+```
 
 > For a full breakdown of every linked library and external data source, with
 > SPDX identifiers and upstream URLs, see [`LICENSES.md`](LICENSES.md).
 
 ## Web Dashboard
 
-`ntm-server` includes an embedded HTTPS web dashboard. Open it in any browser
-on your LAN — no extra software required.
+`ntm-server` includes an embedded HTTPS web dashboard.
 
 ### Authentication modes
 
-**WebAuthn passkey authentication** (recommended for WAN/cloud access):
+**WebAuthn passkey authentication** (recommended — required for WAN/cloud access):
 
 Set `webauthn_rp_id` in the server config to enable. The dashboard requires a
 registered FIDO2 passkey (Face ID, Touch ID, Windows Hello, hardware key) to
@@ -88,11 +96,17 @@ Suitable for access through a [Cloudflare Tunnel](scripts/setup-cloudflare-tunne
 or any HTTPS reverse proxy. The server does not need to be directly exposed to
 the internet.
 
-**Legacy LAN-only mode** (default, no config needed):
+Access the dashboard at `https://your.domain.com` (the Cloudflare Tunnel or
+reverse-proxy domain). In WebAuthn mode the server should be bound to
+`127.0.0.1` (`web_bind = 127.0.0.1`) so only the tunnel process can reach it.
 
-When `webauthn_rp_id` is not set, the dashboard is accessible to any device on
-your LAN (RFC 1918 address ranges and loopback). Optionally add `web_token` for
-bearer-token protection.
+**Legacy LAN-only mode** (default when `webauthn_rp_id` is not set):
+
+The dashboard is accessible to any device on your LAN (RFC 1918 address ranges
+and loopback). Optionally add `web_token` for bearer-token protection.
+
+Access the dashboard at `https://<server-ip>:8443` from any LAN device. Import
+or accept the self-signed certificate in your browser on first visit.
 
 > **Do not expose ntm-server directly to the internet without WebAuthn enabled.**
 > The LAN-only filter is bypassed when requests arrive from localhost (e.g. via
@@ -114,13 +128,8 @@ bearer-token protection.
    > On first startup with `webauthn_admin_cred_file` configured, the server
    > automatically derives a PBKDF2-HMAC-SHA256 hash, writes it to the cred file,
    > then **zeros and unlinks** the plaintext file. After migration the plaintext
-   > file no longer exists.
-   >
-   > **Risk window:** If the server is compromised _between_ writing the plaintext
-   > file and the first startup, the password could be read. Mitigate by:
-   > - Creating the plaintext file immediately before starting the server.
-   > - Ensuring the file has mode `600` and is owned by the server user.
-   > - Deleting it manually if startup is delayed.
+   > file no longer exists. The risk window is between writing the file and the
+   > first successful server start — keep it short and ensure mode `600`.
 
 3. **Add to your config file** (`/etc/ntm-server/ntm-server.conf`):
 
@@ -131,11 +140,15 @@ bearer-token protection.
    webauthn_admin_cred_file   = /etc/ntm-server/webauthn-admin.json
    admin_password_file        = /etc/ntm-server/admin-password.txt
 
-   # Optional: iOS App ID for passkey domain binding (requires Phase 4 iOS build)
-   # webauthn_ios_app_id = TEAMID1234.com.ntm.NTMDashboard
+   # Bind to localhost — Cloudflare Tunnel connects from 127.0.0.1
+   web_bind                   = 127.0.0.1
+
+   # Optional: iOS App ID for passkey domain binding
+   # webauthn_ios_app_id = TEAMID1234.com.example.NTMDashboard
    ```
 
-4. **Start the server.** It will migrate the admin password automatically.
+4. **Start the server.** It will migrate the admin password automatically and
+   log `admin password migrated to PBKDF2 and plaintext file erased`.
 
 5. **Open `https://ntm.example.com/login`** in a browser and register your first
    passkey using the admin password.
@@ -146,7 +159,7 @@ bearer-token protection.
 
 The web dashboard is **HTTPS-only**. You must provide a server certificate and
 private key. The same cert/key pair is shared with the client data-ingestion
-port when TLS is enabled there.
+port.
 
 #### Option A — Self-signed certificate (typical for a private LAN)
 
@@ -204,22 +217,21 @@ Browsers will trust it automatically and no import step is required.
 
 ### Accessing the dashboard
 
-Once `ntm-server` is running with a cert and key configured, open a browser
-on any device on the same LAN and navigate to:
+**WebAuthn mode:** open `https://your.domain.com` in any browser. The server
+redirects unauthenticated visits to the `/login` page automatically.
 
-```
-https://<server-ip>:8443
-```
+**Legacy LAN mode:** open `https://<server-ip>:8443` in any browser on the same
+LAN.
 
 The page auto-refreshes every 30 seconds and shows:
 
 - **Interfaces** table — per-client, per-interface packet and byte totals over the aggregation window.
 - **Entity flows** table — top (src ASN, dst ASN) pairs sorted by bytes, showing the autonomous systems your traffic passes through.
 
-### Bearer token (optional, not required)
+### Bearer token (legacy mode only)
 
-A static bearer token can be configured as an extra layer of access control,
-though this is **not required** in the current version:
+A static bearer token can be configured as an extra layer of access control
+in legacy LAN mode:
 
 ```ini
 # ntm-server.conf
@@ -227,12 +239,7 @@ web_token = your-secret-token-here
 ```
 
 When set, every web request must include `Authorization: Bearer <token>` or
-it receives `HTTP 401`. The `web_token` key is empty by default — the dashboard
-is open to all LAN IPs without a token.
-
-> **Note:** Full per-user authentication is a planned future enhancement.
-> The bearer-token option is a stopgap for environments where a single shared
-> secret is sufficient.
+it receives `HTTP 401`. Not used in WebAuthn mode (passkey sessions replace it).
 
 ### Rate limiting
 
@@ -242,8 +249,9 @@ Configure via `web_rate_limit_rpm` (0 = unlimited).
 
 ## Authentication (Ed25519) — client data ingestion
 
-Client and server can use **Ed25519** so that each client has a stable identity
-and only allowed keys can connect to the data-ingestion port.
+Client and server use **Ed25519** so that each client has a stable identity
+and only allowed keys can connect to the data-ingestion port. **This is
+mandatory** — the server refuses to start without an `allowed_keys` file.
 
 ### Public / private key generation (OpenSSL)
 
@@ -282,65 +290,51 @@ dead0000000000000000000000000000000000000000000000000000000beef1
 
 ### Usage
 
-- **Server** (require auth): `./ntm-server --allowed-keys /path/to/allowed_clients.txt [--port 5555]`
-- **Client** (prove identity): `./ntm-client --identity /path/to/client_private.pem --server HOST [--port 5555]`
-
-If the server is started **without** `--allowed-keys`, it does not perform
-authentication and identifies clients by TCP peer address.
+- **Server**: `./ntm-server --allowed-keys /path/to/allowed_clients.txt [--port 5555]`
+- **Client**: `./ntm-client --identity /path/to/client_private.pem --server HOST [--port 5555]`
 
 ## TLS encryption (client data ingestion)
 
-Traffic between client and server can be **encrypted with TLS** using the same
-certificate configured for the web dashboard.
+TLS is **mandatory** on the ingestion port. Start the server with `--cert` and
+`--key`; start clients with `--ca CA.pem` (CA bundle) or `--server-cert SERVER_CERT.pem`
+(certificate pinning).
 
 - **Session limit:** Each TLS session is limited to **6 hours**. After 6 hours
   the connection is closed and the client reconnects with new session keys.
-- **Server:** Start with `--cert SERVER_CERT.pem` and `--key SERVER_KEY.pem`.
-  Without these, the server accepts plain TCP on the ingestion port (not
-  recommended for production).
-- **Client:** Start with `--ca CA.pem` (CA bundle) or `--server-cert SERVER_CERT.pem`
-  (certificate pinning). Without either, the client connects in plain TCP.
 
 ## Running (foreground for debugging)
 
 ```bash
-cd build
-
-# Start the server (with TLS and auth for both ports):
-./ntm-server \
+# Start the server (TLS and auth are mandatory):
+./build-linux/ntm-server \
   --port 5555 \
   --cert ntm-server-cert.pem --key ntm-server-key.pem \
   --allowed-keys /path/to/allowed_clients.txt \
   --web-port 8443
 
 # Start the client (with TLS and identity):
-sudo ./ntm-client \
+sudo ./build-linux/ntm-client \
   --server 192.168.1.10 --port 5555 \
   --server-cert ntm-server-cert.pem \
   --identity /path/to/client_private.pem
 ```
 
-Open `https://192.168.1.10:8443` in a browser on the same LAN to see the
-live dashboard.
-
-Without `--cert`/`--key`, traffic is plain TCP and the web dashboard is disabled.
-Without `--allowed-keys` and `--identity`, the server does not require client auth.
+In **legacy LAN mode**, open `https://192.168.1.10:8443` in a browser on the
+same LAN to see the live dashboard. In **WebAuthn mode**, use your domain URL.
 
 ## Running as a daemon (Unix)
 
 ```bash
-cd build
-
-# Server (with TLS; add --require-tls to refuse plain-TCP ingestion connections):
-./ntm-server --daemon \
+# Server:
+./build-linux/ntm-server --daemon \
   --port 5555 \
   --cert /etc/ntm-server/ntm-server-cert.pem \
   --key  /etc/ntm-server/ntm-server-key.pem \
   --allowed-keys /etc/ntm-server/allowed_clients.txt \
   --web-port 8443
 
-# Client (with TLS and identity):
-sudo ./ntm-client --daemon \
+# Client:
+sudo ./build-linux/ntm-client --daemon \
   --server 192.168.1.10 --port 5555 \
   --server-cert /etc/ntm-server/ntm-server-cert.pem \
   --identity /path/to/client_private.pem
@@ -367,8 +361,9 @@ Key groups:
 
 | Group | Keys |
 |-------|------|
-| Data ingestion | `port`, `client_bind`, `allowed_keys`, `cert`, `key`, `require_tls` |
+| Data ingestion | `port`, `client_bind`, `allowed_keys`, `cert`, `key` |
 | Web dashboard | `web_port`, `web_bind`, `web_token`, `web_rate_limit_rpm` |
+| WebAuthn | `webauthn_rp_id`, `webauthn_rp_name`, `webauthn_credentials_file`, `webauthn_admin_cred_file`, `webauthn_ios_app_id`, `webauthn_allowed_origins`, `webauthn_session_ttl_hours` |
 | Aggregation | `aggregation_window_days` |
 | IP database | `ip_db_path`, `ip_db_url`, `ip_db_update_interval_days`, `ip_db_auto_update` |
 | Limits | `max_recv_buffer_bytes`, `max_flow_entries_per_key`, `max_entity_flow_entries_per_key`, `max_ifaces_per_client`, `max_entity_lines_in_summary`, `max_snapshot_entries_for_print`, `max_iface_len`, `max_ip_len`, `max_concurrent_connections`, `max_connections_per_ip`, `idle_timeout_seconds`, `max_d_lines_per_second_per_connection` |
@@ -392,34 +387,20 @@ See `ntm-client.conf.example` in the project root.
 
 For production deployments:
 
-- **Use TLS on the ingestion port:** Start the server with `--cert` and `--key` and
-  the client with `--ca` or `--server-cert` to protect against man-in-the-middle attacks.
-  Use `--require-tls` to refuse plain-TCP ingestion connections.
-- **Use Ed25519 auth:** Start the server with `--allowed-keys` and the client with
-  `--identity` so only known clients can submit data.
-- **Web dashboard — LAN only, no user auth (current version):** The dashboard
-  hard-enforces RFC 1918 source-IP filtering and requires HTTPS, but currently
-  has **no per-user authentication**. Any LAN device can view it. Do **not**
-  expose port `web_port` to the internet. See the limitation notice in
-  [Web Dashboard](#web-dashboard); per-user auth is planned for a future release.
+- **TLS is mandatory on the ingestion port.** Start the server with `--cert` and
+  `--key` and the client with `--ca` or `--server-cert` to protect against
+  man-in-the-middle attacks. The server refuses to start without a valid cert/key pair.
+- **Ed25519 auth is mandatory.** Start the server with `--allowed-keys` and the
+  client with `--identity` so only known clients can submit data. The server
+  refuses to start without a valid `allowed_keys` file.
+- **Web dashboard authentication:**
+  - **WebAuthn mode** (recommended): passkey session required; no LAN-only
+    restriction; suitable for WAN access via a tunnel.
+  - **Legacy mode**: hard RFC 1918 source-IP filter; optionally add `web_token`
+    for bearer-token protection. Do not expose `web_port` to the internet in
+    legacy mode.
 - **TLS certificate renewal:** Self-signed certificates expire (default 365 days).
   Set a calendar reminder to regenerate before expiry.
-
-> ### ⚠ Admin password stored in plain text — security limitation
->
-> The optional admin data-purge feature (`admin_password_file` config key) stores the
-> admin password **as plain text** in a file on disk. Protection relies **solely on Linux
-> filesystem access rights** (`chmod 600` / `chown`) to prevent other users from reading
-> the file. If the file is exposed — through a backup leak, a misconfigured ACL, or a
-> privilege-escalation vulnerability — the password is directly visible to an attacker.
->
-> **This is a known limitation of the current implementation.** Secure password storage
-> (e.g. bcrypt hashing, integration with a secrets manager, or mutual-TLS client
-> certificates for admin access) should be implemented in a future release before the
-> admin interface is used in a high-security or multi-operator environment.
->
-> See the admin interface subsection of [`SERVER_DEPLOYMENT.md`](SERVER_DEPLOYMENT.md)
-> for setup instructions, hardening steps, and a full description of the limitation.
 
 The server enforces protocol and resource limits to reduce abuse and DoS:
 
@@ -490,13 +471,9 @@ misattributed.
 
 ## Limitations & Notes
 
-- **Web dashboard — no per-user authentication (current version):** The web dashboard
-  is accessible to any device on the LAN without a login or password. The only
-  access controls are HTTPS and the hard RFC 1918 IP filter. Internet-facing
-  deployment is not supported. Planned for a future version: per-user authentication
-  (bearer tokens enforced, mutual-TLS client certificates, configurable CIDR allowlists).
-- **Encryption on ingestion port:** Use `--cert`/`--key` on the server and `--ca` or
-  `--server-cert` on the client for encrypted traffic. Sessions are limited to 6 hours.
-- This is a **live monitor**; it does not persist historical data to disk.
+- **Traffic data is in-memory only:** the server does not persist traffic statistics
+  to disk. Restarting the server clears all aggregated data. WebAuthn credentials
+  and the IP→ASN database are persisted to disk.
+- **Encryption on ingestion port:** TLS is mandatory. Sessions are limited to 6 hours.
 - For very high-throughput links, a user-space monitor may still miss some packets.
 - IPv4 and IPv6 are both captured on the Linux client.

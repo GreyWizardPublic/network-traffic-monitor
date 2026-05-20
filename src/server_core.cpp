@@ -1546,6 +1546,10 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
         return 1;
     }
 
+    if (config.require_tls)
+        serverLog(LogLevel::Warn,
+                  "ntm-server: require_tls is obsolete — TLS is always mandatory; ignoring");
+
     // NEW-H1: fail-closed authentication.
     std::unordered_map<std::string, std::string> clientNicknames;
     AllowedKeysSet allowedKeys = loadAllowedKeys(allowedKeysPath, clientNicknames);
