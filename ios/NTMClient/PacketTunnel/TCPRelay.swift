@@ -1,6 +1,6 @@
 import Foundation
 import Network
-import NetworkExtension
+@preconcurrency import NetworkExtension
 
 // Per-flow TCP relay. One NWConnection(.tcp) per (srcIP, srcPort, dstIP, dstPort) 4-tuple.
 // NWConnections created inside the extension process bypass the tunnel automatically.

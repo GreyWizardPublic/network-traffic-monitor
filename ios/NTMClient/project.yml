@@ -57,9 +57,10 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.ntm.NTMClient.PacketTunnel
-        SWIFT_VERSION: "6.0"
+        SWIFT_VERSION: "5.0"
         IPHONEOS_DEPLOYMENT_TARGET: "18.0"
-        # Minimal concurrency: NEPacketTunnelProvider is callback-based Obj-C, not Swift-concurrency-native.
+        # NEPacketTunnelProvider is callback-based Obj-C; Swift 5 + minimal avoids false-positive
+        # sendability errors on completion handlers and NEPacketTunnelFlow captures.
         SWIFT_STRICT_CONCURRENCY: minimal
     entitlements:
       path: PacketTunnel/PacketTunnel.entitlements

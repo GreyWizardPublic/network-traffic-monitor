@@ -70,7 +70,7 @@ final class WireViewModel {
 
     private func runLoop(config: ServerConfig) async {
         guard let privateKey = WireKeyService.loadPrivateKey() else {
-            state = .failed(WireError.noKeyPair.localizedDescription!)
+            state = .failed(WireError.noKeyPair.localizedDescription)
             return
         }
 

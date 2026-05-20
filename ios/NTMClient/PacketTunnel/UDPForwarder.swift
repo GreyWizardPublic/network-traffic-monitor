@@ -1,6 +1,6 @@
 import Foundation
 import Network
-import NetworkExtension
+@preconcurrency import NetworkExtension
 
 // Per-flow UDP relay. One NWConnection per (srcIP, srcPort, dstIP, dstPort) 4-tuple.
 // NWConnections created inside a NEPacketTunnelProvider process bypass the tunnel

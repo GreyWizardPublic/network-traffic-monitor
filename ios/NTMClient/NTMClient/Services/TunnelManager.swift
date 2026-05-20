@@ -2,6 +2,8 @@ import Foundation
 import NetworkExtension
 import Observation
 
+extension NETunnelProviderManager: @unchecked @retroactive Sendable {}
+
 private let kProviderBundleID = "com.ntm.NTMClient.PacketTunnel"
 
 @Observable
@@ -35,7 +37,7 @@ final class TunnelManager {
     var state: State = .unknown
 
     private var manager:        NETunnelProviderManager?
-    private var statusObserver: NSObjectProtocol?
+    nonisolated(unsafe) private var statusObserver: NSObjectProtocol?
 
     deinit {
         if let obs = statusObserver {

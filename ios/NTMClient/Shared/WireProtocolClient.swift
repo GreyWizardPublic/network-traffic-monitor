@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import Network
+import os
 import Security
 
 // Wire protocol constants (mirrors proto_client_server.hpp)
