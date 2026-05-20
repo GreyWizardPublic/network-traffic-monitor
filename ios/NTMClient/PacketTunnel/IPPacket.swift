@@ -143,7 +143,7 @@ extension IPPacket {
         let seq      = UInt32(b[t + 4]) << 24 | UInt32(b[t +  5]) << 16
                      | UInt32(b[t + 6]) <<  8 | UInt32(b[t +  7])
         let ack      = UInt32(b[t + 8]) << 24 | UInt32(b[t +  9]) << 16
-                     | UInt32(b[t +10]) <<  8 | UInt32(b[t + 11])
+                     | UInt32(b[t + 10]) <<  8 | UInt32(b[t + 11])
         let dataOff  = Int(b[t + 12] >> 4) * 4
         let flags    = b[t + 13]
         let window   = UInt16(b[t + 14]) << 8 | UInt16(b[t + 15])

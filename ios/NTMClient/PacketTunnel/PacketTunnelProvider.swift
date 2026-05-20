@@ -2,7 +2,7 @@ import CryptoKit
 import Darwin
 import Foundation
 import Network
-import NetworkExtension
+@preconcurrency import NetworkExtension
 
 // NTM software version reported in H lines; keep in sync with src/version.hpp.
 private let kClientVersion     = "1.6.0"

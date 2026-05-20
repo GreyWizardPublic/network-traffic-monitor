@@ -77,7 +77,7 @@ struct SetupView: View {
 
     @ViewBuilder
     private var certSection: some View {
-        Section("TLS certificate") {
+        Section {
             if vm.config.pinnedCertData != nil {
                 HStack {
                     Label("Certificate pinned", systemImage: "checkmark.shield.fill")
@@ -90,6 +90,8 @@ struct SetupView: View {
                     showCertPicker = true
                 }
             }
+        } header: {
+            Text("TLS certificate")
         } footer: {
             Text("Required only for self-signed server certificates.")
         }
@@ -97,7 +99,7 @@ struct SetupView: View {
 
     @ViewBuilder
     private var keySection: some View {
-        Section("Ed25519 key pair") {
+        Section {
             if let short = vm.pubkeyShort {
                 LabeledContent("Public key") {
                     Text(short)
@@ -113,6 +115,8 @@ struct SetupView: View {
                 Button("Generate key pair") { vm.generateKey() }
                     .frame(maxWidth: .infinity)
             }
+        } header: {
+            Text("Ed25519 key pair")
         } footer: {
             Text("The private key never leaves this device's Keychain.")
         }
@@ -120,7 +124,7 @@ struct SetupView: View {
 
     @ViewBuilder
     private var registrationSection: some View {
-        Section("Server registration") {
+        Section {
             if vm.isRegistered {
                 Label("Key registered on server", systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green)
@@ -168,6 +172,8 @@ struct SetupView: View {
                     .foregroundStyle(.red)
                     .font(.caption)
             }
+        } header: {
+            Text("Server registration")
         } footer: {
             Text("Sign in with your passkey, then register this device's public key so the server will accept its wire-protocol connection.")
         }
