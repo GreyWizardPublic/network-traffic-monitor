@@ -148,7 +148,8 @@ actor WireProtocolClient {
             opts.securityProtocolOptions,
             { _, trust, complete in
                 let secTrust = sec_trust_copy_ref(trust).takeRetainedValue()
-                guard let leaf = SecTrustGetCertificateAtIndex(secTrust, 0) else {
+                guard let chain = SecTrustCopyCertificateChain(secTrust) as? [SecCertificate],
+                      let leaf = chain.first else {
                     complete(false)
                     return
                 }

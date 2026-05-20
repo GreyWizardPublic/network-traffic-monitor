@@ -40,7 +40,7 @@ struct DashboardView: View {
             }
             .navigationTitle("NTM Dashboard")
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         Task { await vm.refresh() }
                     } label: {
