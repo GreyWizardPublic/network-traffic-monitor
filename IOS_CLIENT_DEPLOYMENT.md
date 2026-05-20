@@ -165,10 +165,10 @@ the normal network stack.
 
 | Limitation | Detail |
 |---|---|
-| **TCP internet broken while active** | TCP packets are observed (D-lines sent) but not forwarded. HTTP/HTTPS and other TCP-based apps will not work while capture is running. |
-| **UDP forwarded (DNS works)** | UDP packets including DNS (port 53) are forwarded through the extension. DNS resolution continues to work. |
+| **TCP relayed (IPv4 and IPv6)** | TCP connections are relayed through per-flow `NWConnection` instances. HTTP/HTTPS and other TCP-based apps continue to work while capture is running. |
+| **UDP forwarded (IPv4 and IPv6)** | UDP packets including DNS (port 53) are forwarded. DNS resolution continues to work. |
+| **IPv6 fully monitored** | IPv6 traffic is tunneled, D-lines are sent, and IPv6 UDP/TCP is relayed — IPv6 internet works normally. |
 | **Custom DNS replaced** | The system DNS servers are overridden with `8.8.8.8` and `1.1.1.1` while capture is active. |
-| **IPv6 UDP not forwarded** | IPv6 UDP packets are observed (D-lines) but not forwarded in this release. |
 | **Simulator not supported** | Packet tunnel extensions cannot run in the iOS Simulator. Device required. |
 
 ### How it works
@@ -178,7 +178,9 @@ the normal network stack.
 2. The extension opens its own wire-protocol connection to ntm-server.
 3. All IP traffic on the device is routed through the virtual tunnel interface.
 4. The extension parses each IP packet and sends a `D utun <src> <dst> <bytes>` line to
-   ntm-server, and forwards UDP payloads directly to the destination.
+   ntm-server. Both IPv4 and IPv6 UDP payloads are forwarded to their destinations; both
+   IPv4 and IPv6 TCP connections are relayed through per-flow `NWConnection` instances.
+   Internet connectivity (TCP and UDP, IPv4 and IPv6) remains fully functional.
 5. While the VPN is active, the main app's wire connection is paused to avoid two
    simultaneous connections from the same Ed25519 key.
 6. When the VPN stops, the main app resumes its own wire connection (heartbeats only).

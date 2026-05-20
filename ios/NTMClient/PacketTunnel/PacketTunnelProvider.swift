@@ -5,7 +5,7 @@ import Network
 import NetworkExtension
 
 // NTM software version reported in H lines; keep in sync with src/version.hpp.
-private let kClientVersion     = "1.5.0"
+private let kClientVersion     = "1.6.0"
 private let kHealthIntervalSec = 30
 private let kMaxSessionSec     = 21600   // 6 hours
 private let kMaxBackoffSec     = 60.0
@@ -14,6 +14,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private let wireClient    = WireProtocolClient()
     private var udpForwarder  = UDPForwarder()
+    private var tcpRelay      = TCPRelay()
     private var wireTask:       Task<Void, Never>?
     private var isRunning      = false
 
@@ -75,6 +76,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         Task {
             await wireClient.disconnect()
             await udpForwarder.cancelAll()
+            await tcpRelay.cancelAll()
             completionHandler()
         }
     }
@@ -93,11 +95,18 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 // Send D-line observation.
                 Task { try? await self.wireClient.sendLine(pkt.dLine) }
 
-                // Forward UDP (IPv4 only in Phase 3); TCP is observed but not forwarded.
-                if pkt.proto == IPPacket.protoUDP, pkt.version == 4,
+                let flow = self.packetFlow
+
+                // Forward UDP (IPv4 and IPv6, including DNS).
+                if pkt.proto == IPPacket.protoUDP,
                    let payload = pkt.udpPayload(in: data) {
-                    let flow = self.packetFlow
                     Task { await self.udpForwarder.forward(packet: pkt, rawPayload: payload, into: flow) }
+                }
+
+                // Relay TCP (IPv4 and IPv6) through per-flow NWConnection.
+                if pkt.proto == 6,
+                   let tcp = pkt.parseTCP(in: data) {
+                    Task { await self.tcpRelay.handlePacket(pkt: pkt, tcp: tcp, rawData: data, packetFlow: flow) }
                 }
             }
 
@@ -167,7 +176,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         ipv4.excludedRoutes = []
         settings.ipv4Settings = ipv4
 
-        // IPv6: capture all traffic (D-line only; UDP forwarding is IPv4-only in Phase 3).
+        // IPv6: capture all traffic. UDP and TCP are relayed; D-lines sent for all packets.
         let ipv6 = NEIPv6Settings(addresses: ["fd99::1"], networkPrefixLengths: [128])
         ipv6.includedRoutes = [NEIPv6Route.default()]
         ipv6.excludedRoutes = []

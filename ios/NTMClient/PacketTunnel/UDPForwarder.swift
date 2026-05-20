@@ -63,13 +63,26 @@ actor UDPForwarder {
     private func receiveLoop(conn: NWConnection, key: FlowKey, packetFlow: NEPacketTunnelFlow) {
         conn.receive(minimumIncompleteLength: 1, maximumLength: 65535) { [weak self] data, _, isComplete, error in
             if let data, !data.isEmpty {
-                // Build a full IPv4+UDP reply: src = remote server, dst = original sender
-                if let reply = buildIPv4UDPReply(
-                    srcIP:   key.dstIP,   srcPort: key.dstPort,
-                    dstIP:   key.srcIP,   dstPort: key.srcPort,
-                    payload: data
-                ) {
-                    packetFlow.writePackets([reply], withProtocols: [NSNumber(value: AF_INET)])
+                // Build a reply packet: src = remote server, dst = original sender.
+                // Detect IP version from the address format (IPv6 contains ":").
+                let isIPv6 = key.dstIP.contains(":")
+                let reply: Data?
+                let af: Int32
+                if isIPv6 {
+                    reply = buildIPv6UDPReply(
+                        srcIP: key.dstIP, srcPort: key.dstPort,
+                        dstIP: key.srcIP, dstPort: key.srcPort,
+                        payload: data)
+                    af = AF_INET6
+                } else {
+                    reply = buildIPv4UDPReply(
+                        srcIP: key.dstIP, srcPort: key.dstPort,
+                        dstIP: key.srcIP, dstPort: key.srcPort,
+                        payload: data)
+                    af = AF_INET
+                }
+                if let reply {
+                    packetFlow.writePackets([reply], withProtocols: [NSNumber(value: af)])
                 }
             }
 

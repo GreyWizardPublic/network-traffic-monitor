@@ -35,9 +35,9 @@ struct StatusView: View {
                     }
                     .disabled(!setupVM.isReadyToConnect && !tunnelVM.state.isActive)
 
-                    Label("TCP traffic paused while capture is active", systemImage: "exclamationmark.triangle")
+                    Label("Custom DNS settings are replaced with 8.8.8.8 / 1.1.1.1 while active", systemImage: "info.circle")
                         .font(.caption)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section("Key") {

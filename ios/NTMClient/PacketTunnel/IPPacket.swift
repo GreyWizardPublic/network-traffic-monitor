@@ -110,6 +110,121 @@ struct IPPacket {
     }
 }
 
+// MARK: - TCP header
+
+struct TCPHeader {
+    let srcPort:    UInt16
+    let dstPort:    UInt16
+    let seq:        UInt32
+    let ack:        UInt32
+    let headerBytes: Int        // TCP header length in bytes (data offset field × 4)
+    let flags:      UInt8       // flags byte: CWR|ECE|URG|ACK|PSH|RST|SYN|FIN
+    let window:     UInt16
+    let payloadRange: Range<Int> // range of TCP payload within the original packet Data
+
+    var isSYN: Bool { flags & 0x02 != 0 }
+    var isACK: Bool { flags & 0x10 != 0 }
+    var isFIN: Bool { flags & 0x01 != 0 }
+    var isRST: Bool { flags & 0x04 != 0 }
+    var payloadLen: Int { payloadRange.count }
+}
+
+extension IPPacket {
+    // Parse the TCP header from a raw IPv4 or IPv6 packet. Returns nil for non-TCP packets
+    // or packets that are too short.
+    func parseTCP(in data: Data) -> TCPHeader? {
+        guard proto == 6 else { return nil }
+        let b = Array(data)
+        let t = version == 4 ? ihlBytes : 40  // IPv6 fixed header is 40 bytes
+        guard b.count >= t + 20 else { return nil }
+
+        let srcPort  = UInt16(b[t])     << 8 | UInt16(b[t +  1])
+        let dstPort  = UInt16(b[t + 2]) << 8 | UInt16(b[t +  3])
+        let seq      = UInt32(b[t + 4]) << 24 | UInt32(b[t +  5]) << 16
+                     | UInt32(b[t + 6]) <<  8 | UInt32(b[t +  7])
+        let ack      = UInt32(b[t + 8]) << 24 | UInt32(b[t +  9]) << 16
+                     | UInt32(b[t +10]) <<  8 | UInt32(b[t + 11])
+        let dataOff  = Int(b[t + 12] >> 4) * 4
+        let flags    = b[t + 13]
+        let window   = UInt16(b[t + 14]) << 8 | UInt16(b[t + 15])
+
+        guard dataOff >= 20, b.count >= t + dataOff else { return nil }
+
+        let payloadStart = t + dataOff
+        let payloadEnd   = min(b.count, max(payloadStart, totalBytes))
+        let payloadRange = payloadStart..<payloadEnd
+
+        return TCPHeader(srcPort: srcPort, dstPort: dstPort, seq: seq, ack: ack,
+                         headerBytes: dataOff, flags: flags, window: window,
+                         payloadRange: payloadRange)
+    }
+}
+
+// Builds a raw IPv4+TCP packet for injecting into packetFlow.
+// No TCP options are added (data offset = 5, header = 20 bytes).
+func buildTCPv4Packet(srcIP: String, srcPort: UInt16,
+                       dstIP: String, dstPort: UInt16,
+                       seq: UInt32, ack: UInt32,
+                       flags: UInt8, window: UInt16,
+                       payload: Data = Data()) -> Data? {
+    let srcParts = srcIP.split(separator: ".").compactMap { UInt8($0) }
+    let dstParts = dstIP.split(separator: ".").compactMap { UInt8($0) }
+    guard srcParts.count == 4, dstParts.count == 4 else { return nil }
+    guard payload.count <= 65495 else { return nil }  // 65535 - 20 (IP) - 20 (TCP)
+
+    let tcpLen   = UInt16(20 + payload.count)
+    let totalLen = UInt16(20 + Int(tcpLen))
+
+    var pkt = [UInt8](repeating: 0, count: Int(totalLen))
+
+    // IPv4 header (checksum calculated below)
+    pkt[ 0] = 0x45                          // version=4, IHL=5
+    pkt[ 2] = UInt8(totalLen >> 8)
+    pkt[ 3] = UInt8(totalLen & 0xFF)
+    pkt[ 6] = 0x40                          // flags: DF
+    pkt[ 8] = 64                            // TTL
+    pkt[ 9] = 6                             // protocol: TCP
+    pkt[12] = srcParts[0]; pkt[13] = srcParts[1]
+    pkt[14] = srcParts[2]; pkt[15] = srcParts[3]
+    pkt[16] = dstParts[0]; pkt[17] = dstParts[1]
+    pkt[18] = dstParts[2]; pkt[19] = dstParts[3]
+
+    let ipCk = onesComplementChecksum(pkt, start: 0, count: 20)
+    pkt[10]  = UInt8(ipCk >> 8)
+    pkt[11]  = UInt8(ipCk & 0xFF)
+
+    // TCP header (checksum calculated below)
+    pkt[20] = UInt8(srcPort >> 8); pkt[21] = UInt8(srcPort & 0xFF)
+    pkt[22] = UInt8(dstPort >> 8); pkt[23] = UInt8(dstPort & 0xFF)
+    pkt[24] = UInt8(seq >> 24);    pkt[25] = UInt8((seq >> 16) & 0xFF)
+    pkt[26] = UInt8((seq >> 8) & 0xFF); pkt[27] = UInt8(seq & 0xFF)
+    pkt[28] = UInt8(ack >> 24);    pkt[29] = UInt8((ack >> 16) & 0xFF)
+    pkt[30] = UInt8((ack >> 8) & 0xFF); pkt[31] = UInt8(ack & 0xFF)
+    pkt[32] = 0x50                          // data offset = 5 (20 bytes)
+    pkt[33] = flags
+    pkt[34] = UInt8(window >> 8); pkt[35] = UInt8(window & 0xFF)
+    // pkt[36-37]: checksum; pkt[38-39]: urgent pointer = 0
+
+    for (i, b) in payload.enumerated() { pkt[40 + i] = b }
+
+    // TCP checksum: IPv4 pseudo-header + TCP segment (checksum field = 0)
+    var pseudo = [UInt8]()
+    pseudo.reserveCapacity(12 + Int(tcpLen))
+    pseudo.append(contentsOf: srcParts)    // src IP
+    pseudo.append(contentsOf: dstParts)    // dst IP
+    pseudo.append(0x00)                    // zero
+    pseudo.append(0x06)                    // protocol: TCP
+    pseudo.append(UInt8(tcpLen >> 8))
+    pseudo.append(UInt8(tcpLen & 0xFF))
+    pseudo.append(contentsOf: pkt[20...]) // TCP header + payload (checksum field = 0)
+
+    let tcpCk = onesComplementChecksum(pseudo, start: 0, count: pseudo.count)
+    pkt[36]   = UInt8(tcpCk >> 8)
+    pkt[37]   = UInt8(tcpCk & 0xFF)
+
+    return Data(pkt)
+}
+
 // Builds a raw IPv4+UDP packet suitable for writing back into packetFlow.
 // srcIP/srcPort: the remote server (becomes the IP source in the injected packet).
 // dstIP/dstPort: the original sender / local app (becomes the IP destination).
@@ -166,6 +281,130 @@ func buildIPv4UDPReply(srcIP: String, srcPort: UInt16,
     pkt[27]   = UInt8(udpCk & 0xFF)
 
     return Data(pkt)
+}
+
+// Builds a raw IPv6+TCP packet for injecting into packetFlow.
+// No TCP options are added (data offset = 5, header = 20 bytes).
+func buildTCPv6Packet(srcIP: String, srcPort: UInt16,
+                       dstIP: String, dstPort: UInt16,
+                       seq: UInt32, ack: UInt32,
+                       flags: UInt8, window: UInt16,
+                       payload: Data = Data()) -> Data? {
+    guard let srcBytes = parseIPv6Address(srcIP),
+          let dstBytes = parseIPv6Address(dstIP) else { return nil }
+    guard payload.count <= 65495 else { return nil }
+
+    let tcpLen   = UInt16(20 + payload.count)
+    let totalLen = 40 + Int(tcpLen)
+
+    var pkt = [UInt8](repeating: 0, count: totalLen)
+
+    // IPv6 header
+    pkt[ 0] = 0x60                          // version=6, TC=0, flow label=0
+    pkt[ 4] = UInt8(tcpLen >> 8)
+    pkt[ 5] = UInt8(tcpLen & 0xFF)
+    pkt[ 6] = 6                             // next header: TCP
+    pkt[ 7] = 64                            // hop limit
+    for i in 0..<16 { pkt[ 8 + i] = srcBytes[i] }
+    for i in 0..<16 { pkt[24 + i] = dstBytes[i] }
+
+    // TCP header (checksum calculated below)
+    pkt[40] = UInt8(srcPort >> 8); pkt[41] = UInt8(srcPort & 0xFF)
+    pkt[42] = UInt8(dstPort >> 8); pkt[43] = UInt8(dstPort & 0xFF)
+    pkt[44] = UInt8(seq >> 24);    pkt[45] = UInt8((seq >> 16) & 0xFF)
+    pkt[46] = UInt8((seq >> 8) & 0xFF); pkt[47] = UInt8(seq & 0xFF)
+    pkt[48] = UInt8(ack >> 24);    pkt[49] = UInt8((ack >> 16) & 0xFF)
+    pkt[50] = UInt8((ack >> 8) & 0xFF); pkt[51] = UInt8(ack & 0xFF)
+    pkt[52] = 0x50                          // data offset = 5 (20 bytes)
+    pkt[53] = flags
+    pkt[54] = UInt8(window >> 8); pkt[55] = UInt8(window & 0xFF)
+
+    for (i, b) in payload.enumerated() { pkt[60 + i] = b }
+
+    // TCP checksum: IPv6 pseudo-header + TCP segment
+    var pseudo = [UInt8]()
+    pseudo.reserveCapacity(40 + Int(tcpLen))
+    pseudo.append(contentsOf: srcBytes)         // src IP (16 B)
+    pseudo.append(contentsOf: dstBytes)         // dst IP (16 B)
+    let tcpLen32 = UInt32(tcpLen)
+    pseudo.append(UInt8(tcpLen32 >> 24))
+    pseudo.append(UInt8((tcpLen32 >> 16) & 0xFF))
+    pseudo.append(UInt8((tcpLen32 >>  8) & 0xFF))
+    pseudo.append(UInt8( tcpLen32        & 0xFF))
+    pseudo.append(0); pseudo.append(0); pseudo.append(0)
+    pseudo.append(6)                            // next header: TCP
+    pseudo.append(contentsOf: pkt[40...])       // TCP header + payload
+
+    let ck = onesComplementChecksum(pseudo, start: 0, count: pseudo.count)
+    pkt[56] = UInt8(ck >> 8)
+    pkt[57] = UInt8(ck & 0xFF)
+
+    return Data(pkt)
+}
+
+// Builds a raw IPv6+UDP packet suitable for writing back into packetFlow.
+func buildIPv6UDPReply(srcIP: String, srcPort: UInt16,
+                       dstIP: String, dstPort: UInt16,
+                       payload: Data) -> Data? {
+    guard let srcBytes = parseIPv6Address(srcIP),
+          let dstBytes = parseIPv6Address(dstIP) else { return nil }
+    guard payload.count <= 65527 else { return nil }
+
+    let udpLen   = UInt16(8 + payload.count)
+    let totalLen = 40 + Int(udpLen)
+
+    var pkt = [UInt8](repeating: 0, count: totalLen)
+
+    // IPv6 header
+    pkt[ 0] = 0x60                          // version=6, TC=0, flow label=0
+    pkt[ 4] = UInt8(udpLen >> 8)
+    pkt[ 5] = UInt8(udpLen & 0xFF)
+    pkt[ 6] = 17                            // next header: UDP
+    pkt[ 7] = 64                            // hop limit
+    for i in 0..<16 { pkt[ 8 + i] = srcBytes[i] }
+    for i in 0..<16 { pkt[24 + i] = dstBytes[i] }
+
+    // UDP header (checksum calculated below)
+    pkt[40] = UInt8(srcPort >> 8); pkt[41] = UInt8(srcPort & 0xFF)
+    pkt[42] = UInt8(dstPort >> 8); pkt[43] = UInt8(dstPort & 0xFF)
+    pkt[44] = UInt8(udpLen >> 8);  pkt[45] = UInt8(udpLen & 0xFF)
+
+    // UDP payload
+    for (i, byte) in payload.enumerated() { pkt[48 + i] = byte }
+
+    // UDP checksum: IPv6 pseudo-header + UDP segment
+    var pseudo = [UInt8]()
+    pseudo.reserveCapacity(40 + Int(udpLen))
+    pseudo.append(contentsOf: srcBytes)         // src IP (16 B)
+    pseudo.append(contentsOf: dstBytes)         // dst IP (16 B)
+    let udpLen32 = UInt32(udpLen)
+    pseudo.append(UInt8(udpLen32 >> 24))
+    pseudo.append(UInt8((udpLen32 >> 16) & 0xFF))
+    pseudo.append(UInt8((udpLen32 >>  8) & 0xFF))
+    pseudo.append(UInt8( udpLen32        & 0xFF))
+    pseudo.append(0); pseudo.append(0); pseudo.append(0)
+    pseudo.append(17)                           // next header: UDP
+    pseudo.append(contentsOf: pkt[40...])       // UDP header + payload
+
+    let ck = onesComplementChecksum(pseudo, start: 0, count: pseudo.count)
+    pkt[46] = UInt8(ck >> 8)
+    pkt[47] = UInt8(ck & 0xFF)
+
+    return Data(pkt)
+}
+
+// Parses an IPv6 address in the 8-group hex form produced by formatIPv6() into 16 bytes.
+func parseIPv6Address(_ s: String) -> [UInt8]? {
+    let groups = s.split(separator: ":", omittingEmptySubsequences: false)
+    guard groups.count == 8 else { return nil }
+    var bytes = [UInt8]()
+    bytes.reserveCapacity(16)
+    for g in groups {
+        guard let val = UInt16(g, radix: 16) else { return nil }
+        bytes.append(UInt8(val >> 8))
+        bytes.append(UInt8(val & 0xFF))
+    }
+    return bytes
 }
 
 // RFC 1071 one's-complement sum checksum (network byte order: high byte first).
