@@ -19,15 +19,13 @@ struct ClientHealthSection: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 HStack(spacing: 6) {
                                     Circle()
-                                        .fill(Color.ntmGreen)
+                                        .fill(client.stale ? Color.ntmAmber : Color.ntmGreen)
                                         .frame(width: 8, height: 8)
                                     Text(client.client)
                                         .font(.subheadline).bold()
                                 }
-                                Text("v\(client.ver) · up \(formattedUptime(client.uptimeSec))")
+                                Text("v\(client.version) · \(lastSeenLabel(client.reportedAt))")
                                     .font(.caption).foregroundStyle(.secondary)
-                                Text(client.ifaces.joined(separator: ", "))
-                                    .font(.caption2).foregroundStyle(.secondary)
                             }
                             Spacer()
                             StatBadge(
@@ -44,11 +42,12 @@ struct ClientHealthSection: View {
         }
     }
 
-    private func formattedUptime(_ sec: Int) -> String {
-        let h = sec / 3600
-        let m = (sec % 3600) / 60
-        if h > 0 { return "\(h)h \(m)m" }
-        return "\(m)m"
+    private func lastSeenLabel(_ reportedAt: Int) -> String {
+        let ago = Int(Date().timeIntervalSince1970) - reportedAt
+        if ago < 0   { return "just now" }
+        if ago < 60  { return "\(ago)s ago" }
+        if ago < 3600 { return "\(ago / 60)m ago" }
+        return "\(ago / 3600)h ago"
     }
 
     private func dropColor(_ pct: String) -> Color {
