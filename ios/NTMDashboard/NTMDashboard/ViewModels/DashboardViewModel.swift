@@ -35,7 +35,7 @@ final class DashboardViewModel {
         error = nil
         do {
             snapshot = try await client.fetchSummary()
-            lastUpdated = Date()
+            lastUpdated = .now
         } catch {
             self.error = error.localizedDescription
         }

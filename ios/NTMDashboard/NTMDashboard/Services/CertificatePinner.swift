@@ -25,7 +25,8 @@ final class CertificatePinner: NSObject, URLSessionDelegate, @unchecked Sendable
             return
         }
 
-        guard let serverCert = SecTrustGetCertificateAtIndex(serverTrust, 0) else {
+        guard let chain = SecTrustCopyCertificateChain(serverTrust) as? [SecCertificate],
+              let serverCert = chain.first else {
             completionHandler(.cancelAuthenticationChallenge, nil)
             return
         }
