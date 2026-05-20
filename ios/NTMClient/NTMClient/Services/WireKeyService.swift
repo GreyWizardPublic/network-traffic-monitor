@@ -3,10 +3,10 @@ import Foundation
 import Security
 
 // Manages the device's Ed25519 key pair for wire-protocol authentication.
-// The private key is stored in the standard Keychain (not Secure Enclave —
+// The private key is stored in the Keychain (not Secure Enclave —
 // Secure Enclave does not support Ed25519 / Curve25519).
 enum WireKeyService {
-    private static let keychainService = "com.ntm.NTMDashboard.wirekey"
+    private static let keychainService = "com.ntm.NTMClient.wirekey"
     private static let keychainAccount = "ed25519"
 
     static var hasKey: Bool { loadRawPrivateKey() != nil }
@@ -34,12 +34,11 @@ enum WireKeyService {
 
     // Removes the key pair from Keychain.
     static func deleteKey() {
-        let query: [CFString: Any] = [
+        SecItemDelete([
             kSecClass: kSecClassGenericPassword,
             kSecAttrService: keychainService,
             kSecAttrAccount: keychainAccount
-        ]
-        SecItemDelete(query as CFDictionary)
+        ] as CFDictionary)
     }
 
     // MARK: - Private
@@ -51,7 +50,7 @@ enum WireKeyService {
             kSecAttrService: keychainService,
             kSecAttrAccount: keychainAccount,
             kSecValueData: rawKey,
-            // Accessible after first unlock so a background extension can read it later.
+            // Accessible after first unlock so a future background extension can reach it.
             kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         ]
         SecItemAdd(query as CFDictionary, nil)
