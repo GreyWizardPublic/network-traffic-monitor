@@ -43,6 +43,8 @@ struct WebConfig
 
     // WebAuthn RP (null = WebAuthn disabled; LAN-only + optional bearer token used instead).
     std::shared_ptr<WebAuthnRP> webauthn;
+    // Shared wire-protocol client store; null = registration endpoint disabled.
+    std::shared_ptr<AllowedClientsStore> clients_store;
 };
 
 // Thread function: registers HTTP routes on svr, then blocks in svr.listen().
