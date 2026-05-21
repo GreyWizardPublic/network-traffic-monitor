@@ -71,7 +71,6 @@ struct ServerConfig
     // Web dashboard (HTTPS, LAN-only).
     std::uint16_t web_port{8443};
     std::string web_bind{"0.0.0.0"};
-    std::string web_token;          // optional bearer token; empty = no token auth
     unsigned web_rate_limit_rpm{30}; // max requests per IP per minute (0 = unlimited)
     // Boundary limits.
     unsigned aggregation_window_days{kAggregationWindowDaysDefault};
@@ -529,7 +528,7 @@ static const std::set<std::string> &knownServerConfigKeys()
         "port", "client_bind",
         "allowed_keys", "cert", "key",
         "require_tls", "verbose",
-        "web_port", "web_bind", "web_token", "web_rate_limit_rpm",
+        "web_port", "web_bind", "web_rate_limit_rpm",
         "aggregation_window_days", "max_recv_buffer_bytes",
         "ip_db_path", "ip_db_url", "ip_db_update_interval_days", "ip_db_auto_update",
         "max_flow_entries_per_key", "max_entity_flow_entries_per_key",
@@ -597,7 +596,7 @@ static ServerConfig loadServerConfig(const std::string &configPath, bool *ok = n
         start = val.find_first_not_of(" \t");
         if (start != std::string::npos)
             val = val.substr(start);
-        if (val.empty() && key != "allowed_keys" && key != "cert" && key != "key" && key != "web_token")
+        if (val.empty() && key != "allowed_keys" && key != "cert" && key != "key")
             continue;
         try
         {
@@ -643,10 +642,6 @@ static ServerConfig loadServerConfig(const std::string &configPath, bool *ok = n
             else if (key == "web_bind")
             {
                 cfg.web_bind = val;
-            }
-            else if (key == "web_token")
-            {
-                cfg.web_token = val;
             }
             else if (key == "web_rate_limit_rpm")
             {
@@ -1792,7 +1787,6 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                     WebConfig webCfg;
                     webCfg.port             = config.web_port;
                     webCfg.bind             = config.web_bind;
-                    webCfg.token            = config.web_token;
                     webCfg.rate_limit_rpm   = config.web_rate_limit_rpm;
                     webCfg.max_entity_lines = config.max_entity_lines_in_summary;
                     webCfg.client_nicknames = clientsStore->nicknames;
@@ -1822,13 +1816,8 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                                   config.web_bind.c_str(),
                                   static_cast<unsigned>(config.web_port),
                                   config.web_rate_limit_rpm);
-                        if (!config.web_token.empty())
-                            serverLog(LogLevel::Warn,
-                                      "ntm-server: web dashboard bearer token auth enabled");
-                        else
-                            serverLog(LogLevel::Warn,
-                                      "ntm-server: web dashboard has no bearer token; "
-                                      "access restricted to LAN IPs only");
+                        serverLog(LogLevel::Warn,
+                                  "ntm-server: web dashboard access restricted to LAN IPs only");
                     }
                 }
             }
@@ -2100,7 +2089,7 @@ int main(int argc, char *argv[])
             std::cout <<
                 "Usage: ntm-server [--daemon] [--verbose] [--port N]\n"
                 "                  [--allowed-keys FILE] [--cert PEM] [--key PEM]\n"
-                "                  [--web-port N] [--web-bind IP] [--web-token TOKEN]\n"
+                "                  [--web-port N] [--web-bind IP]\n"
                 "                  [--config FILE]\n"
                 "  TLS (--cert/--key) and client authentication (--allowed-keys) are mandatory.\n"
                 "  Options can be set in config file (key=value); command-line overrides config.\n";
@@ -2155,8 +2144,6 @@ int main(int argc, char *argv[])
         }
         else if (arg == "--web-bind" && i + 1 < argc)
             config.web_bind = argv[++i];
-        else if (arg == "--web-token" && i + 1 < argc)
-            config.web_token = argv[++i];
         else if (arg == "--config" && i + 1 < argc)
             ++i;
         else if (arg == "--help" || arg == "-h")

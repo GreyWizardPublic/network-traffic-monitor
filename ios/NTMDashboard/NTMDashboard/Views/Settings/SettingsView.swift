@@ -37,7 +37,6 @@ struct SettingsView: View {
 
                 Section {
                     DisclosureGroup("Advanced") {
-                        SecureField("Bearer token (optional)", text: $vm.config.bearerToken)
                         HStack {
                             Text("Polling interval")
                             Spacer()

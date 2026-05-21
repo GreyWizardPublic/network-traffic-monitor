@@ -28,7 +28,6 @@ struct WebConfig
 {
     std::uint16_t port{8443};
     std::string   bind{"0.0.0.0"};
-    std::string   token;              // legacy bearer-token (ignored when webauthn is set)
     unsigned      rate_limit_rpm{30};
     std::size_t   max_entity_lines{50000};
     // Display-time nickname substitution: lowercase 64-hex pubkey → human-readable name.
@@ -41,7 +40,7 @@ struct WebConfig
     // Null = health section omitted from the API response.
     std::shared_ptr<ClientRegistry> registry;
 
-    // WebAuthn RP (null = WebAuthn disabled; LAN-only + optional bearer token used instead).
+    // WebAuthn RP (null = WebAuthn disabled; LAN-only access used instead).
     std::shared_ptr<WebAuthnRP> webauthn;
     // Shared wire-protocol client store; null = registration endpoint disabled.
     std::shared_ptr<AllowedClientsStore> clients_store;

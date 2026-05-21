@@ -4,7 +4,7 @@ import Observation
 
 // NTM software version reported in H lines.
 // Keep in sync with src/version.hpp when updating server.
-private let kClientVersion = "1.6.0"
+private let kClientVersion = "1.7.0"
 private let kHealthIntervalSec: Int  = 30
 private let kMaxSessionSec: Int      = 21600  // 6 hours; reconnect before this
 private let kMaxBackoffSec: Double   = 60
