@@ -30,13 +30,39 @@ targets:
       - path: NTMClient/Resources/Assets.xcassets
     info:
       path: NTMClient/Info.plist
+      properties:
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations: {}
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        "UISupportedInterfaceOrientations~ipad":
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.ntm.NTMClient
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        DEVELOPMENT_TEAM: W65LG3MSG6
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+      configs:
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "iPhone Distribution"
+          PROVISIONING_PROFILE_SPECIFIER: "NTMClient AppStore"
     entitlements:
       path: NTMClient/NTMClient.entitlements
+      properties:
+        com.apple.developer.networking.networkextension:
+          - packet-tunnel-provider
     dependencies:
       - target: NTMClientPacketTunnel
         embed: true
@@ -54,6 +80,11 @@ targets:
       - path: Shared
     info:
       path: PacketTunnel/Info.plist
+      properties:
+        CFBundleDisplayName: NTMClient PacketTunnel
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.networkextension.packet-tunnel
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).PacketTunnelProvider
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.ntm.NTMClient.PacketTunnel
@@ -62,5 +93,16 @@ targets:
         # NEPacketTunnelProvider is callback-based Obj-C; Swift 5 + minimal avoids false-positive
         # sendability errors on completion handlers and NEPacketTunnelFlow captures.
         SWIFT_STRICT_CONCURRENCY: minimal
+        DEVELOPMENT_TEAM: W65LG3MSG6
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+      configs:
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "iPhone Distribution"
+          PROVISIONING_PROFILE_SPECIFIER: "NTMClient PacketTunnel AppStore"
     entitlements:
       path: PacketTunnel/PacketTunnel.entitlements
+      properties:
+        com.apple.developer.networking.networkextension:
+          - packet-tunnel-provider
