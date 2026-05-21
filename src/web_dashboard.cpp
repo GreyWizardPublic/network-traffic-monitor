@@ -998,28 +998,13 @@ void webServerThread(httplib::SSLServer &svr,
             }
             else
             {
-                // Legacy mode: LAN-only + optional bearer token.
+                // Legacy mode: LAN-only access.
                 if (!isLanIP(ip))
                 {
                     res.status = 403;
                     res.set_content("{\"error\":\"forbidden: LAN clients only\"}\n",
                                     "application/json");
                     return httplib::Server::HandlerResponse::Handled;
-                }
-                if (!config.token.empty())
-                {
-                    auto auth = req.get_header_value("Authorization");
-                    const std::string expected = "Bearer " + config.token;
-                    const bool authOk =
-                        (auth.size() == expected.size()) &&
-                        (CRYPTO_memcmp(auth.data(), expected.data(), expected.size()) == 0);
-                    if (!authOk)
-                    {
-                        res.status = 401;
-                        res.set_header("WWW-Authenticate", "Bearer realm=\"ntm\"");
-                        res.set_content("{\"error\":\"unauthorized\"}\n", "application/json");
-                        return httplib::Server::HandlerResponse::Handled;
-                    }
                 }
             }
 

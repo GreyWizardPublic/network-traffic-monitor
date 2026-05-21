@@ -2,7 +2,7 @@ import Foundation
 import Security
 
 enum KeychainService {
-    // Session Bearer token from passkey login (used only for key registration).
+    // Session token from passkey login (used to authenticate the key registration API call).
     private static let sessionService = "com.ntm.NTMClient.session"
 
     static func saveToken(_ token: String, for serverURL: String) {

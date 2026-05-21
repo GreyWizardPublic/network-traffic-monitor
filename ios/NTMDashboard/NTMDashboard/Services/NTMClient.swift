@@ -37,9 +37,7 @@ actor NTMClient {
         let url = base.appendingPathComponent("/api/summary")
         var req = URLRequest(url: url, timeoutInterval: 10)
         req.setValue("application/json", forHTTPHeaderField: "Accept")
-        if !config.bearerToken.isEmpty {
-            req.setValue("Bearer \(config.bearerToken)", forHTTPHeaderField: "Authorization")
-        } else if let token = KeychainService.loadToken(for: base.absoluteString) {
+        if let token = KeychainService.loadToken(for: base.absoluteString) {
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
 

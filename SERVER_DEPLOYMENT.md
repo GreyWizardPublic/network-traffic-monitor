@@ -211,13 +211,17 @@ key             = /etc/ntm-server/server_key.pem
 allowed_keys    = /etc/ntm-server/allowed_clients.txt
 
 web_port        = 8443
-web_token       = change-me-to-a-strong-secret   # optional but recommended
 
 aggregation_window_days = 7
 ip_db_path                 = /var/lib/ntm-server/ip2asn-combined.tsv.gz
 ip_db_auto_update          = true
 ip_db_update_interval_days = 7
 ```
+
+> **Note:** In legacy mode the web dashboard is open to any LAN client — no
+> authentication is applied beyond the RFC 1918 source-IP filter. Use WebAuthn
+> mode for any deployment where the dashboard should not be freely accessible
+> to all LAN hosts.
 
 **Key precedence:** command-line flags override config file values, which override built-in
 defaults.
@@ -400,7 +404,6 @@ The page auto-refreshes every 30 seconds and shows:
 | HTTPS (TLS) | Always enforced (mandatory) | Always enforced (mandatory) |
 | RFC 1918 LAN-only IP filter | **Bypassed** — authentication handled by passkey session | Always enforced |
 | Passkey session | Required for all protected endpoints | Not available |
-| Bearer token (`web_token`) | Not used (superseded by passkey sessions) | Optional; recommended |
 | Rate limiting | 30 req/min per IP (configurable via `web_rate_limit_rpm`) | Same |
 
 ### Admin data purge
@@ -477,7 +480,6 @@ closed and the client reconnects with fresh session keys.
 - [ ] **WebAuthn mode:** `webauthn_rp_id`, `webauthn_credentials_file`, and `webauthn_admin_cred_file` all set
 - [ ] **WebAuthn mode:** `webauthn-admin.json` and `webauthn-credentials.json` owned by service account with `chmod 600`
 - [ ] **WebAuthn mode:** admin password migration confirmed in `journalctl` on first start (`admin password migrated to PBKDF2 and plaintext file erased`)
-- [ ] **Legacy mode:** `web_token` set to a strong random secret
 - [ ] **Legacy mode:** if admin interface enabled, `admin_password` file is `chmod 600`, owned by service account
 - [ ] **Legacy mode:** admin password file excluded from backups or backup ACLs restricted (plain-text storage)
 - [ ] `server_key.pem` permissions are `640` (owner `ntm-server`, group `ntm-server`)

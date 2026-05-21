@@ -5,7 +5,7 @@ import Network
 @preconcurrency import NetworkExtension
 
 // NTM software version reported in H lines; keep in sync with src/version.hpp.
-private let kClientVersion     = "1.6.0"
+private let kClientVersion     = "1.7.0"
 private let kHealthIntervalSec = 30
 private let kMaxSessionSec     = 21600   // 6 hours
 private let kMaxBackoffSec     = 60.0

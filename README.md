@@ -199,7 +199,7 @@ authentication, and service configuration.
 | Boundary | Mechanism |
 |---|---|
 | Client → server data ingestion | Mutual TLS + Ed25519 key authentication (both mandatory) |
-| Browser → dashboard | WebAuthn passkey session (recommended) or LAN-only HTTPS + optional bearer token |
+| Browser → dashboard | WebAuthn passkey session (recommended) or LAN-only HTTPS (no auth) |
 | iOS → dashboard | WebAuthn passkey (Face ID / Touch ID); session token stored in Keychain |
 | Data in transit | TLS 1.2+ on all paths |
 | Data at rest | Traffic statistics in memory only; WebAuthn credentials and IP→ASN database on disk |

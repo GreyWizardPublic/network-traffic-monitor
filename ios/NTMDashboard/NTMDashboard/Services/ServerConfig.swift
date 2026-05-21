@@ -2,13 +2,11 @@ import Foundation
 
 struct ServerConfig {
     var serverURL: String        // e.g. "https://ntm.home.me:8443"
-    var bearerToken: String
     var pinnedCertData: Data?
     var pollingIntervalSec: Int
 
     static let `default` = ServerConfig(
         serverURL: "",
-        bearerToken: "",
         pinnedCertData: nil,
         pollingIntervalSec: 5
     )
@@ -41,7 +39,6 @@ struct ServerConfig {
 extension ServerConfig: Codable {
     enum CodingKeys: String, CodingKey {
         case serverURL
-        case bearerToken
         case pinnedCertData
         case pollingIntervalSec
         case legacyHost = "host"
@@ -58,7 +55,6 @@ extension ServerConfig: Codable {
             let p = try c.decodeIfPresent(Int.self, forKey: .legacyPort) ?? 8443
             serverURL = h.isEmpty ? "" : "https://\(h):\(p)"
         }
-        bearerToken = try c.decodeIfPresent(String.self, forKey: .bearerToken) ?? ""
         pinnedCertData = try c.decodeIfPresent(Data.self, forKey: .pinnedCertData)
         pollingIntervalSec = try c.decodeIfPresent(Int.self, forKey: .pollingIntervalSec) ?? 5
     }
@@ -66,7 +62,6 @@ extension ServerConfig: Codable {
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(serverURL, forKey: .serverURL)
-        try c.encode(bearerToken, forKey: .bearerToken)
         try c.encodeIfPresent(pinnedCertData, forKey: .pinnedCertData)
         try c.encode(pollingIntervalSec, forKey: .pollingIntervalSec)
     }

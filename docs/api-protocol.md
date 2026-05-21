@@ -28,7 +28,7 @@ This API is **independent** of the client data-ingestion wire protocol (see
 |---|---|
 | Protocol | HTTPS only; TLS 1.2 minimum |
 | Default port | 8443 (configurable via `web_port`) |
-| Network scope | **WebAuthn mode**: no source-IP restriction (authenticated by passkey session). **Legacy mode**: LAN IPs only; requests from non-RFC-1918 / non-loopback addresses → `403`. |
+| Network scope | **WebAuthn mode**: no source-IP restriction (authenticated by passkey session). **Legacy mode**: LAN IPs only; non-RFC-1918 / non-loopback addresses → `403`. |
 | Certificate | Same cert/key as the client ingestion port. |
 
 ---
@@ -52,18 +52,12 @@ sent in subsequent requests as `Authorization: Bearer <token>`.
 Unauthenticated browser GET requests → `302` redirect to `/login`.  
 Unauthenticated API requests → `401`.
 
-### 3b. Legacy bearer-token mode
+### 3b. Legacy LAN-only mode
 
-If `webauthn_rp_id` is **not** set and `web_token` is configured, every
-request must include:
-
-```
-Authorization: Bearer <token>
-```
-
-Missing or incorrect token → `401` with `WWW-Authenticate: Bearer realm="ntm"`.
-
-When neither is configured the API is accessible to any LAN client.
+If `webauthn_rp_id` is **not** set, the server restricts access to RFC 1918
+LAN IPs and loopback. No session or token is required — any LAN client can
+read the API. Enable WebAuthn for production deployments exposed beyond a
+trusted LAN.
 
 ---
 

@@ -20,9 +20,6 @@ final class AuthViewModel {
         if let url = cfg.baseURL?.absoluteString,
            KeychainService.loadToken(for: url) != nil {
             isAuthenticated = true
-        } else {
-            // Legacy bearer-token mode — skip passkey gate
-            isAuthenticated = !cfg.bearerToken.isEmpty
         }
     }
 
