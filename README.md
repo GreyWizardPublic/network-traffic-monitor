@@ -1,6 +1,6 @@
 # Network Traffic Monitor
 
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A self-hosted, privacy-first network traffic aggregation system. Packet capture agents
 run on your devices, send metadata only to a central server, and the traffic is
@@ -214,5 +214,5 @@ authentication, and service configuration.
 
 ## License
 
-Source code: GPL-3.0-or-later — see [`LICENSE`](LICENSE).  
+Source code: MIT — see [`LICENSE`](LICENSE).  
 Third-party libraries and data sources: see [`LICENSES.md`](LICENSES.md).

@@ -10,7 +10,7 @@ their source alongside this project's binaries (they are dynamically linked
 system libraries on every supported distribution).
 
 The project's own source code is governed by the top-level [`LICENSE`](LICENSE)
-file (**GPL-3.0-or-later**); this document only covers third-party material.
+file (**MIT**); this document only covers third-party material.
 
 ---
 
@@ -96,21 +96,21 @@ binary. No licensing obligation flows to the binaries.
 
 ## 5. License compatibility summary
 
-| Other party's license | Compatible with this project's binaries? | Source of compatibility |
+This project is **MIT-licensed** (permissive, no copyleft). All dependencies
+are compatible:
+
+| Other party's license | Compatible? | Source of compatibility |
 |---|---|---|
 | `Apache-2.0` | ✅ Yes | OpenSSL ≥ 3.0, libstdc++ via LLVM, bionic libc |
 | `BSD-2-Clause` / `BSD-3-Clause` | ✅ Yes | libpcap; libcurl is permissive in the same family |
-| `MIT` / curl license / `Zlib` | ✅ Yes | libcurl, zlib, musl libc |
-| `LGPL-2.1+` (linked dynamically) | ✅ Yes | glibc — and the `WITH GCC-exception-2.0` text covers the static-link edge case |
-| `GPL-2.0` (linked dynamically) | ✅ Yes (kernel headers only) — the `Linux-syscall-note` exception covers this | Linux kernel UAPI |
-| `GPL-3.0+` (without exception) | ⚠️ Not present today; would require review if added | — |
+| `MIT` / curl license / `Zlib` | ✅ Yes | libcurl, zlib, musl libc, cpp-httplib |
+| `LGPL-2.1+` (linked dynamically) | ✅ Yes | glibc — `WITH GCC-exception-2.0` covers the static-link edge case |
+| `GPL-2.0` (kernel headers only) | ✅ Yes | `Linux-syscall-note` exception; user-space use of UAPI headers does not affect the calling code's license |
 
 **Nothing in the dependency tree is non-open-source, "source-available", or
-otherwise restricted.** This project's binaries can be redistributed under any
-permissive or copyleft license you choose for your own source code, with the
-usual obligation to honour each dynamic library's attribution requirements on
-binary redistribution (typically: include a copy of the upstream `COPYING` /
-`LICENSE` file, which the distro packages already do).
+otherwise restricted.** Binaries may be redistributed with the usual obligation
+to honour each dynamic library's attribution requirements (typically: include a
+copy of the upstream `COPYING` / `LICENSE` file, which distro packages already do).
 
 ---
 
@@ -146,6 +146,6 @@ section 1 or section 2.
 
 ---
 
-*Last updated: 2026-05-16. If a new dependency is added (or removed), please
+*Last updated: 2026-05-21. If a new dependency is added (or removed), please
 update this file in the same commit so packagers and auditors have a single
 source of truth.*
