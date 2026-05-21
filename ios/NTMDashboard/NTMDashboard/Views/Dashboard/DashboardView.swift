@@ -15,7 +15,11 @@ struct DashboardView: View {
                                 lastUpdated: vm.lastUpdated
                             )
                             InterfacesSection(interfaces: snap.interfaces)
-                            EntityFlowsSection(flows: snap.entities)
+                            EntityFlowsSection(
+                                flows: snap.entities,
+                                overheadFlows: snap.overheadEntities,
+                                overheadSummary: snap.overheadSummary
+                            )
                             ClientHealthSection(clients: snap.clientHealth)
                         }
                         .padding(.horizontal)

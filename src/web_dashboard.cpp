@@ -161,7 +161,9 @@ static std::string sessionFromRequest(const httplib::Request &req)
 
 static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLines,
                                     const std::unordered_map<std::string, std::string> &nicknames,
-                                    const std::shared_ptr<ClientRegistry> &registry)
+                                    const std::shared_ptr<ClientRegistry> &registry,
+                                    const std::shared_ptr<MonitoringIpSet> &serverIps,
+                                    const std::shared_ptr<MonitoringIpSet> &dashboardIps)
 {
     TrafficStats::InterfaceTotals totals;
     TrafficStats::InterfaceFlows flows;
@@ -169,6 +171,9 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
     TrafficStats::InterfaceEntityFlows entityFlows;
     TrafficStats::TimePoint windowStart;
     stats.snapshot(totals, flows, countryFlows, entityFlows, &windowStart);
+
+    const auto serverIpSnap   = serverIps   ? serverIps->snapshot()   : std::unordered_set<std::string>{};
+    const auto dashboardIpSnap = dashboardIps ? dashboardIps->snapshot() : std::unordered_set<std::string>{};
 
     // Display name for any stored identifier: 64-char hex pubkey → nickname (or hex);
     // raw LAN IP → "Local Devices" (main tab); ASN entity string → as-is.
@@ -200,6 +205,30 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
         }
         return s;
     };
+    // A flow endpoint is "monitoring infrastructure" if it is:
+    //  - a known ntm-client agent (64-char hex clientId stored at ingest time), OR
+    //  - the server's own IP, OR
+    //  - a dashboard browser/app IP.
+    // Any flow where either endpoint qualifies is classified as overhead.
+    auto isMonitoringEndpoint = [&](const std::string &key) -> bool {
+        if (isHexClientId(key)) return true;
+        std::string lanIp;
+        if (parseReporterScoped(key, nullptr, &lanIp))
+            return serverIpSnap.count(lanIp) > 0 || dashboardIpSnap.count(lanIp) > 0;
+        return serverIpSnap.count(key) > 0 || dashboardIpSnap.count(key) > 0;
+    };
+
+    auto fmtPct = [](std::uint64_t num, std::uint64_t denom) -> std::string {
+        if (denom == 0) return "0.00";
+        std::uint64_t pct100 = (num * 10000ULL) / denom;
+        std::string s = std::to_string(pct100 / 100);
+        s += '.';
+        std::uint64_t frac = pct100 % 100;
+        if (frac < 10) s += '0';
+        s += std::to_string(frac);
+        return s;
+    };
+
     auto resolveEntityMain = [&](const std::string &s) -> std::string {
         if (isHexClientId(s)) {
             auto it = nicknames.find(s);
@@ -223,7 +252,7 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
 
     std::string j;
     j.reserve(8192);
-    j += "{\n  \"api_version\": 3";
+    j += "{\n  \"api_version\": 4";
     j += ",\n  \"server_version\": \"";
     j += kNtmVersion;
     j += "\"";
@@ -273,6 +302,11 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
         }
     };
     std::unordered_map<SummaryKey, Counter, SummaryKeyHash> summaryGroups;
+    std::unordered_map<SummaryKey, Counter, SummaryKeyHash> overheadGroups;
+
+    std::uint64_t totalAllBytes  = 0;
+    std::uint64_t overheadBytes  = 0;
+    std::uint64_t overheadPkts   = 0;
 
     // LAN Detail: per unidentified-LAN-IP in/out totals, aggregated across all clients/ifaces.
     struct LanStats { std::uint64_t outPkts{0}, outBytes{0}, inPkts{0}, inBytes{0}; };
@@ -292,21 +326,37 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
             const std::uint64_t pkts  = ek.second.packets;
             const std::uint64_t bytes = ek.second.bytes;
 
-            // Group by resolved display labels for the Entity Summary tab.
-            auto &sg = summaryGroups[{dispCli, iface,
-                                      resolveEntityMain(storedSrc),
-                                      resolveEntityMain(storedDst)}];
-            sg.packets += pkts;
-            sg.bytes   += bytes;
+            totalAllBytes += bytes;
 
-            // Accumulate per-IP in/out for unidentified LAN IPs.
-            // Known client IPs are stored as hex IDs at ingest time.
-            // Unknown LAN devices use the reporter-scoped "@hex:ip" key format;
-            // legacy raw LAN IPs (if any) are also included for backwards compatibility.
-            const bool srcUnident = parseReporterScoped(storedSrc) || isLanIP(storedSrc);
-            const bool dstUnident = parseReporterScoped(storedDst) || isLanIP(storedDst);
-            if (srcUnident) { auto &ls = lanMap[storedSrc]; ls.outPkts += pkts; ls.outBytes += bytes; }
-            if (dstUnident) { auto &ls = lanMap[storedDst]; ls.inPkts  += pkts; ls.inBytes  += bytes; }
+            const bool isOvhd = isMonitoringEndpoint(storedSrc) || isMonitoringEndpoint(storedDst);
+
+            if (isOvhd)
+            {
+                overheadPkts  += pkts;
+                overheadBytes += bytes;
+                auto &og = overheadGroups[{dispCli, iface,
+                                           resolveEntityMain(storedSrc),
+                                           resolveEntityMain(storedDst)}];
+                og.packets += pkts;
+                og.bytes   += bytes;
+            }
+            else
+            {
+                auto &sg = summaryGroups[{dispCli, iface,
+                                          resolveEntityMain(storedSrc),
+                                          resolveEntityMain(storedDst)}];
+                sg.packets += pkts;
+                sg.bytes   += bytes;
+
+                // Accumulate per-IP in/out for unidentified LAN IPs.
+                // Known client IPs are stored as hex IDs at ingest time.
+                // Unknown LAN devices use the reporter-scoped "@hex:ip" key format;
+                // legacy raw LAN IPs (if any) are also included for backwards compatibility.
+                const bool srcUnident = parseReporterScoped(storedSrc) || isLanIP(storedSrc);
+                const bool dstUnident = parseReporterScoped(storedDst) || isLanIP(storedDst);
+                if (srcUnident) { auto &ls = lanMap[storedSrc]; ls.outPkts += pkts; ls.outBytes += bytes; }
+                if (dstUnident) { auto &ls = lanMap[storedDst]; ls.inPkts  += pkts; ls.inBytes  += bytes; }
+            }
         }
     }
 
@@ -325,6 +375,22 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
     {
         summaryRows.resize(maxEntityLines);
         truncated = true;
+    }
+
+    // Sort overhead rows by bytes descending, truncate.
+    std::vector<SummaryRow> overheadRows;
+    overheadRows.reserve(overheadGroups.size());
+    for (const auto &kv : overheadGroups)
+        overheadRows.push_back({kv.first.client, kv.first.iface,
+                                kv.first.src,    kv.first.dst,
+                                kv.second.packets, kv.second.bytes});
+    std::sort(overheadRows.begin(), overheadRows.end(),
+              [](const SummaryRow &a, const SummaryRow &b) { return a.bytes > b.bytes; });
+    bool truncatedOverhead = false;
+    if (maxEntityLines > 0 && overheadRows.size() > maxEntityLines)
+    {
+        overheadRows.resize(maxEntityLines);
+        truncatedOverhead = true;
     }
 
     // Sort LAN Detail rows by total bytes descending, truncate.
@@ -370,6 +436,41 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
     j += "\n  ]";
     j += ",\n  \"truncated\": ";
     j += truncated ? "true" : "false";
+
+    // Emit Overhead Entity rows
+    j += ",\n  \"overhead_entities\": [";
+    first = true;
+    for (const auto &r : overheadRows)
+    {
+        if (!first) j += ',';
+        j += "\n    {\"client\":\"";
+        j += jsonEsc(r.client);
+        j += "\",\"iface\":\"";
+        j += jsonEsc(r.iface);
+        j += "\",\"packets\":";
+        j += std::to_string(r.packets);
+        j += ",\"bytes\":";
+        j += std::to_string(r.bytes);
+        j += ",\"src_entity\":\"";
+        j += jsonEsc(r.src);
+        j += "\",\"dst_entity\":\"";
+        j += jsonEsc(r.dst);
+        j += "\"}";
+        first = false;
+    }
+    j += "\n  ]";
+    j += ",\n  \"truncated_overhead\": ";
+    j += truncatedOverhead ? "true" : "false";
+
+    // Emit overhead summary
+    j += ",\n  \"overhead_summary\": {";
+    j += "\"packets\":";
+    j += std::to_string(overheadPkts);
+    j += ",\"bytes\":";
+    j += std::to_string(overheadBytes);
+    j += ",\"pct_of_total_bytes\":\"";
+    j += fmtPct(overheadBytes, totalAllBytes);
+    j += "\"}";
 
     // Emit LAN Detail
     j += ",\n  \"entities_lan\": [";
@@ -418,18 +519,6 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
         }
         const auto nowSec = std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
-
-        // Format percentage as "N.NN" without floating point or snprintf.
-        auto fmtPct = [](std::uint64_t num, std::uint64_t denom) -> std::string {
-            if (denom == 0) return "0.00";
-            std::uint64_t pct100 = (num * 10000ULL) / denom;
-            std::string s = std::to_string(pct100 / 100);
-            s += '.';
-            std::uint64_t frac = pct100 % 100;
-            if (frac < 10) s += '0';
-            s += std::to_string(frac);
-            return s;
-        };
 
         for (const auto &snap : healthSnaps)
         {
@@ -616,6 +705,10 @@ tr:hover td{background:#171726}
 .hdr{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px}
 .admin-lnk{font-size:0.78em;color:#7af;text-decoration:none;opacity:0.7}
 .admin-lnk:hover{opacity:1}
+.flt-row{display:flex;gap:4px;margin:4px 0 6px}
+.flt{background:#111118;color:#666;border:1px solid #252535;padding:2px 10px;font-family:monospace;font-size:0.78em;border-radius:3px;cursor:pointer;outline:none}
+.flt.active{color:#7af;border-color:#4a4a7a;background:#0e0e14}
+.ovhd-bar{font-size:0.75em;color:#c84;margin-bottom:4px;padding:3px 6px;background:#1a1008;border-left:2px solid #c84}
 </style>
 </head>
 <body>
@@ -642,6 +735,12 @@ tr:hover td{background:#171726}
   <button class="tab" id="tab-lan" onclick="showTab('lan')">LAN Detail</button>
 </div>
 <div id="sec-summary" class="tabpanel">
+  <div class="flt-row">
+    <button class="flt" id="flt-all" onclick="setFilter('all')">All</button>
+    <button class="flt active" id="flt-regular" onclick="setFilter('regular')">Regular</button>
+    <button class="flt" id="flt-overhead" onclick="setFilter('overhead')">Overhead</button>
+  </div>
+  <div id="ovhd-bar" class="ovhd-bar" style="display:none"></div>
   <table><thead><tr><th>Client</th><th>Interface</th><th>Src Entity</th><th>Dst Entity</th><th>Packets</th><th>Bytes</th></tr></thead>
   <tbody id="entity_body"></tbody></table>
   <div class="note" id="entity_note"></div>
@@ -659,6 +758,9 @@ tr:hover td{background:#171726}
 
 <script>
 const POLL_MS=30000;
+let allEntities=[];
+let overheadEntities=[];
+let filterMode='regular';
 function fmtB(b){
   if(b<1024)return b+'B';
   if(b<1048576)return(b/1024).toFixed(1)+'K';
@@ -676,6 +778,24 @@ function showTab(name){
     document.getElementById('sec-'+t).style.display=t===name?'':'none';
   });
 }
+function setFilter(mode){
+  filterMode=mode;
+  ['all','regular','overhead'].forEach(function(m){
+    document.getElementById('flt-'+m).className='flt'+(m===mode?' active':'');
+  });
+  renderEntities();
+}
+function renderEntities(){
+  let ents;
+  if(filterMode==='overhead') ents=overheadEntities;
+  else if(filterMode==='all'){
+    ents=[...allEntities,...overheadEntities].sort(function(a,b){return b.bytes-a.bytes;});
+  }else ents=allEntities;
+  document.getElementById('entity_body').innerHTML=
+    ents.length?ents.map(x=>row([x.client||'(ip-auth)',x.iface,
+      x.src_entity,x.dst_entity,x.packets.toLocaleString(),fmtB(x.bytes)])).join('')
+    :'<tr><td colspan="6" style="color:#555">No data</td></tr>';
+}
 async function refresh(){
   try{
     const r=await fetch('/api/summary',{cache:'no-store'});
@@ -690,13 +810,17 @@ async function refresh(){
       ifaces.length?ifaces.map(x=>row([x.client||'(ip-auth)',x.iface,
         x.packets.toLocaleString(),fmtB(x.bytes)])).join('')
       :'<tr><td colspan="4" style="color:#555">No data yet</td></tr>';
-    const ents=d.entities||[];
-    document.getElementById('entity_body').innerHTML=
-      ents.length?ents.map(x=>row([x.client||'(ip-auth)',x.iface,
-        x.src_entity,x.dst_entity,x.packets.toLocaleString(),fmtB(x.bytes)])).join('')
-      :'<tr><td colspan="6" style="color:#555">No data yet</td></tr>';
+    allEntities=d.entities||[];
+    overheadEntities=d.overhead_entities||[];
+    renderEntities();
     document.getElementById('entity_note').textContent=
-      d.truncated?'Results truncated to server limit.':'';
+      (d.truncated||d.truncated_overhead)?'Some results truncated to server limit.':'';
+    const os=d.overhead_summary;
+    const bar=document.getElementById('ovhd-bar');
+    if(os&&os.bytes>0){
+      bar.textContent='Monitoring overhead: '+fmtB(os.bytes)+' ('+os.pct_of_total_bytes+'% of all traffic)';
+      bar.style.display='';
+    }else{bar.style.display='none';}
     const lans=d.entities_lan||[];
     document.getElementById('lan_body').innerHTML=
       lans.length?lans.map(x=>row([x.ip,x.reported_by||'—',
@@ -994,6 +1118,8 @@ void webServerThread(httplib::SSLServer &svr,
                         }
                         return httplib::Server::HandlerResponse::Handled;
                     }
+                    // Authenticated dashboard client — record IP for overhead classification.
+                    if (config.dashboard_ips) config.dashboard_ips->add(ip);
                 }
             }
             else
@@ -1006,6 +1132,8 @@ void webServerThread(httplib::SSLServer &svr,
                                     "application/json");
                     return httplib::Server::HandlerResponse::Handled;
                 }
+                // LAN dashboard client — record IP for overhead classification.
+                if (config.dashboard_ips) config.dashboard_ips->add(ip);
             }
 
             // Security headers on every response.
@@ -1045,7 +1173,8 @@ void webServerThread(httplib::SSLServer &svr,
         [&stats, &config](const httplib::Request &, httplib::Response &res) {
             res.set_header("Cache-Control", "no-store");
             res.set_content(buildSummaryJson(stats, config.max_entity_lines,
-                                             config.client_nicknames, config.registry),
+                                             config.client_nicknames, config.registry,
+                                             config.server_ips, config.dashboard_ips),
                             "application/json");
         });
 

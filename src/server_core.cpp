@@ -9,6 +9,7 @@
 // httplib.h comes transitively via web_dashboard.hpp
 
 #include <arpa/inet.h>
+#include <ifaddrs.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <sys/socket.h>
@@ -1783,6 +1784,42 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                 }
                 else
                 {
+                    // Enumerate this server's own non-loopback LAN IPs for overhead classification.
+                    auto serverIpSet = std::make_shared<MonitoringIpSet>();
+                    {
+                        struct ifaddrs *ifap = nullptr;
+                        if (::getifaddrs(&ifap) == 0 && ifap)
+                        {
+                            for (auto *ifa = ifap; ifa; ifa = ifa->ifa_next)
+                            {
+                                if (!ifa->ifa_addr) continue;
+                                const int af = ifa->ifa_addr->sa_family;
+                                char buf[INET6_ADDRSTRLEN] = {};
+                                if (af == AF_INET)
+                                {
+                                    auto *sin = reinterpret_cast<struct sockaddr_in *>(ifa->ifa_addr);
+                                    ::inet_ntop(AF_INET, &sin->sin_addr, buf, sizeof(buf));
+                                }
+                                else if (af == AF_INET6)
+                                {
+                                    auto *sin6 = reinterpret_cast<struct sockaddr_in6 *>(ifa->ifa_addr);
+                                    ::inet_ntop(AF_INET6, &sin6->sin6_addr, buf, sizeof(buf));
+                                }
+                                else continue;
+                                std::string ip(buf);
+                                // Strip IPv6 scope ID (e.g. "%eth0").
+                                auto pct = ip.find('%');
+                                if (pct != std::string::npos) ip.resize(pct);
+                                // Skip loopback and link-local; keep all other LAN addresses.
+                                if (ip == "127.0.0.1" || ip == "::1") continue;
+                                if (ip.size() >= 4 && ip.compare(0, 4, "fe80") == 0) continue;
+                                if (!ip.empty()) serverIpSet->add(ip);
+                            }
+                            ::freeifaddrs(ifap);
+                        }
+                    }
+                    auto dashboardIpSet = std::make_shared<MonitoringIpSet>();
+
                     // Populate WebConfig: the web thread only gets the fields it actually uses.
                     WebConfig webCfg;
                     webCfg.port             = config.web_port;
@@ -1794,6 +1831,8 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                     webCfg.registry         = clientRegistry;
                     webCfg.webauthn         = webAuthnRP;
                     webCfg.clients_store    = clientsStore;
+                    webCfg.server_ips       = serverIpSet;
+                    webCfg.dashboard_ips    = dashboardIpSet;
 
                     webThread = std::thread(webServerThread,
                                             std::ref(*webSvr),

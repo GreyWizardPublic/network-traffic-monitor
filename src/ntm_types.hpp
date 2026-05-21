@@ -102,6 +102,27 @@ struct AllowedClientsStore
     std::string                                    filePath;
 };
 
+// Thread-safe set of IP addresses belonging to monitoring infrastructure
+// (the server itself, or dashboard browser/app clients). Used at JSON
+// serialisation time to classify entity flows as overhead vs. regular traffic.
+struct MonitoringIpSet
+{
+    mutable std::mutex mtx;
+    std::unordered_set<std::string> ips;
+
+    void add(const std::string &ip)
+    {
+        std::lock_guard<std::mutex> lk(mtx);
+        ips.insert(ip);
+    }
+
+    std::unordered_set<std::string> snapshot() const
+    {
+        std::lock_guard<std::mutex> lk(mtx);
+        return ips;
+    }
+};
+
 inline constexpr unsigned kAggregationWindowDaysDefault = 7;
 
 // Process-wide logging mode set in runServer() before threads start.
