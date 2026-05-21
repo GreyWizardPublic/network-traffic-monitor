@@ -44,6 +44,13 @@ struct WebConfig
     std::shared_ptr<WebAuthnRP> webauthn;
     // Shared wire-protocol client store; null = registration endpoint disabled.
     std::shared_ptr<AllowedClientsStore> clients_store;
+
+    // IPs of the server itself (enumerated at startup) and dashboard clients
+    // (added on each authenticated request). Used to classify entity flows as
+    // monitoring overhead vs. regular traffic in /api/summary.
+    // Null = overhead classification disabled (all flows treated as regular).
+    std::shared_ptr<MonitoringIpSet> server_ips;
+    std::shared_ptr<MonitoringIpSet> dashboard_ips;
 };
 
 // Thread function: registers HTTP routes on svr, then blocks in svr.listen().

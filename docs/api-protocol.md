@@ -1,7 +1,7 @@
-# NTM Dashboard API Protocol — Specification v3
+# NTM Dashboard API Protocol — Specification v4
 
-**API version:** 3  
-**Software version where introduced:** ntm 1.5.0  
+**API version:** 4  
+**Software version where introduced:** ntm 1.8.0  
 **File owner:** This document is the authoritative specification for the HTTPS
 API between `ntm-server` and any dashboard client (iOS app, web browser, or
 third-party tool). Update it **before** changing any endpoint, field, or
@@ -79,7 +79,7 @@ Exceeded → `429` with `Retry-After: 60`.
 Every response from `/api/summary` includes:
 
 ```json
-"api_version": 3
+"api_version": 4
 ```
 
 This integer identifies the API contract revision, independent of the ntm
@@ -106,6 +106,7 @@ software version (`server_version`).
 
 | Version | Change |
 |---|---|
+| 4 | `entities` now contains only non-overhead (regular) flows. Added `overhead_entities`, `truncated_overhead`, and `overhead_summary` to `/api/summary`. Overhead = flows involving ntm-clients, the server itself, or dashboard viewers (ntm 1.8.0). |
 | 3 | Added `POST /api/admin/client/register` — enrol Ed25519 wire-protocol client keys at runtime via the HTTPS API (ntm 1.5.0). |
 | 2 | Added WebAuthn passkey authentication; auth endpoints `/auth/*`; `/login` page; AASA endpoint. Bumped `api_version` field to `2` (ntm 1.3.0). |
 | 1 | Initial version (ntm 1.2.0) |
@@ -301,10 +302,10 @@ recognise. New optional fields may be added at any `api_version` without a bump.
     }
   ],
 
-  "entities": [                     // top traffic flows, sorted by bytes descending
+  "entities": [                     // non-overhead flows only, sorted by bytes descending
     {
-      "client":      <string>,
-      "iface":       <string>,
+      "client":      <string>,      // display name / nickname, or "" for IP-auth clients
+      "iface":       <string>,      // interface label
       "src_entity":  <string>,      // resolved: nickname, "LAN (x.x.x.x)", ASN name, …
       "dst_entity":  <string>,
       "packets":     <integer>,     // uint64
@@ -312,6 +313,25 @@ recognise. New optional fields may be added at any `api_version` without a bump.
     }
   ],
   "truncated": <boolean>,           // true when server capped the entities list
+
+  "overhead_entities": [            // monitoring overhead flows (ntm-clients, server, dashboard
+                                    // browsers/apps), sorted by bytes descending
+    {
+      "client":      <string>,
+      "iface":       <string>,
+      "src_entity":  <string>,
+      "dst_entity":  <string>,
+      "packets":     <integer>,
+      "bytes":       <integer>
+    }
+  ],
+  "truncated_overhead": <boolean>,  // true when server capped the overhead_entities list
+
+  "overhead_summary": {             // aggregate stats for all overhead flows
+    "packets":            <integer>,
+    "bytes":              <integer>,
+    "pct_of_total_bytes": <string>  // formatted "N.NN" — overhead bytes / all bytes × 100
+  },
 
   "entities_lan": [                 // unidentified LAN devices, sorted by total bytes desc
     {
@@ -443,10 +463,13 @@ configured **and** `allowed_keys` is set in the server config.
 
 ## 11. Stability Contract
 
-- All fields documented in § 9 and § 10 are **stable at `api_version: 3`**.
+- All fields documented in § 9 and § 10 are **stable at `api_version: 4`**.
   No field will be removed or renamed without a version bump.
 - New **optional** fields may be added at any `api_version` without bumping;
   clients must tolerate extra fields.
+- Servers at `api_version: 3` (ntm < 1.8.0) return all flows in `entities` (no
+  overhead separation). Clients receiving `api_version: 3` must treat `entities`
+  as all traffic and decode `overhead_entities` as an empty array.
 - Servers at `api_version: 1` (ntm < 1.3.0) do not have WebAuthn endpoints.
   A client receiving `api_version: 1` must not call `/auth/*`.
 - Servers at `api_version: 2` (ntm < 1.5.0) do not have `/api/admin/client/register`.
