@@ -4,7 +4,6 @@ struct LoginView: View {
     @Environment(AuthViewModel.self)     private var authVM
     @Environment(SettingsViewModel.self) private var settingsVM
     @State private var showRegister = false
-    @State private var showSettings = false
     @State private var serverURLInput: String = ServerConfig.load().serverURL
 
     private var serverConfigured: Bool { !serverURLInput.isEmpty }
@@ -80,18 +79,8 @@ struct LoginView: View {
 
                 Spacer()
             }
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { showSettings = true } label: {
-                        Image(systemName: "gear")
-                    }
-                }
-            }
             .sheet(isPresented: $showRegister) {
                 RegisterDeviceView()
-            }
-            .sheet(isPresented: $showSettings) {
-                SettingsView()
             }
         }
     }
