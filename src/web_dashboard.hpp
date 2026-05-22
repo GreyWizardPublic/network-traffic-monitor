@@ -59,4 +59,10 @@ void webServerThread(httplib::SSLServer &svr,
                      TrafficStats       &stats,
                      const WebConfig    &config);
 
+// Demo server thread (App Store review, port kDemoPort).
+// Serves mock /api/summary data; no auth required; browsers rejected by User-Agent.
+// Enabled/disabled at runtime via POST /api/admin/demo on the main web server.
+// Call svr.stop() from another thread to unblock.
+void demoServerThread(httplib::SSLServer &svr);
+
 } // namespace ntm

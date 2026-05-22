@@ -1,5 +1,37 @@
 import SwiftUI
 
+struct DemoBanner: View {
+    let expiresAt: Int
+    @State private var now: Date = .init()
+    private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+
+    private var remaining: Int {
+        max(0, expiresAt - Int(now.timeIntervalSince1970))
+    }
+
+    private var label: String {
+        if remaining == 0 { return "Demo session expired" }
+        let m = remaining / 60
+        let s = remaining % 60
+        return String(format: "Demo mode — expires in %d:%02d", m, s)
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: remaining == 0 ? "clock.badge.xmark" : "clock.fill")
+                .foregroundStyle(Color.ntmAmber)
+            Text(label)
+                .font(.caption.bold())
+                .foregroundStyle(Color.ntmAmber)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.ntmAmber.opacity(0.15))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .onReceive(timer) { now = $0 }
+    }
+}
+
 struct DashboardView: View {
     @Environment(DashboardViewModel.self) private var vm
 
@@ -15,13 +47,16 @@ struct DashboardView: View {
                 } else if let snap = vm.snapshot {
                     ScrollView {
                         VStack(spacing: 16) {
+                            if snap.demo == true, let exp = snap.demoExpiresAt {
+                                DemoBanner(expiresAt: exp)
+                            }
                             if let warning = vm.apiVersionWarning {
                                 HStack(spacing: 8) {
                                     Image(systemName: "exclamationmark.triangle.fill")
-                                        .foregroundStyle(.ntmAmber)
+                                        .foregroundStyle(Color.ntmAmber)
                                     Text(warning)
                                         .font(.caption)
-                                        .foregroundStyle(.ntmAmber)
+                                        .foregroundStyle(Color.ntmAmber)
                                 }
                                 .padding(10)
                                 .frame(maxWidth: .infinity, alignment: .leading)
