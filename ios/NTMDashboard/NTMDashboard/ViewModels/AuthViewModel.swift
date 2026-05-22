@@ -10,10 +10,14 @@ final class AuthViewModel {
     var isLoading = false
     var errorMessage: String?
     var untrustedCertFingerprint: String?
+    var demoUnavailable = false
 
     private let passkeyService = PasskeyService()
     private var capturedCert: Data?
     private var lastPinner: CertificatePinner?
+    private var isDemoSession = false
+
+    private static let demoServerURL = "https://ntm.happyhomelives.me:12345"
 
     init() {
         let cfg = ServerConfig.load()
@@ -136,17 +140,49 @@ final class AuthViewModel {
         await login()
     }
 
+    func connectDemo() async {
+        isLoading = true
+        errorMessage = nil
+        demoUnavailable = false
+        untrustedCertFingerprint = nil
+        defer { isLoading = false }
+
+        guard let url = URL(string: Self.demoServerURL + "/api/summary") else { return }
+        do {
+            let (_, response) = try await URLSession.shared.data(from: url)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                demoUnavailable = true
+                return
+            }
+        } catch {
+            demoUnavailable = true
+            return
+        }
+
+        var cfg = ServerConfig.load()
+        cfg.serverURL = Self.demoServerURL
+        cfg.save()
+        isDemoSession = true
+        isAuthenticated = true
+    }
+
     func logout() async {
         let cfg = ServerConfig.load()
         let serverURL = cfg.baseURL?.absoluteString ?? ""
         isLoading = true
         defer { isLoading = false }
 
-        if let base = cfg.baseURL {
+        if !isDemoSession, let base = cfg.baseURL {
             let token = KeychainService.loadToken(for: serverURL) ?? ""
             try? await performLogout(session: makeSession(cfg), base: base, token: token)
         }
         KeychainService.deleteToken(for: serverURL)
+        if isDemoSession {
+            var cleanCfg = ServerConfig.load()
+            cleanCfg.serverURL = ""
+            cleanCfg.save()
+            isDemoSession = false
+        }
         isAuthenticated = false
     }
 
