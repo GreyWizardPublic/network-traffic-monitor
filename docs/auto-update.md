@@ -132,8 +132,9 @@ Add the following keys to the client's config file:
 # Enable automatic binary updates (default: false — must opt in)
 auto_update = true
 
-# HTTPS API port on the server (must match web_port in server config; default: 8443)
-update_port = 8443
+# HTTPS API port — same key and default as web_port in the server config (default: 8443)
+# Only set this if the server uses a non-default web_port.
+web_port = 8443
 ```
 
 The client uses the same `server` and `server_cert`/`ca` settings already configured for

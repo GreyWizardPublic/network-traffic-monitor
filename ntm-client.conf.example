@@ -36,6 +36,7 @@ send_buffer_bytes=524288
 # Default: false (opt-in). Set to true to enable.
 # auto_update=false
 
-# HTTPS API port for update checks (same server as wire protocol).
-# Default: 8443 (matches server default web_port).
-# update_port=8443
+# HTTPS API port for update checks — same key and default as web_port on the server.
+# Only needed if the server is configured with a non-default web_port.
+# Default: 8443.
+# web_port=8443

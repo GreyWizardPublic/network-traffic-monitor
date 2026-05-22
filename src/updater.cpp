@@ -533,7 +533,7 @@ static void runUpdater(ClientConfig config)
         path += "&pubkey=";
         path += pubkeyHex;
 
-        auto [status, body] = httpsGet(config.server, config.update_port, path,
+        auto [status, body] = httpsGet(config.server, config.web_port, path,
                                        config.tlsCaPath, config.tlsServerCertPath,
                                        config.verbose);
 
@@ -589,7 +589,7 @@ static void runUpdater(ClientConfig config)
         dlPath += "&pubkey=";
         dlPath += pubkeyHex;
 
-        int dlStatus = httpsGetToFile(config.server, config.update_port, dlPath,
+        int dlStatus = httpsGetToFile(config.server, config.web_port, dlPath,
                                       config.tlsCaPath, config.tlsServerCertPath,
                                       pendingPath, size, config.verbose);
         if (dlStatus != 200)

@@ -335,11 +335,11 @@ static bool parseConfigLine(const std::string &key, const std::string &val,
         out.auto_update = (lower == "1" || lower == "true" || lower == "yes");
         return true;
     }
-    if (key == "update_port")
+    if (key == "web_port")
     {
         try {
             unsigned long p = std::stoul(v);
-            if (p != 0 && p <= 65535) out.update_port = static_cast<std::uint16_t>(p);
+            if (p != 0 && p <= 65535) out.web_port = static_cast<std::uint16_t>(p);
         } catch (const std::exception &) {}
         return true;
     }
