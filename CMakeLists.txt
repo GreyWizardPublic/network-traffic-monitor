@@ -33,6 +33,7 @@ set(NTM_CLIENT_COMMON_SOURCES
     src/client_main.cpp
     src/client_core.cpp
     src/client_impl.cpp
+    src/updater.cpp
 )
 
 if(WIN32)

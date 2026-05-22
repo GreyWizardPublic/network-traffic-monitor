@@ -108,3 +108,19 @@ idle_timeout_seconds=300
 
 # Per-connection D line rate limit: max D lines processed per second; excess dropped (100-1000000).
 max_d_lines_per_second_per_connection=20000
+
+# ── Auto-update binary distribution ──────────────────────────────────────────
+#
+# Directory where operator-placed client binaries are served for auto-update.
+# Empty (default) = feature disabled; no /api/update/* endpoints are registered.
+#
+# Naming convention: ntm-client-{platform}-{version}[.exe]
+#   Linux:   ntm-client-linux-amd64-1.9.0
+#   Windows: ntm-client-windows-amd64-1.9.0.exe
+#
+# After placing new binaries here, use the admin page "Scan & Refresh Manifest"
+# button (or POST /api/admin/update/scan) to generate manifest.json.
+# Clients with auto_update=true will pick up the update within 23 hours,
+# or immediately after an operator clicks "Force Update" in the admin page.
+#
+# update_dir=/var/lib/ntm-server/updates
