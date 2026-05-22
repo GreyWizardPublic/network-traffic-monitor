@@ -1,6 +1,6 @@
-# NTM Dashboard API Protocol — Specification v4
+# NTM Dashboard API Protocol — Specification v5
 
-**API version:** 4  
+**API version:** 5  
 **Software version where introduced:** ntm 1.8.0  
 **File owner:** This document is the authoritative specification for the HTTPS
 API between `ntm-server` and any dashboard client (iOS app, web browser, or
@@ -106,6 +106,7 @@ software version (`server_version`).
 
 | Version | Change |
 |---|---|
+| 5 | Added `POST /api/demo/begin` — unauthenticated demo session endpoint on the main web server port. Returns a short-lived `demo_…` bearer token when demo mode is enabled by the operator. `/api/summary` returns `buildDemoSummaryJson()` mock data for demo tokens. Replaces the separate port-12345 demo server for iOS clients (ntm-server 1.10.0, NTMDashboard 1.2.0). |
 | 4 | `entities` now contains only non-overhead (regular) flows. Added `overhead_entities`, `truncated_overhead`, and `overhead_summary` to `/api/summary`. Overhead = flows involving ntm-clients, the server itself, or dashboard viewers (ntm 1.8.0). Added optional `server_wire_proto_version` root field; optional `wire_proto_version` + `wire_proto_ok` per client-health entry; `proto_rejected_clients` array. These are additive optional fields and do not require a version bump (ntm-server 1.8.1). |
 | 3 | Added `POST /api/admin/client/register` — enrol Ed25519 wire-protocol client keys at runtime via the HTTPS API (ntm 1.5.0). |
 | 2 | Added WebAuthn passkey authentication; auth endpoints `/auth/*`; `/login` page; AASA endpoint. Bumped `api_version` field to `2` (ntm 1.3.0). |
@@ -257,7 +258,44 @@ Invalidates the current session.
 
 ---
 
-## 8. Static Endpoints
+## 8. Demo Session Endpoint
+
+This endpoint is accessible without a passkey session and issues a time-limited
+demo token when the operator has enabled demo mode via the admin page.
+
+### `POST /api/demo/begin`
+
+Issues a demo bearer token. No authentication required.
+
+**Request:** empty body.
+
+**Response `200`:**
+
+```json
+{
+  "ok": true,
+  "token": "demo_<32 hex characters>",
+  "expires_in": 900
+}
+```
+
+**Response `503`:** `{"error": "demo is disabled"}` — operator has not enabled demo mode.
+
+The returned token must be sent as `Authorization: Bearer <token>` on subsequent
+requests. It grants **read-only access to `/api/summary` only**, which returns
+mock traffic data (`"demo": true` in the response). All other endpoints,
+especially `/api/admin/*`, return `403` for demo tokens.
+
+Demo tokens expire after `kDemoSessionSec` (900 seconds) from issuance. A new
+token can be obtained by calling this endpoint again while demo mode is enabled.
+
+> **Note:** The legacy port-12345 demo server (`kDemoPort`) remains present on
+> the server for backward compatibility but is no longer used by the iOS client.
+> iOS clients MUST use `POST /api/demo/begin` on the main web server port.
+
+---
+
+## 9. Static Endpoints
 
 ### `GET /login`
 
@@ -272,7 +310,7 @@ Only registered when `webauthn_ios_app_id` is configured.
 
 ---
 
-## 9. Data Signals (read-only)
+## 10. Data Signals (read-only)
 
 ### `GET /api/summary`
 
@@ -378,7 +416,7 @@ arrived yet. Clients must handle this without error.
 
 ---
 
-## 10. Control Signals (write)
+## 11. Control Signals (write)
 
 ### `POST /api/admin/purge`
 
@@ -473,9 +511,9 @@ configured **and** `allowed_keys` is set in the server config.
 
 ---
 
-## 11. Stability Contract
+## 12. Stability Contract
 
-- All fields documented in § 9 and § 10 are **stable at `api_version: 4`**.
+- All fields documented in § 10 and § 11 are **stable at `api_version: 5`**.
   No field will be removed or renamed without a version bump.
 - New **optional** fields may be added at any `api_version` without bumping;
   clients must tolerate extra fields.
