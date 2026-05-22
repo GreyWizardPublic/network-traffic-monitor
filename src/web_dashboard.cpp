@@ -7,7 +7,6 @@
 #include "version.hpp"
 
 #include <algorithm>
-#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cstdint>
@@ -24,166 +23,6 @@
 
 namespace ntm
 {
-
-// ---------------------------------------------------------------------------
-// Demo server state (App Store review — port kDemoPort)
-// ---------------------------------------------------------------------------
-
-// Operator-controlled enable flag. Default: false (disabled on startup).
-// Toggled via POST /api/admin/demo on the main web server.
-static std::atomic<bool> g_demoEnabled{false};
-
-// Start epoch of the current demo session (0 = no session active).
-// Set on first request; auto-resets after kDemoSessionSec so a fresh
-// reviewer always gets a full 15-minute window.
-static std::atomic<std::int64_t> g_demoSessionStart{0};
-
-// Builds /api/summary JSON for the demo server.
-// Schema MUST mirror buildSummaryJson() — update whenever that function changes.
-// CLAUDE.md "Demo mock data" rule enforces this.
-static std::string buildDemoSummaryJson()
-{
-    const auto nowEpoch = std::chrono::duration_cast<std::chrono::seconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
-
-    // Establish or reset demo session.
-    std::int64_t sessionStart = g_demoSessionStart.load(std::memory_order_relaxed);
-    if (sessionStart == 0 || (nowEpoch - sessionStart) >= kDemoSessionSec)
-    {
-        g_demoSessionStart.store(nowEpoch, std::memory_order_relaxed);
-        sessionStart = nowEpoch;
-    }
-
-    // Tick advances every health interval — gives numbers a live-data feel.
-    const std::int64_t tick = (nowEpoch / static_cast<std::int64_t>(kHealthIntervalSec)) % 500;
-
-    const std::int64_t windowStart   = nowEpoch - 7 * 86400;
-    const std::int64_t demoExpiresAt = sessionStart + kDemoSessionSec;
-
-    // Byte totals used for overhead percentage.
-    const std::int64_t totalBytes = 3142857600LL + 1258291200LL + 5905580032LL
-                                  + tick * (52480 + 14336 + 81920);
-    const std::int64_t ohBytes    = 157286400LL + 168689664LL + tick * 1024;
-    const std::int64_t pct100     = (ohBytes * 10000LL) / totalBytes;
-    std::string ohPct = std::to_string(pct100 / 100) + ".";
-    if ((pct100 % 100) < 10) ohPct += "0";
-    ohPct += std::to_string(pct100 % 100);
-
-    std::string j;
-    j.reserve(4096);
-
-    // Root — mirrors buildSummaryJson() root section exactly.
-    j += "{\n  \"api_version\": ";              j += std::to_string(kApiVersion);
-    j += ",\n  \"server_version\": \"";         j += kServerVersion; j += "\"";
-    j += ",\n  \"server_wire_proto_version\": "; j += std::to_string(kWireProtoVersion);
-    j += ",\n  \"demo\": true";
-    j += ",\n  \"demo_expires_at\": ";           j += std::to_string(demoExpiresAt);
-    j += ",\n  \"demo_server_enabled\": true";
-    j += ",\n  \"window_start\": ";              j += std::to_string(windowStart);
-    j += ",\n  \"generated_at\": ";              j += std::to_string(nowEpoch);
-
-    // interfaces
-    j += ",\n  \"interfaces\": ["
-         "\n    {\"client\":\"MacBook-Air\",\"iface\":\"en0\","
-         "\"packets\":"; j += std::to_string(3247891 + tick * 87);
-    j += ",\"bytes\":";  j += std::to_string(3142857600LL + tick * 52480); j += "}";
-    j += ",\n    {\"client\":\"iPhone-15\",\"iface\":\"en0\","
-         "\"packets\":"; j += std::to_string(891203 + tick * 23);
-    j += ",\"bytes\":";  j += std::to_string(1258291200LL + tick * 14336); j += "}";
-    j += ",\n    {\"client\":\"Desktop-PC\",\"iface\":\"eth0\","
-         "\"packets\":"; j += std::to_string(4892341 + tick * 134);
-    j += ",\"bytes\":";  j += std::to_string(5905580032LL + tick * 81920); j += "}";
-    j += "\n  ]";
-
-    // entities (non-overhead, sorted by bytes desc)
-    j += ",\n  \"entities\": ["
-         "\n    {\"client\":\"Desktop-PC\",\"iface\":\"eth0\","
-         "\"src_entity\":\"Desktop-PC\",\"dst_entity\":\"Netflix Inc.\","
-         "\"packets\":"; j += std::to_string(2108344 + tick * 60);
-    j += ",\"bytes\":"; j += std::to_string(2251799814LL + tick * 65536); j += "}";
-    j += ",\n    {\"client\":\"MacBook-Air\",\"iface\":\"en0\","
-         "\"src_entity\":\"MacBook-Air\",\"dst_entity\":\"Google LLC\","
-         "\"packets\":"; j += std::to_string(1289341 + tick * 34);
-    j += ",\"bytes\":"; j += std::to_string(1288490189LL + tick * 40960); j += "}";
-    j += ",\n    {\"client\":\"Desktop-PC\",\"iface\":\"eth0\","
-         "\"src_entity\":\"Desktop-PC\",\"dst_entity\":\"Cloudflare Inc.\","
-         "\"packets\":"; j += std::to_string(980241 + tick * 27);
-    j += ",\"bytes\":"; j += std::to_string(1027604480LL + tick * 32768); j += "}";
-    j += ",\n    {\"client\":\"iPhone-15\",\"iface\":\"en0\","
-         "\"src_entity\":\"iPhone-15\",\"dst_entity\":\"Apple Inc.\","
-         "\"packets\":"; j += std::to_string(541203 + tick * 15);
-    j += ",\"bytes\":"; j += std::to_string(472446402LL + tick * 8192); j += "}";
-    j += ",\n    {\"client\":\"MacBook-Air\",\"iface\":\"en0\","
-         "\"src_entity\":\"MacBook-Air\",\"dst_entity\":\"Amazon.com Inc.\","
-         "\"packets\":"; j += std::to_string(334891 + tick * 9);
-    j += ",\"bytes\":"; j += std::to_string(335544320LL + tick * 10240); j += "}";
-    j += ",\n    {\"client\":\"iPhone-15\",\"iface\":\"en0\","
-         "\"src_entity\":\"iPhone-15\",\"dst_entity\":\"Akamai Technologies Inc.\","
-         "\"packets\":"; j += std::to_string(218452 + tick * 6);
-    j += ",\"bytes\":"; j += std::to_string(188743680LL + tick * 4096); j += "}";
-    j += "\n  ]";
-    j += ",\n  \"truncated\": false";
-
-    // overhead_entities
-    j += ",\n  \"overhead_entities\": ["
-         "\n    {\"client\":\"MacBook-Air\",\"iface\":\"en0\","
-         "\"src_entity\":\"MacBook-Air\",\"dst_entity\":\"Hetzner Online GmbH\","
-         "\"packets\":"; j += std::to_string(48291 + tick * 2);
-    j += ",\"bytes\":"; j += std::to_string(157286400LL + tick * 512); j += "}";
-    j += ",\n    {\"client\":\"Desktop-PC\",\"iface\":\"eth0\","
-         "\"src_entity\":\"Desktop-PC\",\"dst_entity\":\"Hetzner Online GmbH\","
-         "\"packets\":"; j += std::to_string(51832 + tick * 2);
-    j += ",\"bytes\":"; j += std::to_string(168689664LL + tick * 512); j += "}";
-    j += "\n  ]";
-    j += ",\n  \"truncated_overhead\": false";
-
-    // overhead_summary
-    j += ",\n  \"overhead_summary\": {\"packets\":";
-    j += std::to_string(100123 + tick * 4);
-    j += ",\"bytes\":"; j += std::to_string(ohBytes);
-    j += ",\"pct_of_total_bytes\":\""; j += ohPct; j += "\"}";
-
-    // entities_lan
-    j += ",\n  \"entities_lan\": ["
-         "\n    {\"ip\":\"192.168.1.1\",\"reported_by\":\"\","
-         "\"out_packets\":"; j += std::to_string(150341 + tick * 4);
-    j += ",\"out_bytes\":"; j += std::to_string(54525952LL + tick * 1024);
-    j += ",\"in_packets\":"; j += std::to_string(892103 + tick * 24);
-    j += ",\"in_bytes\":"; j += std::to_string(1153433600LL + tick * 16384); j += "}";
-    j += ",\n    {\"ip\":\"192.168.1.100\",\"reported_by\":\"\","
-         "\"out_packets\":"; j += std::to_string(45123 + tick);
-    j += ",\"out_bytes\":"; j += std::to_string(8388608LL + tick * 256);
-    j += ",\"in_packets\":"; j += std::to_string(210891 + tick * 6);
-    j += ",\"in_bytes\":"; j += std::to_string(398458880LL + tick * 4096); j += "}";
-    j += "\n  ]";
-    j += ",\n  \"truncated_lan\": false";
-
-    // client_health
-    j += ",\n  \"client_health\": ["
-         "\n    {\"client\":\"MacBook-Air\",\"version\":\"1.8.1\","
-         "\"pcap_recv\":"; j += std::to_string(2847281 + tick * 76);
-    j += ",\"pcap_drop\":0,\"pcap_drop_pct\":\"0.00\","
-         "\"buf_drop\":0,\"buf_drop_pct\":\"0.00\","
-         "\"reported_at\":"; j += std::to_string(nowEpoch - 12);
-    j += ",\"stale\":false,\"wire_proto_version\":1,\"wire_proto_ok\":true}";
-    j += ",\n    {\"client\":\"iPhone-15\",\"version\":\"1.0.0\","
-         "\"pcap_recv\":"; j += std::to_string(741083 + tick * 20);
-    j += ",\"pcap_drop\":0,\"pcap_drop_pct\":\"0.00\","
-         "\"buf_drop\":0,\"buf_drop_pct\":\"0.00\","
-         "\"reported_at\":"; j += std::to_string(nowEpoch - 8);
-    j += ",\"stale\":false,\"wire_proto_version\":1,\"wire_proto_ok\":true}";
-    j += ",\n    {\"client\":\"Desktop-PC\",\"version\":\"1.8.1\","
-         "\"pcap_recv\":"; j += std::to_string(4192841 + tick * 112);
-    j += ",\"pcap_drop\":0,\"pcap_drop_pct\":\"0.00\","
-         "\"buf_drop\":0,\"buf_drop_pct\":\"0.00\","
-         "\"reported_at\":"; j += std::to_string(nowEpoch - 5);
-    j += ",\"stale\":false,\"wire_proto_version\":1,\"wire_proto_ok\":true}";
-    j += "\n  ]";
-
-    j += ",\n  \"proto_rejected_clients\": []";
-    j += "\n}\n";
-    return j;
-}
 
 // ---------------------------------------------------------------------------
 // Per-IP sliding-window rate limiter
@@ -423,8 +262,6 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
     j += "\"";
     j += ",\n  \"server_wire_proto_version\": ";
     j += std::to_string(kWireProtoVersion);
-    j += ",\n  \"demo_server_enabled\": ";
-    j += g_demoEnabled.load(std::memory_order_relaxed) ? "true" : "false";
     j += ",\n  \"window_start\": ";
     j += std::to_string(windowEpoch);
     j += ",\n  \"generated_at\": ";
@@ -1134,10 +971,6 @@ button{font-family:monospace;font-size:0.82em;padding:5px 14px;border-radius:3px
 .btn-back{background:#111118;color:#7af;border-color:#3a3a5a}
 .btn-back:hover{color:#adf}
 #msg{font-size:0.78em;color:#666;margin-top:6px}
-.demo-dot{display:inline-block;width:9px;height:9px;border-radius:50%;vertical-align:middle;margin-right:7px}
-.btn-demo-on{background:#0d2010;color:#4c4;border-color:#1a4020}
-.btn-demo-on:hover{background:#152a18;color:#6e6}
-.btn-demo-on:disabled{opacity:0.4;cursor:default}
 </style>
 </head>
 <body>
@@ -1178,20 +1011,6 @@ button{font-family:monospace;font-size:0.82em;padding:5px 14px;border-radius:3px
 </div>
 
 <div id="msg"></div>
-
-<div class="section" style="margin-top:22px">Demo Server <span style="font-size:0.75em;color:#555;text-transform:none;letter-spacing:0">&mdash; port 12345 (App Store review)</span></div>
-<div class="sub">Serves mock data without authentication. Enable only when an App Store reviewer needs access. Resets to <strong>Disabled</strong> on server restart.</div>
-<div class="panel">
-  <div style="display:flex;align-items:center;margin-bottom:14px">
-    <span id="demo_dot" class="demo-dot" style="background:#555"></span>
-    <span id="demo_label" style="font-size:0.88em;color:#999">Loading&hellip;</span>
-  </div>
-  <div class="btn-row">
-    <button id="demo_on_btn" class="btn-demo-on" onclick="setDemo(true)" disabled>Enable Demo Server</button>
-    <button id="demo_off_btn" class="btn-purge" onclick="setDemo(false)" disabled>Disable Demo Server</button>
-  </div>
-  <div class="err-msg" id="demo_err" style="margin-top:8px"></div>
-</div>
 
 <script>
 function fmtB(b){
@@ -1302,41 +1121,7 @@ function resetView(){
   loadClients();
 }
 
-function updateDemoStatus(on){
-  document.getElementById('demo_dot').style.background=on?'#4c4':'#c44';
-  document.getElementById('demo_label').textContent=on
-    ?'Enabled — demo server running on port 12345'
-    :'Disabled';
-  document.getElementById('demo_on_btn').disabled=on;
-  document.getElementById('demo_off_btn').disabled=!on;
-}
-async function loadDemoStatus(){
-  try{
-    const r=await fetch('/api/summary',{cache:'no-store'});
-    if(!r.ok)throw new Error('HTTP '+r.status);
-    const d=await r.json();
-    updateDemoStatus(!!d.demo_server_enabled);
-  }catch(e){
-    document.getElementById('demo_label').textContent='Could not load status: '+esc(e.message);
-  }
-}
-async function setDemo(enabled){
-  document.getElementById('demo_err').textContent='';
-  try{
-    const r=await fetch('/api/admin/demo',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({enabled:enabled})
-    });
-    const d=await r.json();
-    if(r.ok&&d.ok){updateDemoStatus(d.demo_enabled);}
-    else{document.getElementById('demo_err').textContent='✗ '+(d.error||'Unknown error');}
-  }catch(e){
-    document.getElementById('demo_err').textContent='✗ Request failed: '+esc(e.message);
-  }
-}
 loadClients();
-loadDemoStatus();
 </script>
 </body>
 </html>
@@ -1679,68 +1464,6 @@ void webServerThread(httplib::SSLServer &svr,
             });
     }
 
-    // POST /api/admin/demo — enable or disable the demo server at runtime.
-    if (adminAvailable)
-    {
-        svr.Post("/api/admin/demo",
-            [&config](const httplib::Request &req, httplib::Response &res)
-            {
-                // In legacy mode require the admin password in the request body.
-                if (!config.webauthn || !config.webauthn->enabled())
-                {
-                    std::string password = jsonGetString(req.body, "password");
-                    if (password.empty())
-                    {
-                        res.status = 400;
-                        res.set_content("{\"error\":\"bad request: password required\"}\n",
-                                        "application/json");
-                        return;
-                    }
-                    const std::string &stored = config.admin_password;
-                    bool pwdOk = (password.size() == stored.size()) &&
-                                 (CRYPTO_memcmp(password.data(), stored.data(), stored.size()) == 0);
-                    if (!pwdOk)
-                    {
-                        res.status = 401;
-                        res.set_content("{\"error\":\"unauthorized\"}\n", "application/json");
-                        return;
-                    }
-                }
-
-                // Parse {"enabled": true|false}
-                const std::string &body = req.body;
-                auto pos = body.find("\"enabled\"");
-                if (pos == std::string::npos)
-                {
-                    res.status = 400;
-                    res.set_content("{\"error\":\"missing enabled field\"}\n", "application/json");
-                    return;
-                }
-                pos = body.find_first_of("tf", pos + 9);
-                if (pos == std::string::npos)
-                {
-                    res.status = 400;
-                    res.set_content("{\"error\":\"enabled must be true or false\"}\n",
-                                    "application/json");
-                    return;
-                }
-                const bool enabled = (body[pos] == 't');
-                g_demoEnabled.store(enabled, std::memory_order_relaxed);
-                if (enabled)
-                {
-                    // Reset session so new reviewer gets a full 15-minute window.
-                    g_demoSessionStart.store(0, std::memory_order_relaxed);
-                }
-                serverLog(LogLevel::Warn, "ntm-server: demo server %s by %s",
-                          enabled ? "ENABLED" : "DISABLED", req.remote_addr.c_str());
-
-                std::string resp = "{\"ok\":true,\"demo_enabled\":";
-                resp += enabled ? "true" : "false";
-                resp += "}\n";
-                res.set_content(resp, "application/json");
-            });
-    }
-
     // WebAuthn authentication endpoints (only registered when WebAuthn is enabled).
     if (config.webauthn && config.webauthn->enabled())
     {
@@ -1853,52 +1576,6 @@ void webServerThread(httplib::SSLServer &svr,
     });
 
     svr.listen(config.bind, static_cast<int>(config.port));
-}
-
-// ---------------------------------------------------------------------------
-// Demo server thread (App Store review — port kDemoPort)
-// ---------------------------------------------------------------------------
-
-void demoServerThread(httplib::SSLServer &svr)
-{
-    svr.set_pre_routing_handler(
-        [](const httplib::Request &req, httplib::Response &res) -> httplib::Server::HandlerResponse
-        {
-            // Reject browsers and common non-iOS HTTP clients by User-Agent.
-            // All major browsers send "Mozilla"; block curl, python, and Postman too.
-            const std::string &ua = req.get_header_value("User-Agent");
-            auto uaHas = [&](const char *s) { return ua.find(s) != std::string::npos; };
-            if (uaHas("Mozilla") || uaHas("curl/") || uaHas("python") || uaHas("PostmanRuntime"))
-            {
-                res.status = 403;
-                res.set_content("{\"error\":\"demo port is for iOS app only\"}\n",
-                                "application/json");
-                return httplib::Server::HandlerResponse::Handled;
-            }
-
-            if (!g_demoEnabled.load(std::memory_order_relaxed))
-            {
-                res.status = 503;
-                res.set_content("{\"error\":\"demo server is disabled\"}\n", "application/json");
-                return httplib::Server::HandlerResponse::Handled;
-            }
-
-            res.set_header("X-Content-Type-Options", "nosniff");
-            return httplib::Server::HandlerResponse::Unhandled;
-        });
-
-    svr.Get("/api/summary",
-        [](const httplib::Request &, httplib::Response &res) {
-            res.set_header("Cache-Control", "no-store");
-            res.set_content(buildDemoSummaryJson(), "application/json");
-        });
-
-    svr.set_error_handler([](const httplib::Request &, httplib::Response &res) {
-        if (res.status == 404)
-            res.set_content("{\"error\":\"not found\"}\n", "application/json");
-    });
-
-    svr.listen("0.0.0.0", static_cast<int>(kDemoPort));
 }
 
 } // namespace ntm

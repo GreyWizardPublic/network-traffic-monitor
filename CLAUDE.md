@@ -127,13 +127,3 @@ all of them.
 3. **Both protocols are independent.** A wire-protocol change does not require an
    API version bump, and vice versa — unless the same commit touches both sides.
 4. **When a protocol bumps, bump every lockstep module** per the table above.
-
----
-
-## Demo Server
-
-Port 12345 serves mock `/api/summary` data for App Store review (no auth, iOS only).
-
-**Consistency rule**: Any change to the `/api/summary` JSON schema (new field, renamed field,
-removed field, changed type) **must** be reflected in `buildDemoSummaryJson()` in
-`src/web_dashboard.cpp` in the same commit. The mock data must mirror the real schema exactly.
