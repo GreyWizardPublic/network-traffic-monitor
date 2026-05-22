@@ -1,5 +1,60 @@
 # network-traffic-monitor
 
+## Agent Roles
+
+Two Claude Code agents collaborate on this project. Each agent **detects its
+own role from the OS at the start of every session** — no manual configuration needed.
+
+Run `uname -s` and `uname -r` to identify the environment:
+
+| Environment | Detection | Role |
+|---|---|---|
+| Linux / WSL2 | `uname -s` = `Linux` and `uname -r` contains `microsoft` | **Code Writer** |
+| macOS | `uname -s` = `Darwin` | **Build · Test · Publish** |
+
+### Code Writer role (Linux / WSL2)
+
+- Writes all code: C++, Swift, documentation, config — everything.
+- Commits and pushes to **feature branches** (never directly to `main`).
+- Opens a PR when a unit of work is ready for the macOS agent.
+- Reads PR comments from the macOS agent and iterates.
+- Signals the macOS agent to merge by commenting `ready to merge` on the PR.
+- **Does not** run XcodeGen, Xcode builds, or on-device tests.
+
+### Build · Test · Publish role (macOS)
+
+- Pulls feature branches opened by the Linux agent (`gh pr checkout <number>`).
+- Runs XcodeGen: `cd ios/NTMClient && xcodegen generate` (or equivalent per-app).
+- Builds in Xcode (⌘B), runs on-device tests, handles App Store publishing.
+- Reports results as a PR comment (`gh pr comment <number> --body "..."`).
+- **Does not rewrite code.** If a bug is found, report it; do not fix it.
+- Merges the PR only after the Linux agent comments `ready to merge`.
+
+### PR handoff format
+
+The Linux agent opens every PR with this structure so the macOS agent knows
+exactly what to do:
+
+```
+## Build instructions
+<xcodegen / cmake commands>
+
+## Test checklist
+- [ ] item 1
+- [ ] item 2
+
+## Watch for
+<known risks or areas that need close attention>
+
+## Files changed (focus areas)
+<brief list of the most relevant changed files>
+```
+
+The macOS agent replies with a PR comment covering each checklist item and any
+unexpected findings.
+
+---
+
 ## Versioning
 
 Each module is versioned **independently**. A change in one module does not
