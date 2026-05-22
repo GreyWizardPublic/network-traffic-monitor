@@ -11,6 +11,7 @@ final class AuthViewModel {
     var errorMessage: String?
     var untrustedCertFingerprint: String?
     var demoUnavailable = false
+    var demoErrorDetail: String?
 
     private let passkeyService = PasskeyService()
     private var capturedCert: Data?
@@ -144,18 +145,37 @@ final class AuthViewModel {
         isLoading = true
         errorMessage = nil
         demoUnavailable = false
+        demoErrorDetail = nil
         untrustedCertFingerprint = nil
         defer { isLoading = false }
 
         guard let url = URL(string: Self.demoServerURL + "/api/summary") else { return }
+
+        // Use CertificatePinner with no pin — accepts the demo server's own CA-signed cert
+        // without being affected by any cert the user has pinned for their own server.
+        let pinner = CertificatePinner(pinnedCertData: nil)
+        lastPinner = pinner
+        let session = URLSession(configuration: .ephemeral, delegate: pinner, delegateQueue: nil)
+
         do {
-            let (_, response) = try await URLSession.shared.data(from: url)
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            let (_, response) = try await session.data(from: url)
+            guard let http = response as? HTTPURLResponse else {
                 demoUnavailable = true
                 return
             }
+            guard http.statusCode == 200 else {
+                demoUnavailable = true
+                demoErrorDetail = "HTTP \(http.statusCode)"
+                return
+            }
         } catch {
-            demoUnavailable = true
+            if isCertError(error), let cert = lastPinner?.lastSeenCert {
+                capturedCert = cert
+                untrustedCertFingerprint = CertificatePinner.fingerprint(cert)
+            } else {
+                demoUnavailable = true
+                demoErrorDetail = (error as NSError).localizedDescription
+            }
             return
         }
 

@@ -75,6 +75,13 @@ struct LoginView: View {
                             .foregroundStyle(.secondary)
                             .font(.caption)
                             .multilineTextAlignment(.center)
+                        if let detail = authVM.demoErrorDetail {
+                            Text(detail)
+                                .foregroundStyle(.secondary)
+                                .font(.caption2)
+                                .monospaced()
+                                .multilineTextAlignment(.center)
+                        }
                         Link("Visit support page",
                              destination: URL(string: "https://github.com/GreyWizardPublic/network-traffic-monitor")!)
                             .font(.caption)
