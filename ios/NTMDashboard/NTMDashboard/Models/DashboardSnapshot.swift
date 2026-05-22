@@ -22,6 +22,9 @@ struct DashboardSnapshot: Codable, Sendable {
     let generatedAt: Int
     let interfaces: [InterfaceStat]
     let entities: [EntityFlow]
+    let entitiesInternet: [EntityFlow]
+    let entitiesLocal: [EntityFlow]
+    let localSummary: OverheadSummary?
     let overheadEntities: [EntityFlow]
     let overheadSummary: OverheadSummary?
     let entitiesLan: [LanDevice]
@@ -38,6 +41,9 @@ struct DashboardSnapshot: Codable, Sendable {
         case generatedAt            = "generated_at"
         case interfaces
         case entities
+        case entitiesInternet       = "entities_internet"
+        case entitiesLocal          = "entities_local"
+        case localSummary           = "local_summary"
         case overheadEntities       = "overhead_entities"
         case overheadSummary        = "overhead_summary"
         case entitiesLan            = "entities_lan"
