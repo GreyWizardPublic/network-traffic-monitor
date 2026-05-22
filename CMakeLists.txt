@@ -93,3 +93,28 @@ else()
             Threads::Threads
     )
 endif()
+
+# ---------------------------------------------------------------------------
+# ntm-client output name — must match the auto-update manifest naming convention:
+#   ntm-client-{platform}-{version}[.exe]
+# The version is read directly from client_version.hpp so CMakeLists.txt never
+# needs a manual bump. CMAKE automatically appends .exe on Windows.
+# ---------------------------------------------------------------------------
+
+file(STRINGS "src/client_version.hpp" _ver_line
+     REGEX "kClientVersion\\[\\]")
+string(REGEX MATCH "\"([0-9]+\\.[0-9]+\\.[0-9]+)\"" _ "${_ver_line}")
+set(NTM_CLIENT_VERSION "${CMAKE_MATCH_1}")
+if(NOT NTM_CLIENT_VERSION)
+    message(FATAL_ERROR "Could not parse kClientVersion from src/client_version.hpp")
+endif()
+
+if(WIN32)
+    set(NTM_CLIENT_PLATFORM "windows-amd64")
+else()
+    set(NTM_CLIENT_PLATFORM "linux-amd64")
+endif()
+
+set_target_properties(ntm-client PROPERTIES
+    OUTPUT_NAME "ntm-client-${NTM_CLIENT_PLATFORM}-${NTM_CLIENT_VERSION}"
+)
