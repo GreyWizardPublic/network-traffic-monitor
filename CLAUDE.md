@@ -20,6 +20,8 @@ Run `uname -s` and `uname -r` to identify the environment:
 - Reads PR comments from the macOS agent and iterates.
 - Signals the macOS agent to merge by commenting `ready to merge` on the PR.
 - **Does not** run XcodeGen, Xcode builds, or on-device tests.
+- **Always cross-compiles both Linux and Windows client binaries** whenever a build
+  is performed (see [C++ Build](#c-build) below).
 
 ### Build · Test · Publish role (macOS)
 
@@ -142,3 +144,46 @@ Port 12345 serves mock `/api/summary` data for App Store review (no auth, iOS on
 **Consistency rule**: Any change to the `/api/summary` JSON schema (new field, renamed field,
 removed field, changed type) **must** be reflected in `buildDemoSummaryJson()` in
 `src/web_dashboard.cpp` in the same commit. The mock data must mirror the real schema exactly.
+
+---
+
+## C++ Build
+
+The Linux agent is responsible for building **both** the Linux and Windows client binaries.
+Always run both builds together — the Windows binary is needed for auto-update distribution
+and for operators on Windows machines.
+
+### Linux client + server
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j$(nproc)
+# build/ntm-server
+# build/ntm-client-linux-amd64-<version>
+```
+
+### Windows client (cross-compile from Linux)
+
+```bash
+cmake -B build-windows \
+  -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-mingw64.cmake \
+  -DNPCAP_SDK=/opt/npcap-sdk \
+  -DOPENSSL_CRYPTO_LIBRARY=/usr/x86_64-w64-mingw32/lib64/libcrypto.a \
+  -DOPENSSL_SSL_LIBRARY=/usr/x86_64-w64-mingw32/lib64/libssl.a \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build build-windows -j$(nproc)
+# build-windows/ntm-client-windows-amd64-<version>.exe
+```
+
+**Dependencies (pre-installed on this machine):**
+
+| Dependency | Location |
+|---|---|
+| MinGW-w64 cross-compiler | `x86_64-w64-mingw32-g++` (Arch `mingw-w64-gcc`) |
+| Npcap SDK | `/opt/npcap-sdk` |
+| MinGW OpenSSL static libs | `/usr/x86_64-w64-mingw32/lib64/libssl.a` + `libcrypto.a` |
+| Toolchain file | `cmake/toolchain-mingw64.cmake` |
+
+The output filenames embed the platform and version (e.g. `ntm-client-linux-amd64-1.9.0`)
+and match the auto-update naming convention exactly — they can be dropped directly into
+`update_dir` on the server without renaming.
