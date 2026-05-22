@@ -14,9 +14,9 @@ struct ClientHealthSection: View {
                 if !rejectedClients.isEmpty {
                     HStack(spacing: 6) {
                         Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.ntmAmber)
+                            .foregroundStyle(Color.ntmAmber)
                         Text("\(rejectedClients.count) connection(s) rejected — auth-protocol mismatch")
-                            .font(.caption).foregroundStyle(.ntmAmber)
+                            .font(.caption).foregroundStyle(Color.ntmAmber)
                     }
                     .padding(8)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -64,7 +64,7 @@ struct ClientHealthSection: View {
                                 .font(.caption).foregroundStyle(.secondary)
                             Spacer()
                             Text("auth v\(r.attemptedAuthVersion)")
-                                .font(.caption).foregroundStyle(.ntmRed)
+                                .font(.caption).foregroundStyle(Color.ntmRed)
                             Text(lastSeenLabel(r.at))
                                 .font(.caption).foregroundStyle(.secondary)
                         }
@@ -83,7 +83,7 @@ struct ClientHealthSection: View {
                     .font(.caption2)
                     .padding(.horizontal, 5).padding(.vertical, 2)
                     .background(Color.ntmGreen.opacity(0.2))
-                    .foregroundStyle(.ntmGreen)
+                    .foregroundStyle(Color.ntmGreen)
                     .clipShape(Capsule())
             } else {
                 let srv = serverWireProtoVersion.map { " (server v\($0))" } ?? ""
@@ -91,7 +91,7 @@ struct ClientHealthSection: View {
                     .font(.caption2)
                     .padding(.horizontal, 5).padding(.vertical, 2)
                     .background(Color.ntmRed.opacity(0.2))
-                    .foregroundStyle(.ntmRed)
+                    .foregroundStyle(Color.ntmRed)
                     .clipShape(Capsule())
             }
         }

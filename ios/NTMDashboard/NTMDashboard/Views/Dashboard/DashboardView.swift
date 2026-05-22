@@ -19,10 +19,10 @@ struct DemoBanner: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: remaining == 0 ? "clock.badge.xmark" : "clock.fill")
-                .foregroundStyle(.ntmAmber)
+                .foregroundStyle(Color.ntmAmber)
             Text(label)
                 .font(.caption.bold())
-                .foregroundStyle(.ntmAmber)
+                .foregroundStyle(Color.ntmAmber)
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -53,10 +53,10 @@ struct DashboardView: View {
                             if let warning = vm.apiVersionWarning {
                                 HStack(spacing: 8) {
                                     Image(systemName: "exclamationmark.triangle.fill")
-                                        .foregroundStyle(.ntmAmber)
+                                        .foregroundStyle(Color.ntmAmber)
                                     Text(warning)
                                         .font(.caption)
-                                        .foregroundStyle(.ntmAmber)
+                                        .foregroundStyle(Color.ntmAmber)
                                 }
                                 .padding(10)
                                 .frame(maxWidth: .infinity, alignment: .leading)
