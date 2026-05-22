@@ -67,6 +67,16 @@ struct ClientHealthStats
     unsigned      wireProtoVersion{0};  // from wire_proto= field; 0 = not yet reported
 };
 
+// Auth-version mismatch connection attempt. Recorded when a client presents an
+// unrecognised auth version byte (as distinct from a wrong-key failure, which is a
+// security event and is not stored here).
+struct ProtoRejectionRecord
+{
+    std::string   peerIp;           // connecting IP address
+    std::uint8_t  attemptedVersion; // auth version byte the client sent
+    std::int64_t  atSec;            // epoch-seconds of the attempt
+};
+
 // Shared registry: maps a client's LAN IP to its Ed25519 hex client ID, tracks each
 // client's external (WAN) IP for LAN-group scoping, and stores the latest health stats.
 // Written by connectionThread on auth and on X/A/H lines; read via local snapshots in
@@ -77,6 +87,7 @@ struct ClientRegistry
     std::unordered_map<std::string, std::string>       ipToClientId;       // LAN IP → hex clientId
     std::unordered_map<std::string, std::string>       clientToExternalIp; // hex clientId → external IP or "null"
     std::unordered_map<std::string, ClientHealthStats> clientHealth;        // hex clientId → latest H stats
+    std::deque<ProtoRejectionRecord>                   protoRejections;     // capped at 20 most-recent
 
     // Remove all entries for clientId (called on session end and on X-line re-announce).
     void removeClient(const std::string &clientId)
