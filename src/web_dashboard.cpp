@@ -7,20 +7,24 @@
 #include "version.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <deque>
+#include <filesystem>
 #include <fstream>
 #include <mutex>
 #include <shared_mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <openssl/crypto.h>   // CRYPTO_memcmp
+#include <openssl/evp.h>      // EVP_sha256 (manifest SHA-256)
 #include <openssl/rand.h>     // RAND_bytes
 
 namespace ntm
@@ -78,6 +82,22 @@ static constexpr std::int64_t kAdminSessionSec = 1800; // 30 minutes
 static std::mutex g_adminTokensMtx;
 static std::unordered_map<std::string, std::int64_t> g_adminTokens; // token → expiry
 
+// ---------------------------------------------------------------------------
+// Update manifest (scanned from update_dir on demand)
+// ---------------------------------------------------------------------------
+struct UpdateManifestEntry {
+    std::string platform;   // e.g. "linux-amd64"
+    std::string version;    // e.g. "1.9.0"
+    std::string filename;   // bare filename, no path
+    std::string sha256hex;  // 64 lowercase hex digits
+};
+static std::mutex g_manifestMtx;
+static std::vector<UpdateManifestEntry> g_manifest;
+
+// Per-client force-update set: 64-hex pubkeys flagged for next check.
+static std::mutex g_forceMtx;
+static std::unordered_set<std::string> g_forceUpdateClients;
+
 static std::string generateAdminToken()
 {
     unsigned char buf[16];
@@ -112,6 +132,127 @@ static void revokeAdminToken(const std::string &token)
 }
 
 // Builds /api/summary JSON for the demo server.
+// ---------------------------------------------------------------------------
+// Update manifest helpers
+// ---------------------------------------------------------------------------
+
+static int semverCmp(const std::string &a, const std::string &b)
+{
+    auto parse = [](const std::string &v) -> std::array<int,3> {
+        std::array<int,3> r{0,0,0};
+        int part = 0;
+        for (unsigned char c : v) {
+            if (c == '.' && part < 2) { ++part; }
+            else if (c >= '0' && c <= '9') { r[part] = r[part] * 10 + (c - '0'); }
+        }
+        return r;
+    };
+    auto pa = parse(a), pb = parse(b);
+    for (int i = 0; i < 3; ++i) {
+        if (pa[i] < pb[i]) return -1;
+        if (pa[i] > pb[i]) return  1;
+    }
+    return 0;
+}
+
+static std::string sha256FileHex(const std::string &path)
+{
+    FILE *f = std::fopen(path.c_str(), "rb");
+    if (!f) return "";
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    if (!ctx) { std::fclose(f); return ""; }
+    EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr);
+    unsigned char buf[65536];
+    std::size_t n;
+    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0)
+        EVP_DigestUpdate(ctx, buf, n);
+    std::fclose(f);
+    unsigned char hash[32];
+    unsigned int len = 0;
+    EVP_DigestFinal_ex(ctx, hash, &len);
+    EVP_MD_CTX_free(ctx);
+    static const char hex[] = "0123456789abcdef";
+    std::string out;
+    out.reserve(64);
+    for (int i = 0; i < 32; ++i) {
+        out.push_back(hex[(hash[i] >> 4) & 0xf]);
+        out.push_back(hex[hash[i] & 0xf]);
+    }
+    return out;
+}
+
+static std::string hexToRaw32(const std::string &hex)
+{
+    if (hex.size() != 64) return "";
+    std::string raw;
+    raw.reserve(32);
+    for (std::size_t i = 0; i < 64; i += 2) {
+        auto h = [](char c) -> int {
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+            return -1;
+        };
+        int hi = h(hex[i]), lo = h(hex[i+1]);
+        if (hi < 0 || lo < 0) return "";
+        raw.push_back(static_cast<char>((hi << 4) | lo));
+    }
+    return raw;
+}
+
+// Scan update_dir for ntm-client binaries, compute SHA-256, update g_manifest.
+// Keeps only the highest version per platform.
+static std::size_t scanUpdateDir(const std::string &dir)
+{
+    namespace fs = std::filesystem;
+    std::vector<UpdateManifestEntry> entries;
+    std::error_code ec;
+    for (auto &entry : fs::directory_iterator(dir, ec))
+    {
+        if (!entry.is_regular_file(ec)) continue;
+        std::string name = entry.path().filename().string();
+        const std::string prefix = "ntm-client-";
+        if (name.size() <= prefix.size()) continue;
+        if (name.substr(0, prefix.size()) != prefix) continue;
+        std::string rest = name.substr(prefix.size());
+        // Strip .exe
+        if (rest.size() > 4 && rest.substr(rest.size() - 4) == ".exe")
+            rest = rest.substr(0, rest.size() - 4);
+        // rest = "<platform>-<version>", platform has exactly one '-' (e.g. linux-amd64)
+        // so we have at least two '-' total: split at second-to-last '-'
+        auto lastHyp = rest.rfind('-');
+        if (lastHyp == std::string::npos || lastHyp == 0) continue;
+        std::string plat = rest.substr(0, lastHyp);
+        std::string ver  = rest.substr(lastHyp + 1);
+        if (plat.empty() || ver.empty()) continue;
+        bool validVer = true;
+        for (unsigned char c : ver)
+            if (c != '.' && (c < '0' || c > '9')) { validVer = false; break; }
+        if (!validVer) continue;
+        std::string sha = sha256FileHex(entry.path().string());
+        if (sha.empty()) continue;
+        entries.push_back({plat, ver, name, sha});
+    }
+
+    // Keep highest version per platform.
+    std::vector<UpdateManifestEntry> best;
+    for (auto &e : entries)
+    {
+        auto it = std::find_if(best.begin(), best.end(),
+                               [&](const UpdateManifestEntry &b){ return b.platform == e.platform; });
+        if (it == best.end())
+            best.push_back(e);
+        else if (semverCmp(e.version, it->version) > 0)
+            *it = e;
+    }
+
+    {
+        std::lock_guard<std::mutex> lk(g_manifestMtx);
+        g_manifest = std::move(best);
+        return g_manifest.size();
+    }
+}
+
 // Schema MUST mirror buildSummaryJson() — update whenever that function changes.
 // CLAUDE.md "Demo mock data" rule enforces this.
 static std::string buildDemoSummaryJson()
@@ -282,19 +423,25 @@ static std::string buildDemoSummaryJson()
 
     // client_health
     j += ",\n  \"client_health\": ["
-         "\n    {\"client\":\"MacBook-Air\",\"version\":\"1.8.1\","
+         "\n    {\"client\":\"MacBook-Air\","
+         "\"client_id\":\"0000000000000000000000000000000000000000000000000000000000000001\","
+         "\"version\":\"1.8.1\",\"platform\":\"linux-amd64\","
          "\"pcap_recv\":"; j += std::to_string(2847281 + tick * 76);
     j += ",\"pcap_drop\":0,\"pcap_drop_pct\":\"0.00\","
          "\"buf_drop\":0,\"buf_drop_pct\":\"0.00\","
          "\"reported_at\":"; j += std::to_string(nowEpoch - 12);
     j += ",\"stale\":false,\"wire_proto_version\":1,\"wire_proto_ok\":true}";
-    j += ",\n    {\"client\":\"iPhone-15\",\"version\":\"1.0.0\","
+    j += ",\n    {\"client\":\"iPhone-15\","
+         "\"client_id\":\"0000000000000000000000000000000000000000000000000000000000000002\","
+         "\"version\":\"1.0.0\",\"platform\":\"\","
          "\"pcap_recv\":"; j += std::to_string(741083 + tick * 20);
     j += ",\"pcap_drop\":0,\"pcap_drop_pct\":\"0.00\","
          "\"buf_drop\":0,\"buf_drop_pct\":\"0.00\","
          "\"reported_at\":"; j += std::to_string(nowEpoch - 8);
     j += ",\"stale\":false,\"wire_proto_version\":1,\"wire_proto_ok\":true}";
-    j += ",\n    {\"client\":\"Desktop-PC\",\"version\":\"1.8.1\","
+    j += ",\n    {\"client\":\"Desktop-PC\","
+         "\"client_id\":\"0000000000000000000000000000000000000000000000000000000000000003\","
+         "\"version\":\"1.8.1\",\"platform\":\"windows-amd64\","
          "\"pcap_recv\":"; j += std::to_string(4192841 + tick * 112);
     j += ",\"pcap_drop\":0,\"pcap_drop_pct\":\"0.00\","
          "\"buf_drop\":0,\"buf_drop_pct\":\"0.00\","
@@ -303,6 +450,7 @@ static std::string buildDemoSummaryJson()
     j += "\n  ]";
 
     j += ",\n  \"proto_rejected_clients\": []";
+    j += ",\n  \"update_manifest\": []";
     j += "\n}\n";
     return j;
 }
@@ -916,8 +1064,12 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
             if (!first) j += ',';
             j += "\n    {\"client\":\"";
             j += jsonEsc(displayClient(snap.clientId));
+            j += "\",\"client_id\":\"";
+            j += jsonEsc(snap.clientId);
             j += "\",\"version\":\"";
             j += jsonEsc(hs.version.empty() ? "?" : hs.version);
+            j += "\",\"platform\":\"";
+            j += jsonEsc(hs.platform);
             j += "\",\"pcap_recv\":";
             j += std::to_string(hs.pcapRecv);
             j += ",\"pcap_drop\":";
@@ -966,6 +1118,28 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
             j += std::to_string(r.atSec);
             j += '}';
             rejFirst = false;
+        }
+    }
+    j += "\n  ]";
+
+    // update_manifest — snapshot of g_manifest for the admin page.
+    j += ",\n  \"update_manifest\": [";
+    {
+        std::lock_guard<std::mutex> lk(g_manifestMtx);
+        bool mFirst = true;
+        for (const auto &m : g_manifest)
+        {
+            if (!mFirst) j += ',';
+            j += "\n    {\"platform\":\"";
+            j += jsonEsc(m.platform);
+            j += "\",\"version\":\"";
+            j += jsonEsc(m.version);
+            j += "\",\"filename\":\"";
+            j += jsonEsc(m.filename);
+            j += "\",\"sha256\":\"";
+            j += jsonEsc(m.sha256hex);
+            j += "\"}";
+            mFirst = false;
         }
     }
     j += "\n  ]";
@@ -1356,8 +1530,8 @@ button{font-family:monospace;font-size:0.82em;padding:5px 14px;border-radius:3px
 
 <div class="section" style="font-size:0.72em;margin:8px 0 4px;color:#555">Wire Agents</div>
 <table>
-  <thead><tr><th>Client</th><th>Version</th><th>Wire Proto</th><th>pcap recv</th><th>Kernel drop</th><th>Buf drop</th><th>Last report</th></tr></thead>
-  <tbody id="health_body"><tr><td colspan="7" style="color:#555">Loading&#8230;</td></tr></tbody>
+  <thead><tr><th>Client</th><th>Version</th><th>Wire Proto</th><th>pcap recv</th><th>Kernel drop</th><th>Buf drop</th><th>Last report</th><th>Update</th></tr></thead>
+  <tbody id="health_body"><tr><td colspan="8" style="color:#555">Loading&#8230;</td></tr></tbody>
 </table>
 <div id="proto-reject-banner" style="display:none;background:#3a2000;color:#fa0;border-radius:5px;padding:8px 14px;margin:6px 0;font-size:0.88em"></div>
 <div id="proto-rejected-section" style="display:none">
@@ -1399,6 +1573,18 @@ button{font-family:monospace;font-size:0.82em;padding:5px 14px;border-radius:3px
   </div>
 </div>
 <div id="msg"></div>
+
+<!-- ── Software Updates ──────────────────────────────────────────────── -->
+<div class="section" style="margin-top:22px">Software Updates</div>
+<div class="sub">Place binaries in the server update directory. Naming convention: <code style="background:#111118;padding:1px 4px;border-radius:2px">ntm-client-linux-amd64-1.9.0</code> / <code style="background:#111118;padding:1px 4px;border-radius:2px">ntm-client-windows-amd64-1.9.0.exe</code>. Auto-update clients check once per day; use Force Update per agent to push immediately regardless of version.</div>
+<div style="display:flex;align-items:center;margin-bottom:10px">
+  <button id="scan_btn" onclick="doScanManifest()" style="font-family:monospace;font-size:0.82em;padding:5px 14px;border-radius:3px;border:1px solid #3a5a8a;background:#0d1828;color:#7af;cursor:pointer">&#8635;&nbsp;Scan &amp; Refresh Manifest</button>
+  <span id="scan_msg" style="font-size:0.78em;color:#666;margin-left:14px"></span>
+</div>
+<table>
+  <thead><tr><th>Platform</th><th>Latest Version</th><th>Filename</th><th>SHA-256 (first 16 chars)</th></tr></thead>
+  <tbody id="manifest_body"><tr><td colspan="4" style="color:#555">No binaries detected &mdash; click Scan or use update_dir in server config</td></tr></tbody>
+</table>
 
 <!-- ── Demo Server ────────────────────────────────────────────────────── -->
 <div class="section" style="margin-top:22px">Demo Server <span style="font-size:0.75em;color:#555;text-transform:none;letter-spacing:0">&mdash; App Store review</span></div>
@@ -1488,6 +1674,20 @@ async function loadClients(){
     if(r.status===401){showOverlay();return;}
     if(!r.ok)throw new Error('HTTP '+r.status);
     const d=await r.json();
+    // Build manifest lookup: platform → latest entry
+    const manifest=d.update_manifest||[];
+    const latestByPlatform={};
+    for(const m of manifest){
+      const cur=latestByPlatform[m.platform];
+      if(!cur||semverGt(m.version,cur.version))latestByPlatform[m.platform]=m;
+    }
+    // Render manifest table
+    const mBody=document.getElementById('manifest_body');
+    if(manifest.length){
+      mBody.innerHTML=manifest.map(m=>`<tr><td>${esc(m.platform)}</td><td>${esc(m.version)}</td><td>${esc(m.filename)}</td><td style="font-size:0.78em;color:#888">${esc(m.sha256.substring(0,16))}…</td></tr>`).join('');
+    }else{
+      mBody.innerHTML='<tr><td colspan="4" style="color:#555">No binaries detected — click Scan or use update_dir in server config</td></tr>';
+    }
     // Wire agents health
     const srvWireProto=d.server_wire_proto_version||0;
     const health=d.client_health||[];
@@ -1502,11 +1702,29 @@ async function loadClients(){
         if(x.wire_proto_version==null){wpBadge='<span style="color:#555">?</span>';}
         else if(x.wire_proto_ok){wpBadge='<span style="color:#4c4">&#10003; v'+x.wire_proto_version+'</span>';}
         else{wpBadge='<span style="color:#c44">&#10007; v'+x.wire_proto_version+' (server v'+srvWireProto+')</span>';}
-        return'<tr><td>'+esc(x.client)+st+'</td><td style="color:#aaa">'+esc(x.version)+'</td><td>'+
+        // Update availability
+        let updCell='<span style="color:#555">—</span>';
+        let rowBg='';
+        if(x.platform&&x.client_id){
+          const latest=latestByPlatform[x.platform];
+          if(latest){
+            if(semverGt(latest.version,x.version||'0.0.0')){
+              updCell='<span style="color:#c84">&#9650; v'+esc(latest.version)+'</span> '
+                +'<button onclick="doForceUpdate(\''+esc(x.client_id)+'\')" '
+                +'style="font-size:0.75em;padding:2px 8px;background:#3a1a00;color:#c84;'
+                +'border:1px solid #5a3000;border-radius:2px;cursor:pointer;font-family:monospace">Force</button>';
+              rowBg='background:#1a1400';
+            }else{
+              updCell='<span style="color:#4c4">&#10003; current</span>';
+            }
+          }
+        }
+        return'<tr style="'+rowBg+'"><td>'+esc(x.client)+st+'</td><td style="color:#aaa">'+esc(x.version)+'</td><td>'+
           wpBadge+'</td><td>'+x.pcap_recv.toLocaleString()+'</td><td style="color:'+pdC+'">'+
           x.pcap_drop.toLocaleString()+' ('+x.pcap_drop_pct+'%)</td><td style="color:'+bdC+'">'+
-          x.buf_drop.toLocaleString()+' ('+x.buf_drop_pct+'%)</td><td>'+fmtT(x.reported_at)+'</td></tr>';
-      }).join(''):'<tr><td colspan="7" style="color:#555">No wire agents connected</td></tr>';
+          x.buf_drop.toLocaleString()+' ('+x.buf_drop_pct+'%)</td><td>'+fmtT(x.reported_at)+'</td>'
+          +'<td>'+updCell+'</td></tr>';
+      }).join(''):'<tr><td colspan="8" style="color:#555">No wire agents connected</td></tr>';
     // Proto-rejected
     const rejected=d.proto_rejected_clients||[];
     const rejSec=document.getElementById('proto-rejected-section');
@@ -1660,6 +1878,46 @@ async function setDemo(enabled){
   }
 }
 
+function semverGt(a,b){
+  const pa=(a||'0').split('.').map(Number),pb=(b||'0').split('.').map(Number);
+  for(let i=0;i<3;i++){const ai=pa[i]||0,bi=pb[i]||0;if(ai>bi)return true;if(ai<bi)return false;}
+  return false;
+}
+
+async function doForceUpdate(clientId){
+  document.getElementById('msg').textContent='Requesting force update…';
+  try{
+    const r=await fetch('/api/admin/update/force',{
+      method:'POST',headers:authHeaders(),body:JSON.stringify({pubkey:clientId})
+    });
+    if(r.status===401){showOverlay();return;}
+    const d=await r.json();
+    document.getElementById('msg').textContent=
+      (r.ok&&d.ok)?'Force update flagged. Agent will update on next daily check.':'✗ '+(d.error||'Error');
+  }catch(e){document.getElementById('msg').textContent='✗ Request failed: '+esc(e.message);}
+}
+
+async function doScanManifest(){
+  document.getElementById('scan_msg').textContent='Scanning…';
+  document.getElementById('scan_btn').disabled=true;
+  try{
+    const r=await fetch('/api/admin/update/scan',{
+      method:'POST',headers:authHeaders()
+    });
+    if(r.status===401){showOverlay();document.getElementById('scan_btn').disabled=false;return;}
+    const d=await r.json();
+    if(r.ok&&d.ok){
+      document.getElementById('scan_msg').textContent='Found '+d.count+' binary(ies).';
+      loadClients();
+    }else{
+      document.getElementById('scan_msg').textContent='✗ '+(d.error||'Scan failed');
+    }
+  }catch(e){
+    document.getElementById('scan_msg').textContent='✗ Request failed: '+esc(e.message);
+  }
+  document.getElementById('scan_btn').disabled=false;
+}
+
 async function loadAll(){
   await Promise.all([loadClients(),loadMonitors()]);
 }
@@ -1688,6 +1946,10 @@ void webServerThread(httplib::SSLServer &svr,
     // Separate, much stricter limiter for the admin purge endpoint.
     WebRateLimiter adminRateLimiter(5);
 
+    // Scan update directory on startup so the manifest is populated immediately.
+    if (!config.update_dir.empty())
+        scanUpdateDir(config.update_dir);
+
     // Pre-routing: authentication, rate limit, security headers.
     svr.set_pre_routing_handler(
         [&](const httplib::Request &req, httplib::Response &res) -> httplib::Server::HandlerResponse
@@ -1713,7 +1975,10 @@ void webServerThread(httplib::SSLServer &svr,
                                   (path == "/.well-known/apple-app-site-association") ||
                                   (path == "/api/demo/begin") ||
                                   (path == "/api/admin/login") ||
-                                  (path == "/api/admin/logout");
+                                  (path == "/api/admin/logout") ||
+                                  // Update endpoints authenticate via pubkey query param.
+                                  (path == "/api/update/check") ||
+                                  (path == "/api/update/download");
                 if (!isAuthPath)
                 {
                     std::string token = sessionFromRequest(req);
@@ -1765,7 +2030,10 @@ void webServerThread(httplib::SSLServer &svr,
                 // /api/admin/login and /api/admin/logout are open (handle auth themselves).
                 const bool isAdminAuth = (path == "/api/admin/login") ||
                                          (path == "/api/admin/logout") ||
-                                         (path == "/api/demo/begin");
+                                         (path == "/api/demo/begin") ||
+                                         // Update endpoints self-authenticate via pubkey param.
+                                         (path == "/api/update/check") ||
+                                         (path == "/api/update/download");
                 if (!isAdminAuth && !isLanIP(ip))
                 {
                     res.status = 403;
@@ -2355,6 +2623,230 @@ void webServerThread(httplib::SSLServer &svr,
             svr.Get("/.well-known/apple-app-site-association",
                 [&config](const httplib::Request &, httplib::Response &res) {
                     res.set_content(config.webauthn->aasaJson(), "application/json");
+                });
+        }
+    }
+
+    // GET /api/update/check — check if a newer binary is available for this client.
+    // Query params: pubkey=<64hex>, platform=<platform>, version=<current>
+    // Authenticated by pubkey presence in AllowedClientsStore (no session cookie needed).
+    if (!config.update_dir.empty() && config.clients_store)
+    {
+        svr.Get("/api/update/check",
+            [&config](const httplib::Request &req, httplib::Response &res)
+            {
+                res.set_header("Cache-Control", "no-store");
+                const std::string pubkeyHex = req.get_param_value("pubkey");
+                const std::string platform  = req.get_param_value("platform");
+                const std::string version   = req.get_param_value("version");
+
+                // Validate pubkey format.
+                if (pubkeyHex.size() != 64)
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"pubkey must be 64 hex characters\"}\n",
+                                    "application/json");
+                    return;
+                }
+                const std::string rawKey = hexToRaw32(pubkeyHex);
+                if (rawKey.empty())
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"pubkey must be valid hex\"}\n",
+                                    "application/json");
+                    return;
+                }
+
+                // Verify pubkey is in AllowedClientsStore.
+                {
+                    std::shared_lock<std::shared_mutex> lk(config.clients_store->mu);
+                    if (!config.clients_store->keys.count(rawKey))
+                    {
+                        res.status = 401;
+                        res.set_content("{\"error\":\"unauthorized\"}\n", "application/json");
+                        return;
+                    }
+                }
+
+                // Check force-update flag.
+                bool force = false;
+                {
+                    std::lock_guard<std::mutex> lk(g_forceMtx);
+                    auto it = g_forceUpdateClients.find(pubkeyHex);
+                    if (it != g_forceUpdateClients.end())
+                    {
+                        force = true;
+                        g_forceUpdateClients.erase(it);
+                    }
+                }
+
+                // Find latest manifest entry for this platform.
+                UpdateManifestEntry best;
+                bool found = false;
+                {
+                    std::lock_guard<std::mutex> lk(g_manifestMtx);
+                    for (const auto &m : g_manifest)
+                    {
+                        if (m.platform == platform)
+                        {
+                            if (!found || semverCmp(m.version, best.version) > 0)
+                            {
+                                best  = m;
+                                found = true;
+                            }
+                        }
+                    }
+                }
+
+                std::string resp = "{\"force\":";
+                resp += force ? "true" : "false";
+
+                if (!found || (!force && !version.empty() && semverCmp(best.version, version) <= 0))
+                {
+                    resp += ",\"update_available\":false}\n";
+                    res.set_content(resp, "application/json");
+                    return;
+                }
+
+                resp += ",\"update_available\":true";
+                resp += ",\"version\":\"";  resp += jsonEsc(best.version);  resp += "\"";
+                resp += ",\"sha256\":\"";   resp += jsonEsc(best.sha256hex); resp += "\"";
+                resp += ",\"filename\":\""; resp += jsonEsc(best.filename);  resp += "\"";
+                resp += "}\n";
+                res.set_content(resp, "application/json");
+            });
+
+        // GET /api/update/download — stream the binary for the requested platform.
+        svr.Get("/api/update/download",
+            [&config](const httplib::Request &req, httplib::Response &res)
+            {
+                const std::string pubkeyHex = req.get_param_value("pubkey");
+                const std::string platform  = req.get_param_value("platform");
+
+                if (pubkeyHex.size() != 64)
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"pubkey must be 64 hex characters\"}\n",
+                                    "application/json");
+                    return;
+                }
+                const std::string rawKey = hexToRaw32(pubkeyHex);
+                if (rawKey.empty())
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"pubkey must be valid hex\"}\n",
+                                    "application/json");
+                    return;
+                }
+                {
+                    std::shared_lock<std::shared_mutex> lk(config.clients_store->mu);
+                    if (!config.clients_store->keys.count(rawKey))
+                    {
+                        res.status = 401;
+                        res.set_content("{\"error\":\"unauthorized\"}\n", "application/json");
+                        return;
+                    }
+                }
+
+                // Find latest for this platform.
+                UpdateManifestEntry best;
+                bool found = false;
+                {
+                    std::lock_guard<std::mutex> lk(g_manifestMtx);
+                    for (const auto &m : g_manifest)
+                    {
+                        if (m.platform == platform)
+                        {
+                            if (!found || semverCmp(m.version, best.version) > 0)
+                            {
+                                best  = m;
+                                found = true;
+                            }
+                        }
+                    }
+                }
+
+                if (!found)
+                {
+                    res.status = 404;
+                    res.set_content("{\"error\":\"no binary for platform\"}\n", "application/json");
+                    return;
+                }
+
+                namespace fs = std::filesystem;
+                fs::path filePath = fs::path(config.update_dir) / best.filename;
+                std::ifstream ifs(filePath, std::ios::binary | std::ios::ate);
+                if (!ifs)
+                {
+                    res.status = 404;
+                    res.set_content("{\"error\":\"binary not accessible\"}\n", "application/json");
+                    return;
+                }
+                auto fileSize = ifs.tellg();
+                ifs.seekg(0);
+                std::string body(static_cast<std::size_t>(fileSize), '\0');
+                ifs.read(body.data(), fileSize);
+                res.set_header("Content-Disposition",
+                               "attachment; filename=\"" + best.filename + "\"");
+                res.set_content(body, "application/octet-stream");
+            });
+
+        // POST /api/admin/update/scan — (re-)scan update_dir, rebuild manifest.
+        if (adminAvailable)
+        {
+            svr.Post("/api/admin/update/scan",
+                [&config](const httplib::Request &, httplib::Response &res)
+                {
+                    std::size_t count = scanUpdateDir(config.update_dir);
+                    serverLog(LogLevel::Info,
+                              "ntm-server: update manifest refreshed: %zu binary(ies)", count);
+                    std::string resp = "{\"ok\":true,\"count\":";
+                    resp += std::to_string(count);
+                    resp += "}\n";
+                    res.set_content(resp, "application/json");
+                });
+        }
+
+        // POST /api/admin/update/force — flag a client for forced update on next check.
+        if (adminAvailable)
+        {
+            svr.Post("/api/admin/update/force",
+                [&config](const httplib::Request &req, httplib::Response &res)
+                {
+                    const std::string pubkeyHex = jsonGetString(req.body, "pubkey");
+                    if (pubkeyHex.size() != 64)
+                    {
+                        res.status = 400;
+                        res.set_content("{\"error\":\"pubkey must be 64 hex characters\"}\n",
+                                        "application/json");
+                        return;
+                    }
+                    // Verify the client exists in AllowedClientsStore.
+                    const std::string rawKey = hexToRaw32(pubkeyHex);
+                    if (rawKey.empty() || !config.clients_store)
+                    {
+                        res.status = 400;
+                        res.set_content("{\"error\":\"invalid pubkey\"}\n", "application/json");
+                        return;
+                    }
+                    {
+                        std::shared_lock<std::shared_mutex> lk(config.clients_store->mu);
+                        if (!config.clients_store->keys.count(rawKey))
+                        {
+                            res.status = 404;
+                            res.set_content("{\"error\":\"client not in allowed list\"}\n",
+                                            "application/json");
+                            return;
+                        }
+                    }
+                    {
+                        std::lock_guard<std::mutex> lk(g_forceMtx);
+                        g_forceUpdateClients.insert(pubkeyHex);
+                    }
+                    serverLog(LogLevel::Warn,
+                              "ntm-server: force update flagged for client %.16s…",
+                              pubkeyHex.c_str());
+                    res.set_content("{\"ok\":true}\n", "application/json");
                 });
         }
     }

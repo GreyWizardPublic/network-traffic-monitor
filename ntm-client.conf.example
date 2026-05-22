@@ -29,3 +29,14 @@ send_buffer_bytes=524288
 
 # Timeout (ms) for the external IP HTTP request. Default 5000.
 # external_ip_timeout_ms=5000
+
+# ── Auto-update ───────────────────────────────────────────────────────────────
+#
+# Enable automatic binary updates via the server's HTTPS API.
+# Default: false (opt-in). Set to true to enable.
+# auto_update=false
+
+# HTTPS API port for update checks — same key and default as web_port on the server.
+# Only needed if the server is configured with a non-default web_port.
+# Default: 8443.
+# web_port=8443

@@ -3,6 +3,7 @@
 #include "client_platform.hpp"
 #include "proto_client_server.hpp"
 #include "client_version.hpp"
+#include "updater.hpp"
 
 #include <openssl/evp.h>
 #include <openssl/err.h>
@@ -287,6 +288,7 @@ private:
                         + " buf_drop="  + std::to_string(sendBufDrops_.load(std::memory_order_relaxed))
                         + " ver=" + kClientVersion
                         + " wire_proto=" + std::to_string(kWireProtoVersion)
+                        + " platform=" + kClientPlatform
                         + "\n";
                     if (!platform::writeExact(ssl_, fd_, hLine.data(), hLine.size()))
                         closeUnlocked();
@@ -601,7 +603,7 @@ private:
 
 static std::atomic<bool> g_running{true};
 
-int runClient(bool daemonMode, const ClientConfig &config)
+int runClient(bool daemonMode, const ClientConfig &config, char **argv)
 {
     platform::initPlatform();
     platform::setupSignals(g_running);
@@ -715,6 +717,8 @@ int runClient(bool daemonMode, const ClientConfig &config)
     }
     syncSniffers(desired);
 
+    startAutoUpdater(config, argv);
+
     // Re-scan periodically so NICs that appear or disappear after startup
     // (VPN up/down, USB adapter, Wi-Fi toggle) are captured/released without
     // restarting the client.
@@ -730,6 +734,7 @@ int runClient(bool daemonMode, const ClientConfig &config)
             syncSniffers(d2);
     }
 
+    stopAutoUpdater();
     for (auto &kv : sniffers) if (kv.second) kv.second->stop();
     sniffers.clear();
     connection.close();

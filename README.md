@@ -76,6 +76,7 @@ TLS connection.
 - Ed25519 identity key per client — each agent has a stable, verifiable identity
 - Supports Linux (libpcap, RTNETLINK change detection) and Windows (Npcap, NotifyIpInterfaceChange)
 - Automatically re-announces its external IP and LAN addresses on network changes
+- Optional auto-update: checks the server once per day and atomically replaces its own binary (opt-in)
 
 → **[Client deployment guide](CLIENT_DEPLOYMENT.md)**
 
@@ -142,7 +143,7 @@ different speeds as long as they stay within their supported version range.
 | | Version | Introduced in |
 |---|---|---|
 | Wire protocol | see `kWireProtoVersion` in source | — |
-| API protocol | 2 | ntm 1.3.0 |
+| API protocol | 7 | ntm 1.12.0 |
 | Software | see `src/version.hpp` | — |
 
 ---
@@ -189,6 +190,7 @@ authentication, and service configuration.
 | [CLIENT_DEPLOYMENT.md](CLIENT_DEPLOYMENT.md) | Client setup for Linux (systemd) and Windows (Task Scheduler) |
 | [IOS_DEPLOYMENT.md](IOS_DEPLOYMENT.md) | NTM Dashboard (iOS): build, passkey registration, certificate pinning |
 | [IOS_CLIENT_DEPLOYMENT.md](IOS_CLIENT_DEPLOYMENT.md) | NTM Client (iOS): build, key registration, wire-protocol agent |
+| [docs/auto-update.md](docs/auto-update.md) | Auto-update operator guide: server setup, binary naming, admin page |
 | [docs/wire-protocol.md](docs/wire-protocol.md) | Wire protocol specification (ntm-client ↔ ntm-server) |
 | [docs/api-protocol.md](docs/api-protocol.md) | API protocol specification (dashboard clients ↔ ntm-server) |
 
