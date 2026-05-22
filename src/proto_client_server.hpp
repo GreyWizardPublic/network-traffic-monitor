@@ -18,14 +18,15 @@ inline constexpr unsigned kWireProtoVersion = 1;
 // HTTPS API protocol version (integer). Bump when endpoint schemas change.
 // See docs/api-protocol.md § 5 for change classification rules.
 // Lockstep consumers: ntm-server, NTMDashboard (iOS), embedded web dashboard.
-inline constexpr unsigned kApiVersion = 4;
+inline constexpr unsigned kApiVersion = 5;
 
 // Default TCP port for client→server data ingestion connections.
 inline constexpr std::uint16_t kDefaultPort = 5555;
 
-// Hardcoded port for the App Store review demo server.
-// Always-on when a TLS cert is available; disabled by default (operator enables
-// via admin page). Only serves GET /api/summary with mock data; no auth required.
+// Hardcoded port for the legacy App Store review demo server (port 12345).
+// The iOS client no longer uses this port — demo access now goes through
+// POST /api/demo/begin on the main web server port.
+// This constant is kept for the server-side legacy demo thread only.
 inline constexpr std::uint16_t kDemoPort = 12345;
 
 // Demo session length in seconds. After this the server resets and allows a
