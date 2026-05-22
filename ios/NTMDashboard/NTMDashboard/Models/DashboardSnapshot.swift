@@ -16,6 +16,8 @@ struct DashboardSnapshot: Codable, Sendable {
     let apiVersion: Int?
     let serverVersion: String
     let serverWireProtoVersion: Int?
+    let demo: Bool?
+    let demoExpiresAt: Int?
     let windowStart: Int
     let generatedAt: Int
     let interfaces: [InterfaceStat]
@@ -30,6 +32,8 @@ struct DashboardSnapshot: Codable, Sendable {
         case apiVersion             = "api_version"
         case serverVersion          = "server_version"
         case serverWireProtoVersion = "server_wire_proto_version"
+        case demo
+        case demoExpiresAt          = "demo_expires_at"
         case windowStart            = "window_start"
         case generatedAt            = "generated_at"
         case interfaces

@@ -23,6 +23,15 @@ inline constexpr unsigned kApiVersion = 4;
 // Default TCP port for client→server data ingestion connections.
 inline constexpr std::uint16_t kDefaultPort = 5555;
 
+// Hardcoded port for the App Store review demo server.
+// Always-on when a TLS cert is available; disabled by default (operator enables
+// via admin page). Only serves GET /api/summary with mock data; no auth required.
+inline constexpr std::uint16_t kDemoPort = 12345;
+
+// Demo session length in seconds. After this the server resets and allows a
+// new demo session to begin (so multiple App Store reviewers can use it).
+inline constexpr std::int64_t kDemoSessionSec = 900; // 15 minutes
+
 // Maximum TLS session lifetime (seconds). After this the client must reconnect.
 inline constexpr std::uint64_t kMaxSessionSeconds = 6 * 3600; // 6 hours
 
