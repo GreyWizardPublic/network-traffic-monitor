@@ -23,13 +23,17 @@ struct ClientConfig
     unsigned externalIpTimeoutMs{5000};
     unsigned reconnectMaxAttempts{10};
     unsigned reconnectIntervalSec{60};
+    // Auto-update: check for new binary via server HTTPS API once per day.
+    bool auto_update{false};            // default off; opt-in via config
+    std::uint16_t update_port{8443};    // server's HTTPS API port (web_port)
 };
 
 // Load from one config file (key=value, # comment). Returns defaults for missing keys. Returns false if file missing.
 bool loadClientConfig(const std::string &configPath, ClientConfig &out);
 
 // Run client. daemonMode is CLI-only; all other settings come from config.
-int runClient(bool daemonMode, const ClientConfig &config);
+// argv is passed through to startAutoUpdater for exec-self restart on Linux.
+int runClient(bool daemonMode, const ClientConfig &config, char **argv);
 
 } // namespace ntm
 

@@ -45,6 +45,10 @@ struct WebConfig
     // Shared wire-protocol client store; null = registration endpoint disabled.
     std::shared_ptr<AllowedClientsStore> clients_store;
 
+    // Directory containing operator-placed client update binaries.
+    // Empty = auto-update endpoints disabled.
+    std::string update_dir;
+
     // IPs of the server itself (enumerated at startup) and dashboard clients
     // (added on each authenticated request). Used to classify entity flows as
     // monitoring overhead vs. regular traffic in /api/summary.

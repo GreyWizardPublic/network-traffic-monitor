@@ -1,7 +1,7 @@
-# NTM Dashboard API Protocol — Specification v5
+# NTM Dashboard API Protocol — Specification v7
 
-**API version:** 5  
-**Software version where introduced:** ntm 1.8.0  
+**API version:** 7  
+**Software version where introduced:** ntm 1.12.0  
 **File owner:** This document is the authoritative specification for the HTTPS
 API between `ntm-server` and any dashboard client (iOS app, web browser, or
 third-party tool). Update it **before** changing any endpoint, field, or
@@ -106,6 +106,8 @@ software version (`server_version`).
 
 | Version | Change |
 |---|---|
+| 7 | Added auto-update endpoints: `GET /api/update/check`, `GET /api/update/download`, `POST /api/admin/update/scan`, `POST /api/admin/update/force`. Added `client_id` and `platform` fields to each `client_health` entry. Added `update_manifest` array to `/api/summary`. Added admin session endpoints `GET /api/admin/monitors` (ntm-server 1.12.0). |
+| 6 | Added Internet/Local traffic split: `entities_internet`, `truncated_internet`, `entities_local`, `truncated_local`, `local_summary` to `/api/summary`. Added `GET /api/admin/monitors`, `POST /api/admin/demo`. Admin session token support (30 min TTL) for legacy password mode. NTMDashboard 1.3.0, ntm-server 1.11.0. |
 | 5 | Added `POST /api/demo/begin` — unauthenticated demo session endpoint on the main web server port. Returns a short-lived `demo_…` bearer token when demo mode is enabled by the operator. `/api/summary` returns `buildDemoSummaryJson()` mock data for demo tokens. Replaces the separate port-12345 demo server for iOS clients (ntm-server 1.10.0, NTMDashboard 1.2.0). |
 | 4 | `entities` now contains only non-overhead (regular) flows. Added `overhead_entities`, `truncated_overhead`, and `overhead_summary` to `/api/summary`. Overhead = flows involving ntm-clients, the server itself, or dashboard viewers (ntm 1.8.0). Added optional `server_wire_proto_version` root field; optional `wire_proto_version` + `wire_proto_ok` per client-health entry; `proto_rejected_clients` array. These are additive optional fields and do not require a version bump (ntm-server 1.8.1). |
 | 3 | Added `POST /api/admin/client/register` — enrol Ed25519 wire-protocol client keys at runtime via the HTTPS API (ntm 1.5.0). |
@@ -326,7 +328,7 @@ recognise. New optional fields may be added at any `api_version` without a bump.
 
 ```json
 {
-  "api_version":              <integer>,  // API contract revision; currently 4
+  "api_version":              <integer>,  // API contract revision; currently 7
   "server_version":           <string>,   // ntm-server module version, e.g. "1.8.1"
   "server_wire_proto_version": <integer>, // wire protocol data-phase version the server speaks
   "window_start":              <integer>, // unix epoch: start of the rolling stats window
@@ -387,7 +389,9 @@ recognise. New optional fields may be added at any `api_version` without a bump.
   "client_health": [                // one entry per connected ntm-client
     {
       "client":             <string>,   // display name / nickname
+      "client_id":          <string>,   // raw 64-hex Ed25519 public key (stable identity)
       "version":            <string>,   // ntm-client module version; "?" if not yet reported
+      "platform":           <string>,   // e.g. "linux-amd64" or "windows-amd64"; "" if unknown
       "pcap_recv":          <integer>,  // uint64: packets delivered by pcap (cumulative session)
       "pcap_drop":          <integer>,  // uint64: packets dropped by kernel pcap ring
       "pcap_drop_pct":      <string>,   // formatted "N.NN" — drop % of pcap total (no % sign)
@@ -406,6 +410,15 @@ recognise. New optional fields may be added at any `api_version` without a bump.
       "peer_ip":               <string>,  // connecting IP address
       "attempted_auth_version": <integer>, // auth version byte the client sent
       "at":                    <integer>  // unix epoch of the rejection
+    }
+  ],
+
+  "update_manifest": [              // one entry per platform with a binary in update_dir
+    {
+      "platform": <string>,         // e.g. "linux-amd64" or "windows-amd64"
+      "version":  <string>,         // semver string of the binary in update_dir
+      "filename": <string>,         // bare filename (no path)
+      "sha256":   <string>          // lowercase hex SHA-256 of the binary
     }
   ]
 }
@@ -511,9 +524,128 @@ configured **and** `allowed_keys` is set in the server config.
 
 ---
 
-## 12. Stability Contract
+## 12. Auto-Update Endpoints
 
-- All fields documented in § 10 and § 11 are **stable at `api_version: 5`**.
+These endpoints are used by `ntm-client` to check for and download new binaries.
+They are **self-authenticated** via an Ed25519 pubkey query parameter (checked
+against `AllowedClientsStore`) and do not require a WebAuthn session cookie or
+admin password. They are exempt from the LAN-only source-IP restriction so that
+remote clients can reach them.
+
+All four endpoints are only registered when `update_dir` is set in the server config.
+`/api/admin/update/*` additionally require admin availability (`admin_password_file`
+or `webauthn_rp_id` configured).
+
+### `GET /api/update/check`
+
+Check whether a newer binary is available for this client.
+
+**Query parameters:**
+
+| Name | Required | Description |
+|---|---|---|
+| `pubkey` | yes | 64 lowercase hex chars — client Ed25519 public key |
+| `platform` | yes | e.g. `linux-amd64` or `windows-amd64` |
+| `version` | yes | client's current version, e.g. `1.9.0` |
+
+**Response `200` — no update:**
+```json
+{ "update_available": false, "force": false }
+```
+
+**Response `200` — update available:**
+```json
+{
+  "update_available": true,
+  "force":   false,
+  "version": "1.9.1",
+  "sha256":  "<64 hex>",
+  "filename": "ntm-client-linux-amd64-1.9.1"
+}
+```
+
+`force: true` is returned (and the flag is cleared) when an operator has called
+`POST /api/admin/update/force` for this client. When `force: true`, the client
+downloads and applies the update even if its current version is already up-to-date.
+
+**Error responses:**
+
+| Status | Reason |
+|---|---|
+| `400` | `pubkey` is not 64 lowercase hex chars |
+| `401` | `pubkey` not in AllowedClientsStore |
+
+### `GET /api/update/download`
+
+Download the binary for the requested platform. The client should verify the
+SHA-256 against the value from `/api/update/check` before applying.
+
+**Query parameters:**
+
+| Name | Required | Description |
+|---|---|---|
+| `pubkey` | yes | 64 lowercase hex chars |
+| `platform` | yes | e.g. `linux-amd64` |
+
+**Success response `200`:**
+- `Content-Type: application/octet-stream`
+- `Content-Disposition: attachment; filename="ntm-client-linux-amd64-1.9.1"`
+- Body: binary file bytes
+
+**Error responses:**
+
+| Status | Reason |
+|---|---|
+| `400` | Invalid pubkey format |
+| `401` | pubkey not in AllowedClientsStore |
+| `404` | No binary for the requested platform in manifest |
+
+### `POST /api/admin/update/scan`
+
+Re-scan the `update_dir` and rebuild the manifest. Call this after placing new
+binaries in the directory. Also runs automatically at server startup.
+
+**Authentication:** Admin session required (same as `/api/admin/purge`).
+
+**Request body:** empty (or `{}`).
+
+**Response `200`:**
+```json
+{ "ok": true, "count": 2 }
+```
+`count` is the number of distinct platform binaries detected.
+
+### `POST /api/admin/update/force`
+
+Flag a specific client for immediate update on its next daily check. The force
+flag is cleared once delivered (one-shot). This is useful when the client's
+current version already matches the latest in the manifest but an operator wants
+to force a reinstall.
+
+**Authentication:** Admin session required.
+
+**Request body** (`Content-Type: application/json`):
+```json
+{ "pubkey": "<64 hex>" }
+```
+
+**Response `200`:**
+```json
+{ "ok": true }
+```
+
+**Error responses:**
+
+| Status | Reason |
+|---|---|
+| `400` | `pubkey` not exactly 64 chars or invalid |
+| `404` | `pubkey` not in AllowedClientsStore |
+
+---
+
+## 13. Stability Contract
+
+- All fields documented in § 10–12 are **stable at `api_version: 7`**.
   No field will be removed or renamed without a version bump.
 - New **optional** fields may be added at any `api_version` without bumping;
   clients must tolerate extra fields.
@@ -524,4 +656,7 @@ configured **and** `allowed_keys` is set in the server config.
   A client receiving `api_version: 1` must not call `/auth/*`.
 - Servers at `api_version: 2` (ntm < 1.5.0) do not have `/api/admin/client/register`.
   A client receiving `api_version: 2` must fall back to manual key file management.
+- Servers at `api_version: 6` (ntm < 1.12.0) do not have auto-update endpoints.
+  Clients with `auto_update=true` pointing at such a server will receive a 404
+  on `/api/update/check` and disable further checks for that session.
 - The protocol doc is updated **before** the commit that changes either side.
