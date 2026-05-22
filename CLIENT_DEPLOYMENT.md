@@ -853,6 +853,10 @@ All keys are set in the config file (`key = value`) or overridden by CLI flags.
 | `send_buffer_bytes` | — | `524288` | Send buffer size in bytes (4096–2097152) |
 | `external_ip_url` | — | `http://checkip.amazonaws.com/` | URL used to detect external/WAN IP |
 | `external_ip_timeout_ms` | — | `5000` | Timeout for external IP check (500–30000 ms) |
+| `reconnect_attempts` | `--reconnect-attempts` | `10` | Max consecutive reconnect failures before exit (1–1000) |
+| `reconnect_interval_sec` | `--reconnect-interval` | `60` | Seconds between reconnect attempts (1–3600) |
+| `auto_update` | — | `false` | Enable daily binary self-update check (opt-in) |
+| `update_port` | — | `8443` | Server HTTPS API port used for update checks (must match server `web_port`) |
 | `verbose` | `--verbose` | `false` | Enable verbose logging |
 
 Precedence: **CLI flags** > **config file** > **built-in defaults**.
