@@ -185,7 +185,7 @@ Server enforcement:
 #### `H` — Health heartbeat
 
 ```
-H pcap_recv={N} pcap_drop={N} buf_drop={N} ver={X.Y.Z}\n
+H pcap_recv={N} pcap_drop={N} buf_drop={N} ver={X.Y.Z} wire_proto={N}\n
 ```
 
 Reports cumulative capture statistics and the client software version for
@@ -196,7 +196,8 @@ the current session.
 | `pcap_recv` | decimal uint64 | Packets delivered by pcap since session start |
 | `pcap_drop` | decimal uint64 | Packets dropped by the kernel pcap ring since session start |
 | `buf_drop` | decimal uint64 | Packets dropped due to client send-buffer overflow |
-| `ver` | string | ntm-client software version (e.g. `1.2.0`) |
+| `ver` | string | **Module** version of the client software (e.g. `1.2.0`). Independent of the wire protocol version. Each client module (Linux, Windows, iOS) has its own version number. |
+| `wire_proto` | decimal uint | The wire protocol data-phase version the client is using (`kWireProtoVersion`). Distinct from the auth version byte. Allows the server to detect data-phase protocol mismatches. |
 
 - Fields are `key=value` pairs separated by spaces.
 - **Order is unspecified.** Receivers must not assume order.
