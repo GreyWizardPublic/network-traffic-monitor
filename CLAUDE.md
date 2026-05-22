@@ -7,40 +7,61 @@ own role from the OS at the start of every session** — no manual configuration
 
 Run `uname -s` and `uname -r` to identify the environment:
 
-| Environment | Detection | Role |
-|---|---|---|
-| Linux / WSL2 | `uname -s` = `Linux` and `uname -r` contains `microsoft` | **Code Writer** |
-| macOS | `uname -s` = `Darwin` | **Build · Test · Publish** |
+| Environment | Detection | Role | Platform ownership |
+|---|---|---|---|
+| Linux / WSL2 | `uname -s` = `Linux` and `uname -r` contains `microsoft` | **C++ Agent** | Linux server · Linux client · Windows client |
+| macOS | `uname -s` = `Darwin` | **Swift Agent** | iOS apps · future macOS apps |
 
-### Code Writer role (Linux / WSL2)
+---
 
-- Writes all code: C++, Swift, documentation, config — everything.
+### C++ Agent (Linux / WSL2)
+
+**Owns:** all C++ code (`src/`), CMake build system, documentation, config files,
+deployment guides, wire-protocol and API-protocol specs.
+
+**Responsibilities:**
+- Writes and maintains all C++ code: `ntm-server`, `ntm-client` (Linux + Windows).
+- Writes documentation, config examples, and deployment guides.
+- Builds Linux server + client **and** cross-compiles Windows client on every build
+  (see [C++ Build](#c-build) below).
 - Commits and pushes to **feature branches** (never directly to `main`).
-- Opens a PR when a unit of work is ready for the macOS agent.
-- Reads PR comments from the macOS agent and iterates.
-- Signals the macOS agent to merge by commenting `ready to merge` on the PR.
+- Opens PRs targeting `main` when a unit of work is ready for the Swift Agent.
+- Reads Swift Agent PR comments and iterates until all checklist items pass.
+- Signals the Swift Agent to merge by commenting `ready to merge` on the PR.
 - **Does not** run XcodeGen, Xcode builds, or on-device tests.
-- **Always cross-compiles both Linux and Windows client binaries** whenever a build
-  is performed (see [C++ Build](#c-build) below).
+- **Does not** write Swift code — if a Swift change is needed, describe it clearly
+  in a PR comment so the Swift Agent can implement it.
 
-### Build · Test · Publish role (macOS)
+---
 
-- Pulls feature branches opened by the Linux agent (`gh pr checkout <number>`).
-- Runs XcodeGen: `cd ios/NTMClient && xcodegen generate` (or equivalent per-app).
-- Builds in Xcode (⌘B), runs on-device tests, handles App Store publishing.
-- Reports results as a PR comment (`gh pr comment <number> --body "..."`).
-- **Does not rewrite code.** If a bug is found, report it; do not fix it.
-- Merges the PR only after the Linux agent comments `ready to merge`.
+### Swift Agent (macOS)
+
+**Owns:** all Swift/iOS code (`ios/NTMDashboard/`, `ios/NTMClient/`), XcodeGen
+project files (`ios/project.yml`, per-app `project.yml`), and any future macOS
+native code.
+
+**Responsibilities:**
+- Writes and maintains all Swift code for iOS apps (NTMDashboard, NTMClient).
+- Applies iOS-side protocol lockstep changes (e.g. bumping `supportedApiVersion`,
+  adding new model fields) when the C++ Agent bumps a protocol version.
+- Runs XcodeGen (`xcodegen generate`) and builds in Xcode (⌘B).
+- Runs on-device and simulator tests; handles App Store / TestFlight publishing.
+- Reports build and test results as a PR comment covering every checklist item.
+- Merges the PR only after the C++ Agent comments `ready to merge`.
 - After merging, **deletes the feature branch** — both local and remote:
   ```
   git branch -d <branch>
   git push origin --delete <branch>
   ```
+- **Does not** write C++ code — if a C++ change is needed, describe it in a PR
+  comment with the tag `[ACTION REQUIRED — C++ AGENT]` so the C++ Agent picks
+  it up on its next session.
 
-### PR handoff format
+---
 
-The Linux agent opens every PR with this structure so the macOS agent knows
-exactly what to do:
+### Handoff: C++ Agent → Swift Agent
+
+The C++ Agent opens every PR with this structure:
 
 ```
 ## Build instructions
@@ -57,8 +78,33 @@ exactly what to do:
 <brief list of the most relevant changed files>
 ```
 
-The macOS agent replies with a PR comment covering each checklist item and any
+The Swift Agent replies with a PR comment covering each checklist item and any
 unexpected findings.
+
+---
+
+### Handoff: Swift Agent → C++ Agent
+
+When the Swift Agent needs C++ changes (bug found, new API endpoint needed, protocol
+mismatch, etc.) it leaves a PR comment with this structure:
+
+```
+## [ACTION REQUIRED — C++ AGENT]
+
+### Problem
+<what is wrong or missing in the C++ code>
+
+### Required change
+<specific files, functions, or behaviour that needs to change>
+
+### Context
+<why this is needed; any relevant error messages or test failures>
+```
+
+The C++ Agent reads open PR comments at the start of each session, implements the
+requested changes, pushes to the same feature branch, and replies confirming what
+was done. If the Swift Agent has no open PR to comment on, it opens a new issue on
+GitHub describing the required C++ work.
 
 ---
 
