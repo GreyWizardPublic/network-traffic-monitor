@@ -49,6 +49,13 @@ struct WebConfig
     // Empty = auto-update endpoints disabled.
     std::string update_dir;
 
+    // When non-empty, HTTP connections arriving from this IP are trusted to carry
+    // the real client IP in CF-Connecting-IP (Cloudflare) or X-Forwarded-For.
+    // Set to "127.0.0.1" when running cloudflared on the same host.
+    // Only connections whose remote_addr exactly matches this value are trusted,
+    // preventing header injection by direct (non-proxied) connections.
+    std::string trusted_proxy;
+
     // IPs of the server itself (enumerated at startup) and dashboard clients
     // (added on each authenticated request). Used to classify entity flows as
     // monitoring overhead vs. regular traffic in /api/summary.
