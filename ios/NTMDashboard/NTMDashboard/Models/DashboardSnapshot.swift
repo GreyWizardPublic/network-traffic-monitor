@@ -50,4 +50,26 @@ struct DashboardSnapshot: Codable, Sendable {
         case clientHealth           = "client_health"
         case protoRejectedClients   = "proto_rejected_clients"
     }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        apiVersion             = try c.decodeIfPresent(Int.self,    forKey: .apiVersion)
+        serverVersion          = try c.decode(String.self,          forKey: .serverVersion)
+        serverWireProtoVersion = try c.decodeIfPresent(Int.self,    forKey: .serverWireProtoVersion)
+        demo                   = try c.decodeIfPresent(Bool.self,   forKey: .demo)
+        demoExpiresAt          = try c.decodeIfPresent(Int.self,    forKey: .demoExpiresAt)
+        windowStart            = try c.decode(Int.self,             forKey: .windowStart)
+        generatedAt            = try c.decode(Int.self,             forKey: .generatedAt)
+        interfaces             = try c.decode([InterfaceStat].self, forKey: .interfaces)
+        entities               = try c.decode([EntityFlow].self,    forKey: .entities)
+        // Added in api_version 6 — absent on older servers, default to empty.
+        entitiesInternet       = try c.decodeIfPresent([EntityFlow].self, forKey: .entitiesInternet) ?? []
+        entitiesLocal          = try c.decodeIfPresent([EntityFlow].self, forKey: .entitiesLocal) ?? []
+        localSummary           = try c.decodeIfPresent(OverheadSummary.self, forKey: .localSummary)
+        overheadEntities       = try c.decodeIfPresent([EntityFlow].self, forKey: .overheadEntities) ?? []
+        overheadSummary        = try c.decodeIfPresent(OverheadSummary.self, forKey: .overheadSummary)
+        entitiesLan            = try c.decodeIfPresent([LanDevice].self,   forKey: .entitiesLan) ?? []
+        clientHealth           = try c.decodeIfPresent([ClientHealth].self, forKey: .clientHealth) ?? []
+        protoRejectedClients   = try c.decodeIfPresent([ProtoRejectedClient].self, forKey: .protoRejectedClients) ?? []
+    }
 }
