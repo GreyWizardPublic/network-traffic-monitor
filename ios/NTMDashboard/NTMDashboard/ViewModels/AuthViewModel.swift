@@ -18,7 +18,7 @@ final class AuthViewModel {
     private var lastPinner: CertificatePinner?
     private var isDemoSession = false
 
-    private static let demoServerURL = "https://ntm.happyhomelives.me:12345"
+    private static let demoServerURL = "http://ntm.happyhomelives.me:12345"
 
     init() {
         let cfg = ServerConfig.load()
@@ -151,11 +151,7 @@ final class AuthViewModel {
 
         guard let url = URL(string: Self.demoServerURL + "/api/summary") else { return }
 
-        // Use CertificatePinner with no pin — accepts the demo server's own CA-signed cert
-        // without being affected by any cert the user has pinned for their own server.
-        let pinner = CertificatePinner(pinnedCertData: nil)
-        lastPinner = pinner
-        let session = URLSession(configuration: .ephemeral, delegate: pinner, delegateQueue: nil)
+        let session = URLSession(configuration: .ephemeral)
 
         do {
             let (_, response) = try await session.data(from: url)
@@ -169,13 +165,8 @@ final class AuthViewModel {
                 return
             }
         } catch {
-            if isCertError(error), let cert = lastPinner?.lastSeenCert {
-                capturedCert = cert
-                untrustedCertFingerprint = CertificatePinner.fingerprint(cert)
-            } else {
-                demoUnavailable = true
-                demoErrorDetail = (error as NSError).localizedDescription
-            }
+            demoUnavailable = true
+            demoErrorDetail = (error as NSError).localizedDescription
             return
         }
 
