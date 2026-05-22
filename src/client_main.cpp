@@ -167,6 +167,6 @@ int main(int argc, char *argv[])
     opts.identityPath      = identityPath;
     opts.tlsCaPath         = tlsCaPath;
     opts.tlsServerCertPath = tlsServerCertPath;
-    return ntm::runClient(daemonMode, opts);
+    return ntm::runClient(daemonMode, opts, argv);
 }
 

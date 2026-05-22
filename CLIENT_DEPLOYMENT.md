@@ -29,6 +29,14 @@ Covers deployment of `ntm-client` on **Linux** and **Windows 10/11**.
   9. [Security hardening checklist](#9-windows-security-hardening-checklist)
   10. [Troubleshooting (Windows)](#10-troubleshooting-windows)
 
+- [Auto-Update](#auto-update)
+  - [Enabling auto-update](#enabling-auto-update)
+  - [How it works on Linux](#how-it-works-on-linux)
+  - [How it works on Windows](#how-it-works-on-windows)
+  - [Install path and permissions](#install-path-and-permissions)
+  - [Windows code-signing requirement](#windows-code-signing-requirement)
+  - [Troubleshooting auto-update](#troubleshooting-auto-update)
+
 - [Common Reference](#common-reference)
   - [Behaviour reference](#behaviour-reference)
   - [Configuration keys](#configuration-keys)
@@ -273,6 +281,7 @@ sudo systemctl status ntm-client
 - [ ] systemd hardening applied (`PrivateTmp`, `ProtectSystem`, `NoNewPrivileges`,
   `RestrictAddressFamilies=AF_INET AF_INET6 AF_PACKET`)
 - [ ] `MemoryDenyWriteExecute` and `PrivateUsers` are **not** set
+- [ ] Binary installed in `/opt/ntm/bin/` owned by `ntmclient` user (required for auto-update)
 
 ---
 
@@ -590,6 +599,8 @@ Unregister-ScheduledTask -TaskName "ntm-client" -Confirm:$false
 - [ ] Server certificate renewed before expiry if using pinning (redeploy to each client)
 - [ ] Task Scheduler task set to restart on failure (handles network unavailability at boot)
 - [ ] Npcap kept up to date (security fixes are released regularly)
+- [ ] Binary installed in `C:\ProgramData\ntm\bin\` with service account ACLs (required for auto-update)
+- [ ] Binary is Authenticode code-signed (required for Windows auto-update)
 
 ---
 
@@ -629,6 +640,141 @@ Unregister-ScheduledTask -TaskName "ntm-client" -Confirm:$false
 **`--daemon` flag has no effect**
 - Daemon mode is not supported on Windows. The flag prints a warning and the process
   continues in the foreground. Use Task Scheduler for background operation.
+
+---
+
+# Auto-Update
+
+`ntm-client` supports automatic binary updates on Linux and Windows. The feature is **off by
+default** and must be explicitly enabled. See `docs/auto-update.md` for full server-side
+setup instructions.
+
+## Enabling auto-update
+
+Add the following to the client config file:
+
+```ini
+# Enable automatic binary updates (opt-in, default: false)
+auto_update = true
+
+# HTTPS API port on the server (must match web_port in server config; default: 8443)
+update_port = 8443
+```
+
+The client uses the same `server`, `server_cert`, and `ca` settings already configured for
+TLS. No additional certificate configuration is needed. The first update check runs
+approximately 23 hours after startup.
+
+## How it works on Linux
+
+1. The client checks `/api/update/check` on the server's HTTPS API every 23 hours.
+2. If a newer binary is available, it is downloaded and written to a `.pending` file in the
+   same directory as the running binary (located via `/proc/self/exe`).
+3. The SHA-256 digest of the download is verified against the server's manifest. Mismatch
+   aborts the update and deletes the pending file.
+4. The pending binary is made executable, then atomically renamed over the running binary.
+5. The client calls `execv` on itself — the new binary is loaded in place with the same
+   process ID. systemd does not need to restart the unit.
+
+On startup, any stale `.pending` file from a previously interrupted update is deleted
+automatically.
+
+## How it works on Windows
+
+1. Same 23-hour check cycle against `/api/update/check`.
+2. Download written to `.exe.pending` in the binary directory (located via `GetModuleFileName`).
+3. SHA-256 verification identical to Linux; failure aborts and deletes the pending file.
+4. `MoveFile` renames the running binary to `.exe.old`, then renames the pending file to
+   `ntm-client.exe`.
+5. The client calls `ExitProcess(0)`. Task Scheduler detects the exit and relaunches the
+   process within approximately one minute with the new binary.
+
+On startup, any stale `.exe.old` file from a previous update is deleted automatically.
+
+Because the pending file and the running binary are always in the same directory (same
+filesystem), the rename operations are atomic and never require a cross-device copy.
+
+## Install path and permissions
+
+Auto-update requires the service user to have write access to the binary directory so that
+the rename operations succeed without elevated privileges at update time.
+
+**Linux — recommended path:** `/opt/ntm/bin/ntm-client`
+
+```bash
+sudo mkdir -p /opt/ntm/bin
+sudo install -m 755 build-linux/ntm-client /opt/ntm/bin/ntm-client
+sudo chown ntmclient:ntmclient /opt/ntm/bin /opt/ntm/bin/ntm-client
+```
+
+The `ntmclient` service user must own **both** the binary and the containing directory.
+
+**Windows — recommended path:** `C:\ProgramData\ntm\bin\ntm-client.exe`
+
+```powershell
+New-Item -ItemType Directory -Path "C:\ProgramData\ntm\bin" -Force
+Copy-Item ntm-client.exe "C:\ProgramData\ntm\bin\ntm-client.exe"
+icacls "C:\ProgramData\ntm\bin" /grant "SYSTEM:(OI)(CI)F" /inheritance:r
+icacls "C:\ProgramData\ntm\bin" /grant "Administrators:(OI)(CI)F"
+```
+
+Update the Task Scheduler task action to reference the new path.
+
+See also:
+- Linux security hardening: [Section 10](#10-linux-security-hardening-checklist)
+- Windows security hardening: [Section 9](#9-windows-security-hardening-checklist)
+
+## Windows code-signing requirement
+
+Windows Defender and SmartScreen block execution of unsigned binaries. All Windows client
+binaries distributed via auto-update must be **Authenticode code-signed** with a trusted
+code-signing certificate. Unsigned binaries will be quarantined before the client can apply
+them.
+
+Sign the binary before placing it in the server's `update_dir`:
+
+```powershell
+signtool sign /tr http://timestamp.digicert.com /td sha256 /fd sha256 `
+    /n "Your Organization Name" `
+    ntm-client-windows-amd64-1.9.0.exe
+```
+
+## Troubleshooting auto-update
+
+**Binary not updating**
+- Confirm `auto_update=true` is set (default is `false`). Checks run every 23 hours.
+- Verify the binary in `update_dir` follows the naming convention exactly:
+  `ntm-client-linux-amd64-<version>` or `ntm-client-windows-amd64-<version>.exe`.
+- Confirm a manifest scan was run on the server after placing the binary.
+- Confirm the binary version in the filename is higher than the client's current version.
+- On Windows, verify the binary is Authenticode code-signed.
+
+**Stale pending file (Linux)**
+A `.pending` file in the binary directory indicates an interrupted update. The client removes
+it automatically on next startup. To remove manually:
+```bash
+rm /opt/ntm/bin/ntm-client.pending
+```
+
+**Stale .old file (Windows)**
+An `ntm-client.exe.old` file in the binary directory indicates a completed update. The client
+removes it on next startup. To remove manually:
+```powershell
+Remove-Item "C:\ProgramData\ntm\bin\ntm-client.exe.old"
+```
+
+**"rename failed: Permission denied" (Linux)**
+The service user does not own the binary directory. Re-apply the `chown` command from the
+[Install path and permissions](#install-path-and-permissions) section above.
+
+**"MoveFile failed" (Windows)**
+The SYSTEM account does not have write permission on the binary directory. Re-apply the
+`icacls` commands from the [Install path and permissions](#install-path-and-permissions)
+section above.
+
+**Update check returns 404**
+`update_dir` is not set in the server config, or the server was not restarted after setting
+it. The `/api/update/*` endpoints are only registered when `update_dir` is non-empty.
 
 ---
 

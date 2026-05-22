@@ -65,6 +65,7 @@ struct ClientHealthStats
     std::uint64_t bufDrop{0};        // packets the client received but couldn't queue to server
     std::int64_t  reportedAtSec{-1};    // epoch-seconds when the last H line was received
     std::string   version;              // client version string from "ver=" field in H line
+    std::string   platform;            // from platform= field, e.g. "linux-amd64"
     unsigned      wireProtoVersion{0};  // from wire_proto= field; 0 = not yet reported
 };
 

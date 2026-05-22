@@ -94,6 +94,9 @@ struct ServerConfig
     std::size_t max_connections_per_ip{20};
     unsigned idle_timeout_seconds{300};
     unsigned max_d_lines_per_second_per_connection{20000};
+    // Auto-update binary distribution directory. Empty = feature disabled.
+    std::string update_dir;
+
     // Admin API: path to plain-text password file. Empty = admin endpoints disabled.
     // On startup, if webauthn_admin_cred_file is also configured, the plaintext is
     // migrated to PBKDF2 and this file is securely erased (idempotent).
@@ -549,6 +552,7 @@ static const std::set<std::string> &knownServerConfigKeys()
         "webauthn_credentials_file", "webauthn_admin_cred_file",
         "webauthn_ios_app_id", "webauthn_allowed_origins",
         "webauthn_session_ttl_hours",
+        "update_dir",
     };
     return keys;
 }
@@ -671,6 +675,7 @@ static ServerConfig loadServerConfig(const std::string &configPath, bool *ok = n
                 cfg.webauthn_session_ttl_hours =
                     static_cast<unsigned>(std::min(720ul, std::max(1ul, u)));
             }
+            else if (key == "update_dir") { cfg.update_dir = val; }
             else if (key == "aggregation_window_days")
             {
                 u = std::stoul(val);
@@ -1227,7 +1232,8 @@ void connectionThread(int clientFd,
                         if (eq == std::string::npos) continue;
                         std::string k = tok.substr(0, eq);
                         std::string v = tok.substr(eq + 1);
-                        if (k == "ver") { hs.version = v; continue; }
+                        if (k == "ver")      { hs.version  = v; continue; }
+                        if (k == "platform") { hs.platform = v; continue; }
                         char *endp = nullptr;
                         auto n = std::strtoull(v.c_str(), &endp, 10);
                         if (endp == v.c_str()) continue;
@@ -1853,6 +1859,7 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                     webCfg.clients_store    = clientsStore;
                     webCfg.server_ips       = serverIpSet;
                     webCfg.dashboard_ips    = dashboardIpSet;
+                    webCfg.update_dir       = config.update_dir;
 
                     webThread = std::thread(webServerThread,
                                             std::ref(*webSvr),

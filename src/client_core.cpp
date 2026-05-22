@@ -327,6 +327,22 @@ static bool parseConfigLine(const std::string &key, const std::string &val,
         } catch (const std::exception &) {}
         return true;
     }
+    if (key == "auto_update")
+    {
+        std::string lower = v;
+        std::transform(lower.begin(), lower.end(), lower.begin(),
+                       [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+        out.auto_update = (lower == "1" || lower == "true" || lower == "yes");
+        return true;
+    }
+    if (key == "update_port")
+    {
+        try {
+            unsigned long p = std::stoul(v);
+            if (p != 0 && p <= 65535) out.update_port = static_cast<std::uint16_t>(p);
+        } catch (const std::exception &) {}
+        return true;
+    }
     return false;
 }
 
