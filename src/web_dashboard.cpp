@@ -1221,10 +1221,6 @@ button:disabled{opacity:0.5;cursor:default}
   <div id="msg"></div>
 </div>
 <script>
-async function doLogout(){
-  try{await fetch('/auth/logout',{method:'POST'});}catch(_){}
-  window.location.href='/login';
-}
 function msg(t,e){const m=document.getElementById('msg');m.textContent=t;m.className=e?'err':t?'ok':'';}
 function b2b(s){
   s=s.replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';
@@ -1382,6 +1378,10 @@ tr:hover td{background:#171726}
 
 
 <script>
+async function doLogout(){
+  try{await fetch('/auth/logout',{method:'POST'});}catch(_){}
+  window.location.href='/login';
+}
 const POLL_MS=30000;
 let allEntities=[];
 let internetEntities=[];
