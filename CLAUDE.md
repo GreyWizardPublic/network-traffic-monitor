@@ -29,6 +29,11 @@ Run `uname -s` and `uname -r` to identify the environment:
 - Reports results as a PR comment (`gh pr comment <number> --body "..."`).
 - **Does not rewrite code.** If a bug is found, report it; do not fix it.
 - Merges the PR only after the Linux agent comments `ready to merge`.
+- After merging, **deletes the feature branch** — both local and remote:
+  ```
+  git branch -d <branch>
+  git push origin --delete <branch>
+  ```
 
 ### PR handoff format
 
