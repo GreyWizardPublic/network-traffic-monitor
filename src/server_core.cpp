@@ -1779,6 +1779,8 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
     // Build WebConfig from ServerConfig so the web side stays decoupled.
     std::unique_ptr<httplib::SSLServer> webSvr;
     std::thread webThread;
+    std::unique_ptr<httplib::SSLServer> demoSvr;
+    std::thread demoThread;
     if (config.web_port > 0)
     {
         if (certPath.empty() || keyPath.empty())
@@ -1856,6 +1858,25 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                                             std::ref(*webSvr),
                                             std::ref(stats),
                                             webCfg);
+
+                    // Demo server — same cert/key, fixed port kDemoPort (12345).
+                    // Disabled by default; operator enables via admin page.
+                    demoSvr = std::make_unique<httplib::SSLServer>(certPath.c_str(), keyPath.c_str());
+                    if (demoSvr->is_valid())
+                    {
+                        demoThread = std::thread(demoServerThread, std::ref(*demoSvr));
+                        serverLog(LogLevel::Warn,
+                                  "ntm-server: demo server on 0.0.0.0:%u "
+                                  "(disabled by default — enable via admin page)",
+                                  static_cast<unsigned>(kDemoPort));
+                    }
+                    else
+                    {
+                        serverLog(LogLevel::Warn,
+                                  "ntm-server: demo server failed to initialise (bad cert/key)");
+                        demoSvr.reset();
+                    }
+
                     if (webAuthnRP && webAuthnRP->enabled())
                     {
                         serverLog(LogLevel::Warn,
@@ -2072,6 +2093,13 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
     g_running.store(false);
 
     // Stop the web server (SSLServer::stop() is thread-safe).
+    if (demoSvr)
+    {
+        demoSvr->stop();
+        if (demoThread.joinable())
+            demoThread.join();
+    }
+
     if (webSvr)
     {
         webSvr->stop();
