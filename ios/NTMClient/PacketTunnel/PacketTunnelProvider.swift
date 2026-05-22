@@ -4,8 +4,7 @@ import Foundation
 import Network
 @preconcurrency import NetworkExtension
 
-// NTM software version reported in H lines; keep in sync with src/version.hpp.
-private let kClientVersion     = "1.8.0"
+// kClientVersion and kWireProtoVersion come from Shared/ClientVersion.swift.
 private let kHealthIntervalSec = 30
 private let kMaxSessionSec     = 21600   // 6 hours
 private let kMaxBackoffSec     = 60.0

@@ -2,9 +2,7 @@ import Foundation
 import Network
 import Observation
 
-// NTM software version reported in H lines.
-// Keep in sync with src/version.hpp when updating server.
-private let kClientVersion = "1.8.0"
+// kClientVersion and kWireProtoVersion come from Shared/ClientVersion.swift.
 private let kHealthIntervalSec: Int  = 30
 private let kMaxSessionSec: Int      = 21600  // 6 hours; reconnect before this
 private let kMaxBackoffSec: Double   = 60

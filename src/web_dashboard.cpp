@@ -3,6 +3,7 @@
 // The only dependency on server internals is TrafficStats::snapshot() via ntm_types.hpp.
 
 #include "web_dashboard.hpp"
+#include "proto_client_server.hpp"
 #include "version.hpp"
 
 #include <algorithm>
@@ -254,9 +255,10 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
 
     std::string j;
     j.reserve(8192);
-    j += "{\n  \"api_version\": 4";
+    j += "{\n  \"api_version\": ";
+    j += std::to_string(kApiVersion);
     j += ",\n  \"server_version\": \"";
-    j += kNtmVersion;
+    j += kServerVersion;
     j += "\"";
     j += ",\n  \"window_start\": ";
     j += std::to_string(windowEpoch);
@@ -841,11 +843,8 @@ async function refresh(){
         const bd=parseFloat(x.buf_drop_pct);
         const pdC=pd>1?'#c44':pd>0.1?'#c84':'#4c4';
         const bdC=bd>1?'#c44':bd>0.1?'#c84':'#4c4';
-        const verMatch=x.version===sv;
-        const verC=verMatch?'#4c4':'#c84';
-        const verTip=verMatch?'':'title="Server is v'+esc(sv)+'"';
         const st=x.stale?' <span style="color:#666">(stale)</span>':'';
-        return'<tr><td>'+esc(x.client)+st+'</td><td style="color:'+verC+'" '+verTip+'>'+esc(x.version)+'</td><td>'+
+        return'<tr><td>'+esc(x.client)+st+'</td><td style="color:#aaa">'+esc(x.version)+'</td><td>'+
           x.pcap_recv.toLocaleString()+'</td><td style="color:'+pdC+'">'+
           x.pcap_drop.toLocaleString()+' ('+x.pcap_drop_pct+'%)</td><td style="color:'+bdC+'">'+
           x.buf_drop.toLocaleString()+' ('+x.buf_drop_pct+'%)</td><td>'+

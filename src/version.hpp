@@ -1,5 +1,7 @@
 #pragma once
 
-// Single source of truth for the NTM release version.
-// See versioning rules in CLAUDE.md § Versioning.
-inline constexpr char kNtmVersion[] = "1.8.1";
+// ntm-server module version — independent of ntm-client and iOS app versions.
+// See CLAUDE.md § Versioning for per-module rules and protocol lockstep requirements.
+// Wire protocol spoken: kWireProtoVersion (src/proto_client_server.hpp)
+// API protocol spoken:  kApiVersion       (src/proto_client_server.hpp)
+inline constexpr char kServerVersion[] = "1.8.1";
