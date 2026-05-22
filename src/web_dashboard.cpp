@@ -205,13 +205,15 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
         }
         return s;
     };
-    // A flow endpoint is "monitoring infrastructure" if it is:
-    //  - a known ntm-client agent (64-char hex clientId stored at ingest time), OR
-    //  - the server's own IP, OR
-    //  - a dashboard browser/app IP.
-    // Any flow where either endpoint qualifies is classified as overhead.
-    auto isMonitoringEndpoint = [&](const std::string &key) -> bool {
-        if (isHexClientId(key)) return true;
+    // Returns true when a flow endpoint is the server itself or a connected dashboard client.
+    // Known ntm-client hex IDs are intentionally NOT treated as infra endpoints here: using
+    // them would make every packet on the ntm-client machine (regular browsing, downloads, …)
+    // appear as overhead, because the client registers its own LAN IP and all its traffic has
+    // the hex clientId as one endpoint.  The wire-protocol connection is caught via the server
+    // IP check (server is always the other endpoint).  The only remaining gap is when the
+    // server is reached via an external IP whose entity string is an ASN name rather than a
+    // raw IP; that case is documented as a known limitation for cloud-hosted servers.
+    auto isInfraEndpoint = [&](const std::string &key) -> bool {
         std::string lanIp;
         if (parseReporterScoped(key, nullptr, &lanIp))
             return serverIpSnap.count(lanIp) > 0 || dashboardIpSnap.count(lanIp) > 0;
@@ -328,7 +330,10 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
 
             totalAllBytes += bytes;
 
-            const bool isOvhd = isMonitoringEndpoint(storedSrc) || isMonitoringEndpoint(storedDst);
+            // Overhead: touches the server or a dashboard client, or two ntm-client agents
+            // talking directly to each other (edge case; caught by the hex-ID pair check).
+            const bool isOvhd = isInfraEndpoint(storedSrc) || isInfraEndpoint(storedDst)
+                                 || (isHexClientId(storedSrc) && isHexClientId(storedDst));
 
             if (isOvhd)
             {
