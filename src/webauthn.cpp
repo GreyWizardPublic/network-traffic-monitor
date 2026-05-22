@@ -689,6 +689,18 @@ bool WebAuthnRP::hasAdminCred() const
     return adminCred_.has_value();
 }
 
+bool WebAuthnRP::verifyAdminPassword(const std::string &plaintext) const
+{
+    std::lock_guard<std::mutex> lk(mtx_);
+    if (!adminCred_.has_value()) return false;
+    std::vector<uint8_t> derived(32);
+    if (PKCS5_PBKDF2_HMAC(plaintext.data(), static_cast<int>(plaintext.size()),
+                           adminCred_->salt.data(), static_cast<int>(adminCred_->salt.size()),
+                           adminCred_->iterations, EVP_sha256(), 32, derived.data()) != 1)
+        return false;
+    return CRYPTO_memcmp(derived.data(), adminCred_->hash.data(), 32) == 0;
+}
+
 std::string WebAuthnRP::migrateAdminPassword(const std::string &plaintext)
 {
     if (cfg_.adminCredFile.empty()) return "webauthn_admin_cred_file not configured";
