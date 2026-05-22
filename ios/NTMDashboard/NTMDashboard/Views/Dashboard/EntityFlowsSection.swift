@@ -1,17 +1,21 @@
 import SwiftUI
 
 enum TrafficFilter: String, CaseIterable {
-    case regular  = "Regular"
+    case internet = "Internet"
+    case local    = "Local"
     case overhead = "Overhead"
     case all      = "All"
 }
 
 struct EntityFlowsSection: View {
     let flows: [EntityFlow]
+    let internetFlows: [EntityFlow]
+    let localFlows: [EntityFlow]
+    let localSummary: OverheadSummary?
     let overheadFlows: [EntityFlow]
     let overheadSummary: OverheadSummary?
 
-    @State private var filter: TrafficFilter = .regular
+    @State private var filter: TrafficFilter = .internet
 
     private func fmtBytes(_ bytes: Int) -> String {
         let kb = Double(bytes) / 1_000
@@ -25,7 +29,8 @@ struct EntityFlowsSection: View {
 
     private var displayFlows: [EntityFlow] {
         switch filter {
-        case .regular:  return Array(flows.prefix(10))
+        case .internet: return Array((internetFlows.isEmpty ? flows : internetFlows).prefix(10))
+        case .local:    return Array(localFlows.prefix(10))
         case .overhead: return Array(overheadFlows.prefix(10))
         case .all:
             return Array(
@@ -33,6 +38,15 @@ struct EntityFlowsSection: View {
                     .sorted { $0.bytes > $1.bytes }
                     .prefix(10)
             )
+        }
+    }
+
+    private var emptyLabel: String {
+        switch filter {
+        case .internet: return "No internet flows detected"
+        case .local:    return "No local traffic detected"
+        case .overhead: return "No overhead flows detected"
+        case .all:      return "No flow data"
         }
     }
 
@@ -49,7 +63,19 @@ struct EntityFlowsSection: View {
                 }
                 .pickerStyle(.segmented)
 
-                if let summary = overheadSummary, summary.bytes > 0 {
+                if filter == .local, let summary = localSummary, summary.bytes > 0 {
+                    HStack(spacing: 6) {
+                        Image(systemName: "network")
+                            .font(.caption2)
+                            .foregroundStyle(Color.ntmBlue)
+                        Text("Local traffic: \(fmtBytes(summary.bytes)) (\(summary.pctOfTotalBytes)%)")
+                            .font(.caption)
+                            .foregroundStyle(Color.ntmBlue)
+                    }
+                }
+
+                if filter == .overhead || filter == .all,
+                   let summary = overheadSummary, summary.bytes > 0 {
                     HStack(spacing: 6) {
                         Image(systemName: "antenna.radiowaves.left.and.right")
                             .font(.caption2)
@@ -61,7 +87,7 @@ struct EntityFlowsSection: View {
                 }
 
                 if displayFlows.isEmpty {
-                    Text(filter == .overhead ? "No overhead flows detected" : "No flow data")
+                    Text(emptyLabel)
                         .foregroundStyle(.secondary)
                         .font(.subheadline)
                 } else {

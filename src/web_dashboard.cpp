@@ -71,6 +71,46 @@ static bool checkDemoToken(const std::string &token)
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// Admin session tokens (legacy password mode — 30-minute TTL, cleared on logout)
+// ---------------------------------------------------------------------------
+static constexpr std::int64_t kAdminSessionSec = 1800; // 30 minutes
+static std::mutex g_adminTokensMtx;
+static std::unordered_map<std::string, std::int64_t> g_adminTokens; // token → expiry
+
+static std::string generateAdminToken()
+{
+    unsigned char buf[16];
+    RAND_bytes(buf, sizeof(buf));
+    std::string tok = "adm_";
+    tok.reserve(4 + 32);
+    for (auto b : buf)
+    {
+        char hex[3];
+        std::snprintf(hex, sizeof(hex), "%02x", b);
+        tok += hex;
+    }
+    return tok;
+}
+
+static bool checkAdminToken(const std::string &token)
+{
+    if (token.size() < 4 || token.substr(0, 4) != "adm_") return false;
+    const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    std::lock_guard<std::mutex> lk(g_adminTokensMtx);
+    auto it = g_adminTokens.find(token);
+    if (it == g_adminTokens.end()) return false;
+    if (now >= it->second) { g_adminTokens.erase(it); return false; }
+    return true;
+}
+
+static void revokeAdminToken(const std::string &token)
+{
+    std::lock_guard<std::mutex> lk(g_adminTokensMtx);
+    g_adminTokens.erase(token);
+}
+
 // Builds /api/summary JSON for the demo server.
 // Schema MUST mirror buildSummaryJson() — update whenever that function changes.
 // CLAUDE.md "Demo mock data" rule enforces this.
@@ -156,6 +196,55 @@ static std::string buildDemoSummaryJson()
     j += ",\"bytes\":"; j += std::to_string(188743680LL + tick * 4096); j += "}";
     j += "\n  ]";
     j += ",\n  \"truncated\": false";
+
+    // entities_internet (same rows as entities — all demo flows are WAN)
+    j += ",\n  \"entities_internet\": ["
+         "\n    {\"client\":\"Desktop-PC\",\"iface\":\"eth0\","
+         "\"src_entity\":\"Desktop-PC\",\"dst_entity\":\"Netflix Inc.\","
+         "\"packets\":"; j += std::to_string(2108344 + tick * 60);
+    j += ",\"bytes\":"; j += std::to_string(2251799814LL + tick * 65536); j += "}";
+    j += ",\n    {\"client\":\"MacBook-Air\",\"iface\":\"en0\","
+         "\"src_entity\":\"MacBook-Air\",\"dst_entity\":\"Google LLC\","
+         "\"packets\":"; j += std::to_string(1289341 + tick * 34);
+    j += ",\"bytes\":"; j += std::to_string(1288490189LL + tick * 40960); j += "}";
+    j += ",\n    {\"client\":\"Desktop-PC\",\"iface\":\"eth0\","
+         "\"src_entity\":\"Desktop-PC\",\"dst_entity\":\"Cloudflare Inc.\","
+         "\"packets\":"; j += std::to_string(980241 + tick * 27);
+    j += ",\"bytes\":"; j += std::to_string(1027604480LL + tick * 32768); j += "}";
+    j += ",\n    {\"client\":\"iPhone-15\",\"iface\":\"en0\","
+         "\"src_entity\":\"iPhone-15\",\"dst_entity\":\"Apple Inc.\","
+         "\"packets\":"; j += std::to_string(541203 + tick * 15);
+    j += ",\"bytes\":"; j += std::to_string(472446402LL + tick * 8192); j += "}";
+    j += ",\n    {\"client\":\"MacBook-Air\",\"iface\":\"en0\","
+         "\"src_entity\":\"MacBook-Air\",\"dst_entity\":\"Amazon.com Inc.\","
+         "\"packets\":"; j += std::to_string(334891 + tick * 9);
+    j += ",\"bytes\":"; j += std::to_string(335544320LL + tick * 10240); j += "}";
+    j += ",\n    {\"client\":\"iPhone-15\",\"iface\":\"en0\","
+         "\"src_entity\":\"iPhone-15\",\"dst_entity\":\"Akamai Technologies Inc.\","
+         "\"packets\":"; j += std::to_string(218452 + tick * 6);
+    j += ",\"bytes\":"; j += std::to_string(188743680LL + tick * 4096); j += "}";
+    j += "\n  ]";
+    j += ",\n  \"truncated_internet\": false";
+
+    // entities_local (demo shows a small LAN-to-LAN file share)
+    j += ",\n  \"entities_local\": ["
+         "\n    {\"client\":\"MacBook-Air\",\"iface\":\"en0\","
+         "\"src_entity\":\"Local Devices\",\"dst_entity\":\"Local Devices\","
+         "\"packets\":"; j += std::to_string(12481 + tick);
+    j += ",\"bytes\":"; j += std::to_string(41943040LL + tick * 512); j += "}";
+    j += "\n  ]";
+    j += ",\n  \"truncated_local\": false";
+    {
+        const std::int64_t locBytes = 41943040LL + tick * 512;
+        const std::int64_t locPct100 = (locBytes * 10000LL) / totalBytes;
+        std::string locPct = std::to_string(locPct100 / 100) + ".";
+        if ((locPct100 % 100) < 10) locPct += "0";
+        locPct += std::to_string(locPct100 % 100);
+        j += ",\n  \"local_summary\": {\"packets\":";
+        j += std::to_string(12481 + tick);
+        j += ",\"bytes\":"; j += std::to_string(locBytes);
+        j += ",\"pct_of_total_bytes\":\""; j += locPct; j += "\"}";
+    }
 
     // overhead_entities
     j += ",\n  \"overhead_entities\": ["
@@ -367,8 +456,8 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
     TrafficStats::TimePoint windowStart;
     stats.snapshot(totals, flows, countryFlows, entityFlows, &windowStart);
 
-    const auto serverIpSnap   = serverIps   ? serverIps->snapshot()   : std::unordered_set<std::string>{};
-    const auto dashboardIpSnap = dashboardIps ? dashboardIps->snapshot() : std::unordered_set<std::string>{};
+    const auto serverIpSnap   = serverIps   ? serverIps->ipSet()   : std::unordered_set<std::string>{};
+    const auto dashboardIpSnap = dashboardIps ? dashboardIps->ipSet() : std::unordered_set<std::string>{};
 
     // Display name for any stored identifier: 64-char hex pubkey → nickname (or hex);
     // raw LAN IP → "Local Devices" (main tab); ASN entity string → as-is.
@@ -503,12 +592,16 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
                  ^ ((h(k.src)    * 1315423911u) ^ h(k.dst));
         }
     };
-    std::unordered_map<SummaryKey, Counter, SummaryKeyHash> summaryGroups;
+    std::unordered_map<SummaryKey, Counter, SummaryKeyHash> summaryGroups;   // legacy union (kept for compat)
+    std::unordered_map<SummaryKey, Counter, SummaryKeyHash> internetGroups; // WAN flows
+    std::unordered_map<SummaryKey, Counter, SummaryKeyHash> localGroups;    // LAN-only flows
     std::unordered_map<SummaryKey, Counter, SummaryKeyHash> overheadGroups;
 
     std::uint64_t totalAllBytes  = 0;
     std::uint64_t overheadBytes  = 0;
     std::uint64_t overheadPkts   = 0;
+    std::uint64_t localBytes     = 0;
+    std::uint64_t localPkts      = 0;
 
     // LAN Detail: per unidentified-LAN-IP in/out totals, aggregated across all clients/ifaces.
     struct LanStats { std::uint64_t outPkts{0}, outBytes{0}, inPkts{0}, inBytes{0}; };
@@ -547,11 +640,32 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
             }
             else
             {
-                auto &sg = summaryGroups[{dispCli, iface,
-                                          resolveEntityMain(storedSrc),
-                                          resolveEntityMain(storedDst)}];
+                const SummaryKey rk{dispCli, iface,
+                                    resolveEntityMain(storedSrc),
+                                    resolveEntityMain(storedDst)};
+                auto &sg = summaryGroups[rk];
                 sg.packets += pkts;
                 sg.bytes   += bytes;
+
+                // Classify as local (both endpoints private) or internet (at least one public).
+                const bool srcLocal = parseReporterScoped(storedSrc) || isLanIP(storedSrc)
+                                      || isHexClientId(storedSrc);
+                const bool dstLocal = parseReporterScoped(storedDst) || isLanIP(storedDst)
+                                      || isHexClientId(storedDst);
+                if (srcLocal && dstLocal)
+                {
+                    auto &lg = localGroups[rk];
+                    lg.packets += pkts;
+                    lg.bytes   += bytes;
+                    localPkts  += pkts;
+                    localBytes += bytes;
+                }
+                else
+                {
+                    auto &ig = internetGroups[rk];
+                    ig.packets += pkts;
+                    ig.bytes   += bytes;
+                }
 
                 // Accumulate per-IP in/out for unidentified LAN IPs.
                 // Known client IPs are stored as hex IDs at ingest time.
@@ -580,6 +694,38 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
     {
         summaryRows.resize(maxEntityLines);
         truncated = true;
+    }
+
+    // Sort internet rows by bytes descending, truncate.
+    std::vector<SummaryRow> internetRows;
+    internetRows.reserve(internetGroups.size());
+    for (const auto &kv : internetGroups)
+        internetRows.push_back({kv.first.client, kv.first.iface,
+                                kv.first.src,    kv.first.dst,
+                                kv.second.packets, kv.second.bytes});
+    std::sort(internetRows.begin(), internetRows.end(),
+              [](const SummaryRow &a, const SummaryRow &b) { return a.bytes > b.bytes; });
+    bool truncatedInternet = false;
+    if (maxEntityLines > 0 && internetRows.size() > maxEntityLines)
+    {
+        internetRows.resize(maxEntityLines);
+        truncatedInternet = true;
+    }
+
+    // Sort local rows by bytes descending, truncate.
+    std::vector<SummaryRow> localRows;
+    localRows.reserve(localGroups.size());
+    for (const auto &kv : localGroups)
+        localRows.push_back({kv.first.client, kv.first.iface,
+                             kv.first.src,    kv.first.dst,
+                             kv.second.packets, kv.second.bytes});
+    std::sort(localRows.begin(), localRows.end(),
+              [](const SummaryRow &a, const SummaryRow &b) { return a.bytes > b.bytes; });
+    bool truncatedLocal = false;
+    if (maxEntityLines > 0 && localRows.size() > maxEntityLines)
+    {
+        localRows.resize(maxEntityLines);
+        truncatedLocal = true;
     }
 
     // Sort overhead rows by bytes descending, truncate.
@@ -641,6 +787,42 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
     j += "\n  ]";
     j += ",\n  \"truncated\": ";
     j += truncated ? "true" : "false";
+
+    // Emit Internet Entity rows (WAN — at least one public endpoint)
+    auto emitEntityRows = [&](const std::vector<SummaryRow> &rows) {
+        bool f = true;
+        for (const auto &r : rows)
+        {
+            if (!f) j += ',';
+            j += "\n    {\"client\":\""; j += jsonEsc(r.client);
+            j += "\",\"iface\":\"";      j += jsonEsc(r.iface);
+            j += "\",\"packets\":";      j += std::to_string(r.packets);
+            j += ",\"bytes\":";          j += std::to_string(r.bytes);
+            j += ",\"src_entity\":\"";   j += jsonEsc(r.src);
+            j += "\",\"dst_entity\":\""; j += jsonEsc(r.dst);
+            j += "\"}";
+            f = false;
+        }
+    };
+    j += ",\n  \"entities_internet\": [";
+    emitEntityRows(internetRows);
+    j += "\n  ]";
+    j += ",\n  \"truncated_internet\": ";
+    j += truncatedInternet ? "true" : "false";
+
+    // Emit Local Entity rows (both endpoints private/LAN)
+    j += ",\n  \"entities_local\": [";
+    emitEntityRows(localRows);
+    j += "\n  ]";
+    j += ",\n  \"truncated_local\": ";
+    j += truncatedLocal ? "true" : "false";
+    j += ",\n  \"local_summary\": {\"packets\":";
+    j += std::to_string(localPkts);
+    j += ",\"bytes\":";
+    j += std::to_string(localBytes);
+    j += ",\"pct_of_total_bytes\":\"";
+    j += fmtPct(localBytes, totalAllBytes);
+    j += "\"}";
 
     // Emit Overhead Entity rows
     j += ",\n  \"overhead_entities\": [";
@@ -975,9 +1157,11 @@ tr:hover td{background:#171726}
 <div id="sec-summary" class="tabpanel">
   <div class="flt-row">
     <button class="flt" id="flt-all" onclick="setFilter('all')">All</button>
-    <button class="flt active" id="flt-regular" onclick="setFilter('regular')">Regular</button>
+    <button class="flt active" id="flt-internet" onclick="setFilter('internet')">Internet</button>
+    <button class="flt" id="flt-local" onclick="setFilter('local')">Local</button>
     <button class="flt" id="flt-overhead" onclick="setFilter('overhead')">Overhead</button>
   </div>
+  <div id="local-bar" class="ovhd-bar" style="display:none;border-color:#7af;color:#7af;background:#080d1a"></div>
   <div id="ovhd-bar" class="ovhd-bar" style="display:none"></div>
   <table><thead><tr><th>Client</th><th>Interface</th><th>Src Entity</th><th>Dst Entity</th><th>Packets</th><th>Bytes</th></tr></thead>
   <tbody id="entity_body"></tbody></table>
@@ -989,22 +1173,14 @@ tr:hover td{background:#171726}
   <div class="note" id="lan_note"></div>
 </div>
 
-<div class="section">Client Health</div>
-<div id="proto-reject-banner" style="display:none;background:#3a2000;color:#fa0;border-radius:5px;padding:8px 14px;margin-bottom:8px;font-size:0.9em"></div>
-<table><thead><tr><th>Client</th><th>Version</th><th>Wire proto</th><th>pcap recv</th><th>kernel drop</th><th>buf drop</th><th>last report</th></tr></thead>
-<tbody id="health_body"></tbody></table>
-<div class="note" id="health_note"></div>
-<div id="proto-rejected-section" style="display:none">
-<div class="section" style="margin-top:18px">Proto-Rejected Connections</div>
-<table><thead><tr><th>Peer IP</th><th>Attempted Auth Version</th><th>Time</th></tr></thead>
-<tbody id="proto_rejected_body"></tbody></table>
-</div>
 
 <script>
 const POLL_MS=30000;
 let allEntities=[];
+let internetEntities=[];
+let localEntities=[];
 let overheadEntities=[];
-let filterMode='regular';
+let filterMode='internet';
 function fmtB(b){
   if(b<1024)return b+'B';
   if(b<1048576)return(b/1024).toFixed(1)+'K';
@@ -1024,7 +1200,7 @@ function showTab(name){
 }
 function setFilter(mode){
   filterMode=mode;
-  ['all','regular','overhead'].forEach(function(m){
+  ['all','internet','local','overhead'].forEach(function(m){
     document.getElementById('flt-'+m).className='flt'+(m===mode?' active':'');
   });
   renderEntities();
@@ -1032,9 +1208,11 @@ function setFilter(mode){
 function renderEntities(){
   let ents;
   if(filterMode==='overhead') ents=overheadEntities;
+  else if(filterMode==='local') ents=localEntities;
+  else if(filterMode==='internet') ents=internetEntities;
   else if(filterMode==='all'){
     ents=[...allEntities,...overheadEntities].sort(function(a,b){return b.bytes-a.bytes;});
-  }else ents=allEntities;
+  }else ents=internetEntities;
   document.getElementById('entity_body').innerHTML=
     ents.length?ents.map(x=>row([x.client||'(ip-auth)',x.iface,
       x.src_entity,x.dst_entity,x.packets.toLocaleString(),fmtB(x.bytes)])).join('')
@@ -1055,10 +1233,18 @@ async function refresh(){
         x.packets.toLocaleString(),fmtB(x.bytes)])).join('')
       :'<tr><td colspan="4" style="color:#555">No data yet</td></tr>';
     allEntities=d.entities||[];
+    internetEntities=d.entities_internet||allEntities;
+    localEntities=d.entities_local||[];
     overheadEntities=d.overhead_entities||[];
     renderEntities();
     document.getElementById('entity_note').textContent=
-      (d.truncated||d.truncated_overhead)?'Some results truncated to server limit.':'';
+      (d.truncated||d.truncated_overhead||d.truncated_internet||d.truncated_local)?'Some results truncated to server limit.':'';
+    const ls=d.local_summary;
+    const localBar=document.getElementById('local-bar');
+    if(ls&&ls.bytes>0){
+      localBar.textContent='Local traffic: '+fmtB(ls.bytes)+' ('+ls.pct_of_total_bytes+'% of all traffic)';
+      localBar.style.display='';
+    }else{localBar.style.display='none';}
     const os=d.overhead_summary;
     const bar=document.getElementById('ovhd-bar');
     if(os&&os.bytes>0){
@@ -1073,39 +1259,6 @@ async function refresh(){
       :'<tr><td colspan="6" style="color:#555">No unidentified LAN devices detected</td></tr>';
     document.getElementById('lan_note').textContent=
       d.truncated_lan?'Results truncated to server limit.':'';
-    const srvWireProto=d.server_wire_proto_version||0;
-    const health=d.client_health||[];
-    document.getElementById('health_body').innerHTML=
-      health.length?health.map(function(x){
-        const pd=parseFloat(x.pcap_drop_pct);
-        const bd=parseFloat(x.buf_drop_pct);
-        const pdC=pd>1?'#c44':pd>0.1?'#c84':'#4c4';
-        const bdC=bd>1?'#c44':bd>0.1?'#c84':'#4c4';
-        const st=x.stale?' <span style="color:#666">(stale)</span>':'';
-        let wpBadge;
-        if(x.wire_proto_version==null){wpBadge='<span style="color:#555">?</span>';}
-        else if(x.wire_proto_ok){wpBadge='<span style="color:#4c4">&#10003; v'+x.wire_proto_version+'</span>';}
-        else{wpBadge='<span style="color:#c44">&#10007; v'+x.wire_proto_version+' (server v'+srvWireProto+')</span>';}
-        return'<tr><td>'+esc(x.client)+st+'</td><td style="color:#aaa">'+esc(x.version)+'</td><td>'+
-          wpBadge+'</td><td>'+
-          x.pcap_recv.toLocaleString()+'</td><td style="color:'+pdC+'">'+
-          x.pcap_drop.toLocaleString()+' ('+x.pcap_drop_pct+'%)</td><td style="color:'+bdC+'">'+
-          x.buf_drop.toLocaleString()+' ('+x.buf_drop_pct+'%)</td><td>'+
-          fmtT(x.reported_at)+'</td></tr>';
-      }).join(''):'<tr><td colspan="7" style="color:#555">No health data yet</td></tr>';
-    const rejected=d.proto_rejected_clients||[];
-    const rejSec=document.getElementById('proto-rejected-section');
-    const rejBanner=document.getElementById('proto-reject-banner');
-    if(rejected.length){
-      rejSec.style.display='';
-      document.getElementById('proto_rejected_body').innerHTML=rejected.map(function(r){
-        return'<tr><td>'+esc(r.peer_ip)+'</td><td style="color:#c44">'+r.attempted_auth_version+
-          '</td><td>'+fmtT(r.at)+'</td></tr>';
-      }).join('');
-      rejBanner.textContent='Warning: '+rejected.length+' connection(s) rejected due to auth-protocol mismatch. '
-        +'These clients may be running an incompatible version.';
-      rejBanner.style.display='';
-    }else{rejSec.style.display='none';rejBanner.style.display='none';}
     setS(true,'OK — '+new Date().toLocaleTimeString());
   }catch(e){setS(false,'Error: '+e.message);}
 }
@@ -1149,10 +1302,6 @@ tr.selected td:first-child::before{content:'▶ ';color:#7af}
 .panel{border:1px solid #3a3a5a;border-radius:4px;padding:16px;margin-top:14px;background:#0d0d1a}
 .warn{color:#c84;font-size:0.88em;margin-bottom:10px}
 .panel-title{font-size:0.9em;color:#cce;margin-bottom:10px}
-.lbl{font-size:0.82em;color:#888;margin-bottom:4px}
-.pwd-row{display:flex;align-items:center;gap:10px;margin-bottom:4px}
-input[type=password]{background:#111118;border:1px solid #3a3a5a;color:#ccc;padding:5px 8px;font-family:monospace;font-size:0.85em;border-radius:3px;width:280px;outline:none}
-input[type=password]:focus{border-color:#7af}
 .btn-row{display:flex;gap:10px;margin-top:14px}
 button{font-family:monospace;font-size:0.82em;padding:5px 14px;border-radius:3px;border:1px solid #3a3a5a;cursor:pointer;outline:none}
 .btn-cancel{background:#111118;color:#888}
@@ -1171,17 +1320,61 @@ button{font-family:monospace;font-size:0.82em;padding:5px 14px;border-radius:3px
 .btn-demo-on{background:#0d2010;color:#4c4;border-color:#1a4020}
 .btn-demo-on:hover{background:#152a18;color:#6e6}
 .btn-demo-on:disabled{opacity:0.4;cursor:default}
+/* Password overlay */
+#pwd-overlay{position:fixed;inset:0;background:rgba(10,10,20,0.93);display:flex;align-items:center;justify-content:center;z-index:100}
+.pwd-box{background:#0d0d1a;border:1px solid #3a3a5a;border-radius:6px;padding:28px 32px;min-width:320px}
+.pwd-box h2{font-size:0.95em;color:#7af;margin:0 0 16px}
+.pwd-box input{background:#111118;border:1px solid #3a3a5a;color:#ccc;padding:6px 10px;font-family:monospace;font-size:0.9em;border-radius:3px;width:100%;outline:none;margin-bottom:10px}
+.pwd-box input:focus{border-color:#7af}
+.btn-login{background:#101828;color:#7af;border-color:#3a5a8a;width:100%;padding:7px}
+.btn-login:hover{background:#182040}
+#login-err{color:#c44;font-size:0.8em;min-height:1.2em;margin-bottom:6px}
 </style>
 </head>
 <body>
-<div class="hdr">
-  <h1>Network Traffic Monitor &mdash; Admin</h1>
-  <a href="/" class="back">&#8592; Back to Dashboard</a>
+
+<!-- Password overlay (legacy mode only — hidden once token is set or WebAuthn session active) -->
+<div id="pwd-overlay" style="display:none">
+  <div class="pwd-box">
+    <h2>&#128274;&nbsp; Admin Authentication</h2>
+    <input type="password" id="login_pwd" placeholder="Admin password" autocomplete="current-password"
+           onkeydown="if(event.key==='Enter')doLogin()">
+    <div id="login-err"></div>
+    <button class="btn-login" onclick="doLogin()">Sign in</button>
+  </div>
 </div>
 
-<div class="section">Manage Clients</div>
-<div class="sub" id="list_sub">Select a client to purge all its historical traffic data.</div>
+<div id="main-content">
+<div class="hdr">
+  <h1>Network Traffic Monitor &mdash; Admin</h1>
+  <a href="/" class="back" id="back-link">&#8592; Back to Dashboard</a>
+</div>
 
+<!-- ── Active Monitors ────────────────────────────────────────────────── -->
+<div class="section">Active Monitors</div>
+<div class="sub">Wire agents sending traffic data, and dashboard clients currently polling the server.</div>
+
+<div class="section" style="font-size:0.72em;margin:8px 0 4px;color:#555">Wire Agents</div>
+<table>
+  <thead><tr><th>Client</th><th>Version</th><th>Wire Proto</th><th>pcap recv</th><th>Kernel drop</th><th>Buf drop</th><th>Last report</th></tr></thead>
+  <tbody id="health_body"><tr><td colspan="7" style="color:#555">Loading&#8230;</td></tr></tbody>
+</table>
+<div id="proto-reject-banner" style="display:none;background:#3a2000;color:#fa0;border-radius:5px;padding:8px 14px;margin:6px 0;font-size:0.88em"></div>
+<div id="proto-rejected-section" style="display:none">
+  <div class="section" style="font-size:0.72em;margin:8px 0 4px;color:#555">Protocol-Rejected Connections</div>
+  <table><thead><tr><th>Peer IP</th><th>Attempted Auth Version</th><th>Time</th></tr></thead>
+  <tbody id="proto_rejected_body"></tbody></table>
+</div>
+
+<div class="section" style="font-size:0.72em;margin:14px 0 4px;color:#555">Dashboard Clients</div>
+<table>
+  <thead><tr><th>IP Address</th><th>Last Seen</th><th>Status</th></tr></thead>
+  <tbody id="monitors_body"><tr><td colspan="3" style="color:#555">Loading&#8230;</td></tr></tbody>
+</table>
+
+<!-- ── Manage Clients ─────────────────────────────────────────────────── -->
+<div class="section" style="margin-top:22px">Manage Clients</div>
+<div class="sub" id="list_sub">Select a client to purge all its historical traffic data.</div>
 <table>
   <thead><tr><th>Client</th><th>Interfaces</th><th>Packets</th><th>Bytes</th></tr></thead>
   <tbody id="client_body"><tr><td colspan="4" style="color:#555">Loading&#8230;</td></tr></tbody>
@@ -1191,15 +1384,11 @@ button{font-family:monospace;font-size:0.82em;padding:5px 14px;border-radius:3px
   <div class="warn">&#9888;&nbsp; This permanently deletes all historical traffic records for this client.
   Data will accumulate fresh from the next connection.</div>
   <div class="panel-title">Purge all data for: <span id="selected_name" style="color:#7af"></span></div>
-  <div class="lbl">Admin password</div>
-  <div class="pwd-row">
-    <input type="password" id="pwd_field" placeholder="Enter admin password" autocomplete="off">
-    <span class="err-msg" id="pwd_error"></span>
-  </div>
   <div class="btn-row">
     <button class="btn-cancel" onclick="cancelSelect()">Cancel</button>
     <button class="btn-purge" id="purge_btn" onclick="doPurge()">Purge Client Data</button>
   </div>
+  <div class="err-msg" id="purge_error" style="margin-top:8px"></div>
 </div>
 
 <div id="result_panel" style="display:none" class="ok-panel">
@@ -1209,11 +1398,11 @@ button{font-family:monospace;font-size:0.82em;padding:5px 14px;border-radius:3px
     <button class="btn-back" onclick="resetView()">Back to client list</button>
   </div>
 </div>
-
 <div id="msg"></div>
 
-<div class="section" style="margin-top:22px">Demo Server <span style="font-size:0.75em;color:#555;text-transform:none;letter-spacing:0">&mdash; port 12345 (App Store review)</span></div>
-<div class="sub">Serves mock data without authentication. Enable only when an App Store reviewer needs access. Resets to <strong>Disabled</strong> on server restart.</div>
+<!-- ── Demo Server ────────────────────────────────────────────────────── -->
+<div class="section" style="margin-top:22px">Demo Server <span style="font-size:0.75em;color:#555;text-transform:none;letter-spacing:0">&mdash; App Store review</span></div>
+<div class="sub">Serves mock data via a time-limited token. Enable only when an App Store reviewer needs access. Resets to <strong>Disabled</strong> on server restart.</div>
 <div class="panel">
   <div style="display:flex;align-items:center;margin-bottom:14px">
     <span id="demo_dot" class="demo-dot" style="background:#555"></span>
@@ -1225,6 +1414,7 @@ button{font-family:monospace;font-size:0.82em;padding:5px 14px;border-radius:3px
   </div>
   <div class="err-msg" id="demo_err" style="margin-top:8px"></div>
 </div>
+</div><!-- /main-content -->
 
 <script>
 function fmtB(b){
@@ -1233,16 +1423,104 @@ function fmtB(b){
   if(b<1073741824)return(b/1048576).toFixed(1)+'M';
   return(b/1073741824).toFixed(2)+'G';
 }
+function fmtT(ep){return ep?new Date(ep*1000).toLocaleString():'—';}
 function esc(s){
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
+
+// Admin session token (legacy password mode). Null = rely on WebAuthn cookie.
+let adminToken=sessionStorage.getItem('adminToken')||null;
+
+function authHeaders(){
+  const h={'Content-Type':'application/json'};
+  if(adminToken)h['Authorization']='Bearer '+adminToken;
+  return h;
+}
+function authFetchInit(){
+  const h={};
+  if(adminToken)h['Authorization']='Bearer '+adminToken;
+  return{cache:'no-store',headers:h};
+}
+
+async function doLogin(){
+  const pwd=document.getElementById('login_pwd').value;
+  document.getElementById('login-err').textContent='';
+  if(!pwd)return;
+  try{
+    const r=await fetch('/api/admin/login',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({password:pwd})
+    });
+    const d=await r.json();
+    if(r.ok&&d.ok){
+      adminToken=d.token;
+      sessionStorage.setItem('adminToken',adminToken);
+      document.getElementById('pwd-overlay').style.display='none';
+      loadAll();
+    }else{
+      document.getElementById('login-err').textContent='✗ '+(d.error||'Incorrect password');
+      document.getElementById('login_pwd').value='';
+      document.getElementById('login_pwd').focus();
+    }
+  }catch(e){
+    document.getElementById('login-err').textContent='✗ Request failed: '+esc(e.message);
+  }
+}
+
+function logout(){
+  if(adminToken){
+    navigator.sendBeacon('/api/admin/logout',JSON.stringify({token:adminToken}));
+    sessionStorage.removeItem('adminToken');
+    adminToken=null;
+  }
+}
+
+// On back-link click or beforeunload, revoke token immediately.
+document.getElementById('back-link').addEventListener('click',logout);
+window.addEventListener('beforeunload',logout);
+
 let selectedClient=null;
 
 async function loadClients(){
   try{
-    const r=await fetch('/api/summary',{cache:'no-store'});
+    const r=await fetch('/api/summary',authFetchInit());
+    if(r.status===401){showOverlay();return;}
     if(!r.ok)throw new Error('HTTP '+r.status);
     const d=await r.json();
+    // Wire agents health
+    const srvWireProto=d.server_wire_proto_version||0;
+    const health=d.client_health||[];
+    document.getElementById('health_body').innerHTML=
+      health.length?health.map(function(x){
+        const pd=parseFloat(x.pcap_drop_pct);
+        const bd=parseFloat(x.buf_drop_pct);
+        const pdC=pd>1?'#c44':pd>0.1?'#c84':'#4c4';
+        const bdC=bd>1?'#c44':bd>0.1?'#c84':'#4c4';
+        const st=x.stale?' <span style="color:#888">(stale)</span>':'';
+        let wpBadge;
+        if(x.wire_proto_version==null){wpBadge='<span style="color:#555">?</span>';}
+        else if(x.wire_proto_ok){wpBadge='<span style="color:#4c4">&#10003; v'+x.wire_proto_version+'</span>';}
+        else{wpBadge='<span style="color:#c44">&#10007; v'+x.wire_proto_version+' (server v'+srvWireProto+')</span>';}
+        return'<tr><td>'+esc(x.client)+st+'</td><td style="color:#aaa">'+esc(x.version)+'</td><td>'+
+          wpBadge+'</td><td>'+x.pcap_recv.toLocaleString()+'</td><td style="color:'+pdC+'">'+
+          x.pcap_drop.toLocaleString()+' ('+x.pcap_drop_pct+'%)</td><td style="color:'+bdC+'">'+
+          x.buf_drop.toLocaleString()+' ('+x.buf_drop_pct+'%)</td><td>'+fmtT(x.reported_at)+'</td></tr>';
+      }).join(''):'<tr><td colspan="7" style="color:#555">No wire agents connected</td></tr>';
+    // Proto-rejected
+    const rejected=d.proto_rejected_clients||[];
+    const rejSec=document.getElementById('proto-rejected-section');
+    const rejBanner=document.getElementById('proto-reject-banner');
+    if(rejected.length){
+      rejSec.style.display='';
+      document.getElementById('proto_rejected_body').innerHTML=rejected.map(function(r){
+        return'<tr><td>'+esc(r.peer_ip)+'</td><td style="color:#c44">'+r.attempted_auth_version+
+          '</td><td>'+fmtT(r.at)+'</td></tr>';
+      }).join('');
+      rejBanner.textContent='Warning: '+rejected.length+' connection(s) rejected — auth-protocol mismatch.';
+      rejBanner.style.display='';
+    }else{rejSec.style.display='none';rejBanner.style.display='none';}
+    // Client list for purge
     const clients={};
     for(const x of (d.interfaces||[])){
       const name=x.client||'(ip-auth)';
@@ -1255,24 +1533,52 @@ async function loadClients(){
     const names=Object.keys(clients);
     if(!names.length){
       tbody.innerHTML='<tr><td colspan="4" style="color:#555">No clients have recorded data yet</td></tr>';
-      return;
+    }else{
+      tbody.innerHTML=names.map(name=>{
+        const c=clients[name];
+        return`<tr class="selectable" data-client="${esc(name)}">
+          <td>${esc(name)}</td><td>${esc(c.ifaces.join(', '))}</td>
+          <td>${c.packets.toLocaleString()}</td><td>${fmtB(c.bytes)}</td></tr>`;
+      }).join('');
+      tbody.querySelectorAll('tr').forEach(tr=>{
+        tr.addEventListener('click',()=>selectClient(tr.dataset.client));
+      });
     }
-    tbody.innerHTML=names.map(name=>{
-      const c=clients[name];
-      return`<tr class="selectable" data-client="${esc(name)}">
-        <td>${esc(name)}</td>
-        <td>${esc(c.ifaces.join(', '))}</td>
-        <td>${c.packets.toLocaleString()}</td>
-        <td>${fmtB(c.bytes)}</td></tr>`;
-    }).join('');
-    tbody.querySelectorAll('tr').forEach(tr=>{
-      tr.addEventListener('click',()=>selectClient(tr.dataset.client));
-    });
+    // Demo status
+    updateDemoStatus(!!d.demo_server_enabled);
     document.getElementById('msg').textContent='';
   }catch(e){
     document.getElementById('client_body').innerHTML=
-      '<tr><td colspan="4" style="color:#a33">Error loading clients: '+esc(e.message)+'</td></tr>';
+      '<tr><td colspan="4" style="color:#a33">Error: '+esc(e.message)+'</td></tr>';
   }
+}
+
+async function loadMonitors(){
+  try{
+    const r=await fetch('/api/admin/monitors',authFetchInit());
+    if(r.status===401){showOverlay();return;}
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const d=await r.json();
+    const now=Math.floor(Date.now()/1000);
+    const dc=d.dashboard_clients||[];
+    dc.sort((a,b)=>b.last_seen-a.last_seen);
+    document.getElementById('monitors_body').innerHTML=
+      dc.length?dc.map(x=>{
+        const age=now-x.last_seen;
+        const active=age<=300;
+        const dot=`<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${active?'#4c4':'#555'};margin-right:6px"></span>`;
+        return'<tr><td>'+esc(x.ip)+'</td><td>'+fmtT(x.last_seen)+'</td><td>'+dot+(active?'Active':'Recently seen')+'</td></tr>';
+      }).join('')
+      :'<tr><td colspan="3" style="color:#555">No dashboard clients seen yet</td></tr>';
+  }catch(e){
+    document.getElementById('monitors_body').innerHTML=
+      '<tr><td colspan="3" style="color:#a33">Error: '+esc(e.message)+'</td></tr>';
+  }
+}
+
+function showOverlay(){
+  document.getElementById('pwd-overlay').style.display='flex';
+  setTimeout(()=>document.getElementById('login_pwd').focus(),50);
 }
 
 function selectClient(name){
@@ -1283,11 +1589,9 @@ function selectClient(name){
   document.getElementById('selected_name').textContent=name;
   document.getElementById('confirm_panel').style.display='';
   document.getElementById('result_panel').style.display='none';
-  document.getElementById('pwd_field').value='';
-  document.getElementById('pwd_error').textContent='';
+  document.getElementById('purge_error').textContent='';
   document.getElementById('purge_btn').disabled=false;
   document.getElementById('purge_btn').textContent='Purge Client Data';
-  document.getElementById('pwd_field').focus();
 }
 
 function cancelSelect(){
@@ -1297,32 +1601,29 @@ function cancelSelect(){
 }
 
 async function doPurge(){
-  const pwd=document.getElementById('pwd_field').value;
-  if(!pwd){document.getElementById('pwd_error').textContent='Password required';return;}
   const btn=document.getElementById('purge_btn');
   btn.disabled=true;btn.textContent='Purging…';
-  document.getElementById('pwd_error').textContent='';
+  document.getElementById('purge_error').textContent='';
   try{
     const r=await fetch('/api/admin/purge',{
       method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({password:pwd,client:selectedClient})
+      headers:authHeaders(),
+      body:JSON.stringify({client:selectedClient})
     });
     const d=await r.json();
+    if(r.status===401){showOverlay();btn.disabled=false;btn.textContent='Purge Client Data';return;}
     if(r.ok&&d.ok){
       document.getElementById('confirm_panel').style.display='none';
       document.getElementById('result_client').textContent=selectedClient;
       document.getElementById('result_panel').style.display='';
       loadClients();
     }else{
-      document.getElementById('pwd_error').textContent=
-        r.status===401?'✗ Incorrect password':
-        r.status===404?'✗ Client not found':
-        '✗ '+(d.error||'Unknown error');
+      document.getElementById('purge_error').textContent=
+        r.status===404?'✗ Client not found':'✗ '+(d.error||'Unknown error');
       btn.disabled=false;btn.textContent='Purge Client Data';
     }
   }catch(e){
-    document.getElementById('pwd_error').textContent='✗ Request failed: '+e.message;
+    document.getElementById('purge_error').textContent='✗ Request failed: '+e.message;
     btn.disabled=false;btn.textContent='Purge Client Data';
   }
 }
@@ -1337,30 +1638,20 @@ function resetView(){
 
 function updateDemoStatus(on){
   document.getElementById('demo_dot').style.background=on?'#4c4':'#c44';
-  document.getElementById('demo_label').textContent=on
-    ?'Enabled — demo server running on port 12345'
-    :'Disabled';
+  document.getElementById('demo_label').textContent=on?'Enabled':'Disabled';
   document.getElementById('demo_on_btn').disabled=on;
   document.getElementById('demo_off_btn').disabled=!on;
 }
-async function loadDemoStatus(){
-  try{
-    const r=await fetch('/api/summary',{cache:'no-store'});
-    if(!r.ok)throw new Error('HTTP '+r.status);
-    const d=await r.json();
-    updateDemoStatus(!!d.demo_server_enabled);
-  }catch(e){
-    document.getElementById('demo_label').textContent='Could not load status: '+esc(e.message);
-  }
-}
+
 async function setDemo(enabled){
   document.getElementById('demo_err').textContent='';
   try{
     const r=await fetch('/api/admin/demo',{
       method:'POST',
-      headers:{'Content-Type':'application/json'},
+      headers:authHeaders(),
       body:JSON.stringify({enabled:enabled})
     });
+    if(r.status===401){showOverlay();return;}
     const d=await r.json();
     if(r.ok&&d.ok){updateDemoStatus(d.demo_enabled);}
     else{document.getElementById('demo_err').textContent='✗ '+(d.error||'Unknown error');}
@@ -1368,8 +1659,18 @@ async function setDemo(enabled){
     document.getElementById('demo_err').textContent='✗ Request failed: '+esc(e.message);
   }
 }
-loadClients();
-loadDemoStatus();
+
+async function loadAll(){
+  await Promise.all([loadClients(),loadMonitors()]);
+}
+
+// On first load: try fetching without overlay; if 401, show overlay.
+async function init(){
+  const r=await fetch('/api/summary',authFetchInit()).catch(()=>({status:0}));
+  if(r.status===401){showOverlay();}
+  else{loadAll();}
+}
+init();
 </script>
 </body>
 </html>
@@ -1410,7 +1711,9 @@ void webServerThread(httplib::SSLServer &svr,
                 bool isAuthPath = (path == "/login") ||
                                   (path.size() >= 6 && path.substr(0, 6) == "/auth/") ||
                                   (path == "/.well-known/apple-app-site-association") ||
-                                  (path == "/api/demo/begin");
+                                  (path == "/api/demo/begin") ||
+                                  (path == "/api/admin/login") ||
+                                  (path == "/api/admin/logout");
                 if (!isAuthPath)
                 {
                     std::string token = sessionFromRequest(req);
@@ -1427,9 +1730,13 @@ void webServerThread(httplib::SSLServer &svr,
                             return httplib::Server::HandlerResponse::Handled;
                         }
                         // Valid demo token — let request through to route handlers.
-                        // Route handlers check checkDemoToken() themselves for data isolation.
                         return httplib::Server::HandlerResponse::Unhandled;
                     }
+
+                    // Admin session token fast-path (legacy password mode only).
+                    // Allows admin API calls without re-submitting the password per-request.
+                    if (checkAdminToken(token))
+                        return httplib::Server::HandlerResponse::Unhandled;
 
                     if (token.empty() || !config.webauthn->isValidSession(token))
                     {
@@ -1455,7 +1762,11 @@ void webServerThread(httplib::SSLServer &svr,
             else
             {
                 // Legacy mode: LAN-only access.
-                if (!isLanIP(ip))
+                // /api/admin/login and /api/admin/logout are open (handle auth themselves).
+                const bool isAdminAuth = (path == "/api/admin/login") ||
+                                         (path == "/api/admin/logout") ||
+                                         (path == "/api/demo/begin");
+                if (!isAdminAuth && !isLanIP(ip))
                 {
                     res.status = 403;
                     res.set_content("{\"error\":\"forbidden: LAN clients only\"}\n",
@@ -1514,6 +1825,107 @@ void webServerThread(httplib::SSLServer &svr,
                             "application/json");
         });
 
+    // POST /api/admin/login — validate admin password, issue a 30-minute admin session token.
+    // Only registered in legacy (non-WebAuthn) mode; WebAuthn uses passkey sessions instead.
+    if (!config.webauthn || !config.webauthn->enabled())
+    {
+        svr.Post("/api/admin/login",
+            [&config, &adminRateLimiter](const httplib::Request &req, httplib::Response &res)
+            {
+                if (!adminRateLimiter.tryAcquire(req.remote_addr))
+                {
+                    res.status = 429;
+                    res.set_header("Retry-After", "60");
+                    res.set_content("{\"error\":\"rate limit exceeded\"}\n", "application/json");
+                    return;
+                }
+                if (config.admin_password.empty())
+                {
+                    res.status = 503;
+                    res.set_content("{\"error\":\"admin not configured\"}\n", "application/json");
+                    return;
+                }
+                const std::string password = jsonGetString(req.body, "password");
+                if (password.empty())
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"password required\"}\n", "application/json");
+                    return;
+                }
+                const std::string &stored = config.admin_password;
+                const bool ok = (password.size() == stored.size()) &&
+                                (CRYPTO_memcmp(password.data(), stored.data(), stored.size()) == 0);
+                if (!ok)
+                {
+                    serverLog(LogLevel::Warn,
+                              "ntm-server: admin login REJECTED from %s", req.remote_addr.c_str());
+                    res.status = 401;
+                    res.set_content("{\"error\":\"unauthorized\"}\n", "application/json");
+                    return;
+                }
+                const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count();
+                const std::string token = generateAdminToken();
+                {
+                    std::lock_guard<std::mutex> lk(g_adminTokensMtx);
+                    // Lazy GC: prune expired tokens on each new login.
+                    for (auto it = g_adminTokens.begin(); it != g_adminTokens.end(); )
+                        it = (now >= it->second) ? g_adminTokens.erase(it) : std::next(it);
+                    g_adminTokens.emplace(token, now + kAdminSessionSec);
+                }
+                serverLog(LogLevel::Info,
+                          "ntm-server: admin login OK from %s", req.remote_addr.c_str());
+                std::string resp = "{\"ok\":true,\"token\":\"";
+                resp += token;
+                resp += "\",\"expires_in\":";
+                resp += std::to_string(kAdminSessionSec);
+                resp += "}\n";
+                res.set_content(resp, "application/json");
+            });
+
+        // POST /api/admin/logout — invalidate an admin session token immediately.
+        svr.Post("/api/admin/logout",
+            [](const httplib::Request &req, httplib::Response &res)
+            {
+                const std::string token = sessionFromRequest(req);
+                if (!token.empty()) revokeAdminToken(token);
+                res.set_content("{\"ok\":true}\n", "application/json");
+            });
+    }
+
+    // GET /api/admin/monitors — list active wire agents and recent dashboard clients.
+    if (adminAvailable)
+    {
+        svr.Get("/api/admin/monitors",
+            [&config](const httplib::Request &, httplib::Response &res)
+            {
+                res.set_header("Cache-Control", "no-store");
+                const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count();
+
+                std::string j = "{\"wire_agents\":[],\"dashboard_clients\":[";
+                // Dashboard clients from MonitoringIpSet (timestamped).
+                if (config.dashboard_ips)
+                {
+                    bool first = true;
+                    for (const auto &e : config.dashboard_ips->snapshot())
+                    {
+                        if (!first) j += ',';
+                        j += "{\"ip\":\"";
+                        j += jsonEsc(e.ip);
+                        j += "\",\"last_seen\":";
+                        j += std::to_string(e.lastSeen);
+                        j += ",\"active\":";
+                        j += (now - e.lastSeen <= 300) ? "true" : "false";
+                        j += '}';
+                        first = false;
+                    }
+                }
+                j += "]}\n";
+                res.set_content(j, "application/json");
+            });
+    }
+
     // POST /api/admin/purge — erase one client's data
     if (adminAvailable)
     {
@@ -1544,28 +1956,34 @@ void webServerThread(httplib::SSLServer &svr,
                     return;
                 }
 
-                // In legacy mode the request body must contain the admin password.
+                // In legacy mode: accept a valid admin session token (preferred)
+                // or fall back to the legacy per-request password in the body.
                 if (!config.webauthn || !config.webauthn->enabled())
                 {
-                    std::string password = jsonGetString(body, "password");
-                    if (password.empty())
+                    const std::string token = sessionFromRequest(req);
+                    if (!checkAdminToken(token))
                     {
-                        res.status = 400;
-                        res.set_content("{\"error\":\"bad request: password required\"}\n",
-                                        "application/json");
-                        return;
-                    }
-                    const std::string &stored = config.admin_password;
-                    bool pwdOk = (password.size() == stored.size()) &&
-                                 (CRYPTO_memcmp(password.data(), stored.data(), stored.size()) == 0);
-                    if (!pwdOk)
-                    {
-                        serverLog(LogLevel::Warn,
-                                  "ntm-server: admin purge REJECTED from %s (wrong password, client='%s')",
-                                  ip.c_str(), clientName.c_str());
-                        res.status = 401;
-                        res.set_content("{\"error\":\"unauthorized\"}\n", "application/json");
-                        return;
+                        // Legacy per-request password fallback (deprecated path).
+                        std::string password = jsonGetString(body, "password");
+                        if (password.empty())
+                        {
+                            res.status = 401;
+                            res.set_content("{\"error\":\"authentication required\"}\n",
+                                            "application/json");
+                            return;
+                        }
+                        const std::string &stored = config.admin_password;
+                        bool pwdOk = (password.size() == stored.size()) &&
+                                     (CRYPTO_memcmp(password.data(), stored.data(), stored.size()) == 0);
+                        if (!pwdOk)
+                        {
+                            serverLog(LogLevel::Warn,
+                                      "ntm-server: admin purge REJECTED from %s (wrong password, client='%s')",
+                                      ip.c_str(), clientName.c_str());
+                            res.status = 401;
+                            res.set_content("{\"error\":\"unauthorized\"}\n", "application/json");
+                            return;
+                        }
                     }
                 }
                 // In WebAuthn mode: session already verified by pre-routing handler.
@@ -1742,25 +2160,29 @@ void webServerThread(httplib::SSLServer &svr,
         svr.Post("/api/admin/demo",
             [&config](const httplib::Request &req, httplib::Response &res)
             {
-                // In legacy mode require the admin password in the request body.
+                // In legacy mode: accept admin session token or legacy per-request password.
                 if (!config.webauthn || !config.webauthn->enabled())
                 {
-                    std::string password = jsonGetString(req.body, "password");
-                    if (password.empty())
+                    const std::string token = sessionFromRequest(req);
+                    if (!checkAdminToken(token))
                     {
-                        res.status = 400;
-                        res.set_content("{\"error\":\"bad request: password required\"}\n",
-                                        "application/json");
-                        return;
-                    }
-                    const std::string &stored = config.admin_password;
-                    bool pwdOk = (password.size() == stored.size()) &&
-                                 (CRYPTO_memcmp(password.data(), stored.data(), stored.size()) == 0);
-                    if (!pwdOk)
-                    {
-                        res.status = 401;
-                        res.set_content("{\"error\":\"unauthorized\"}\n", "application/json");
-                        return;
+                        std::string password = jsonGetString(req.body, "password");
+                        if (password.empty())
+                        {
+                            res.status = 401;
+                            res.set_content("{\"error\":\"authentication required\"}\n",
+                                            "application/json");
+                            return;
+                        }
+                        const std::string &stored = config.admin_password;
+                        bool pwdOk = (password.size() == stored.size()) &&
+                                     (CRYPTO_memcmp(password.data(), stored.data(), stored.size()) == 0);
+                        if (!pwdOk)
+                        {
+                            res.status = 401;
+                            res.set_content("{\"error\":\"unauthorized\"}\n", "application/json");
+                            return;
+                        }
                     }
                 }
 

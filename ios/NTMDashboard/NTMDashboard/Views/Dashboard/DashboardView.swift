@@ -71,6 +71,9 @@ struct DashboardView: View {
                             InterfacesSection(interfaces: snap.interfaces)
                             EntityFlowsSection(
                                 flows: snap.entities,
+                                internetFlows: snap.entitiesInternet,
+                                localFlows: snap.entitiesLocal,
+                                localSummary: snap.localSummary,
                                 overheadFlows: snap.overheadEntities,
                                 overheadSummary: snap.overheadSummary
                             )
