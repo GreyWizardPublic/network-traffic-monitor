@@ -260,6 +260,8 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
     j += ",\n  \"server_version\": \"";
     j += kServerVersion;
     j += "\"";
+    j += ",\n  \"server_wire_proto_version\": ";
+    j += std::to_string(kWireProtoVersion);
     j += ",\n  \"window_start\": ";
     j += std::to_string(windowEpoch);
     j += ",\n  \"generated_at\": ";
@@ -552,6 +554,13 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
             j += std::to_string(hs.reportedAtSec);
             j += ",\"stale\":";
             j += stale ? "true" : "false";
+            if (hs.wireProtoVersion > 0)
+            {
+                j += ",\"wire_proto_version\":";
+                j += std::to_string(hs.wireProtoVersion);
+                j += ",\"wire_proto_ok\":";
+                j += (hs.wireProtoVersion == kWireProtoVersion) ? "true" : "false";
+            }
             j += '}';
             first = false;
         }

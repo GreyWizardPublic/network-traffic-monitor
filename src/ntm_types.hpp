@@ -62,8 +62,9 @@ struct ClientHealthStats
     std::uint64_t pcapRecv{0};       // packets delivered to the capture callback (ps_recv)
     std::uint64_t pcapDrop{0};       // packets dropped by kernel ring-buffer (ps_drop)
     std::uint64_t bufDrop{0};        // packets the client received but couldn't queue to server
-    std::int64_t  reportedAtSec{-1}; // epoch-seconds when the last H line was received
-    std::string   version;           // client version string from "ver=" field in H line
+    std::int64_t  reportedAtSec{-1};    // epoch-seconds when the last H line was received
+    std::string   version;              // client version string from "ver=" field in H line
+    unsigned      wireProtoVersion{0};  // from wire_proto= field; 0 = not yet reported
 };
 
 // Shared registry: maps a client's LAN IP to its Ed25519 hex client ID, tracks each

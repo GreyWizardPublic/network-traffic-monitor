@@ -146,7 +146,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                         break  // reconnect before the server's 6-hour session limit
                     }
                     try await wireClient.sendLine(
-                        "H pcap_recv=\(packetCount) pcap_drop=0 buf_drop=0 ver=\(kClientVersion)"
+                        "H pcap_recv=\(packetCount) pcap_drop=0 buf_drop=0 ver=\(kClientVersion) wire_proto=\(kWireProtoVersion)"
                     )
                     // Sleep in small chunks for responsive cancellation.
                     for _ in 0..<(kHealthIntervalSec * 4) {
