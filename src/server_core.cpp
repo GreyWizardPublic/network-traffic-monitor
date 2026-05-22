@@ -1692,7 +1692,9 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
             }
             else if (!webAuthnRP)
             {
-                serverLog(LogLevel::Warn, "ntm-server: admin UI enabled (legacy password)");
+                serverLog(LogLevel::Warn,
+                          "ntm-server: admin_password_file set but WebAuthn not configured "
+                          "(webauthn_rp_id missing) — web dashboard will not start");
             }
         }
     }
