@@ -569,6 +569,25 @@ static std::string jsonGetString(const std::string &json, const std::string &key
     return {};
 }
 
+// Returns the real client IP. When the connection arrives from config.trusted_proxy
+// (e.g. cloudflared on 127.0.0.1), the real IP is read from CF-Connecting-IP first,
+// then the first entry of X-Forwarded-For. Only exact-match proxy IPs are trusted,
+// which prevents header injection from direct (non-proxied) connections.
+static std::string effectiveClientIP(const httplib::Request &req, const WebConfig &config)
+{
+    if (config.trusted_proxy.empty() || req.remote_addr != config.trusted_proxy)
+        return req.remote_addr;
+    auto cfIP = req.get_header_value("CF-Connecting-IP");
+    if (!cfIP.empty()) return cfIP;
+    auto xff = req.get_header_value("X-Forwarded-For");
+    if (!xff.empty())
+    {
+        auto comma = xff.find(',');
+        return comma == std::string::npos ? xff : xff.substr(0, comma);
+    }
+    return req.remote_addr;
+}
+
 // Extract session token from Authorization: Bearer header or ntm_session cookie.
 static std::string sessionFromRequest(const httplib::Request &req)
 {
@@ -1954,7 +1973,7 @@ void webServerThread(httplib::SSLServer &svr,
     svr.set_pre_routing_handler(
         [&](const httplib::Request &req, httplib::Response &res) -> httplib::Server::HandlerResponse
         {
-            const std::string &ip   = req.remote_addr;
+            const std::string ip    = effectiveClientIP(req, config);
             const std::string &path = req.path;
 
             if (!rateLimiter.tryAcquire(ip))
@@ -2100,7 +2119,7 @@ void webServerThread(httplib::SSLServer &svr,
         svr.Post("/api/admin/login",
             [&config, &adminRateLimiter](const httplib::Request &req, httplib::Response &res)
             {
-                if (!adminRateLimiter.tryAcquire(req.remote_addr))
+                if (!adminRateLimiter.tryAcquire(effectiveClientIP(req, config)))
                 {
                     res.status = 429;
                     res.set_header("Retry-After", "60");
@@ -2126,7 +2145,8 @@ void webServerThread(httplib::SSLServer &svr,
                 if (!ok)
                 {
                     serverLog(LogLevel::Warn,
-                              "ntm-server: admin login REJECTED from %s", req.remote_addr.c_str());
+                              "ntm-server: admin login REJECTED from %s",
+                              effectiveClientIP(req, config).c_str());
                     res.status = 401;
                     res.set_content("{\"error\":\"unauthorized\"}\n", "application/json");
                     return;
@@ -2142,7 +2162,8 @@ void webServerThread(httplib::SSLServer &svr,
                     g_adminTokens.emplace(token, now + kAdminSessionSec);
                 }
                 serverLog(LogLevel::Info,
-                          "ntm-server: admin login OK from %s", req.remote_addr.c_str());
+                          "ntm-server: admin login OK from %s",
+                          effectiveClientIP(req, config).c_str());
                 std::string resp = "{\"ok\":true,\"token\":\"";
                 resp += token;
                 resp += "\",\"expires_in\":";
@@ -2201,7 +2222,7 @@ void webServerThread(httplib::SSLServer &svr,
             [&stats, &config, &adminRateLimiter](const httplib::Request &req,
                                                   httplib::Response &res)
             {
-                const std::string &ip = req.remote_addr;
+                const std::string ip = effectiveClientIP(req, config);
 
                 // Strict per-IP rate limit for the admin endpoint.
                 if (!adminRateLimiter.tryAcquire(ip))
@@ -2305,7 +2326,7 @@ void webServerThread(httplib::SSLServer &svr,
         svr.Post("/api/admin/client/register",
             [&config, &adminRateLimiter](const httplib::Request &req, httplib::Response &res)
             {
-                const std::string &ip = req.remote_addr;
+                const std::string ip = effectiveClientIP(req, config);
                 if (!adminRateLimiter.tryAcquire(ip))
                 {
                     res.status = 429;
@@ -2479,7 +2500,8 @@ void webServerThread(httplib::SSLServer &svr,
                     g_demoSessionStart.store(0, std::memory_order_relaxed);
                 }
                 serverLog(LogLevel::Warn, "ntm-server: demo server %s by %s",
-                          enabled ? "ENABLED" : "DISABLED", req.remote_addr.c_str());
+                          enabled ? "ENABLED" : "DISABLED",
+                          effectiveClientIP(req, config).c_str());
 
                 std::string resp = "{\"ok\":true,\"demo_enabled\":";
                 resp += enabled ? "true" : "false";
@@ -2491,7 +2513,7 @@ void webServerThread(httplib::SSLServer &svr,
     // POST /api/demo/begin — issue a short-lived demo session token (no auth required).
     // Requires demo mode to be enabled by the operator via POST /api/admin/demo.
     svr.Post("/api/demo/begin",
-        [](const httplib::Request &req, httplib::Response &res)
+        [&config](const httplib::Request &req, httplib::Response &res)
         {
             if (!g_demoEnabled.load(std::memory_order_relaxed))
             {
@@ -2512,7 +2534,7 @@ void webServerThread(httplib::SSLServer &svr,
             // Reset demo session window so mock data timestamps look fresh.
             g_demoSessionStart.store(0, std::memory_order_relaxed);
             serverLog(LogLevel::Warn, "ntm-server: demo token issued to %s",
-                      req.remote_addr.c_str());
+                      effectiveClientIP(req, config).c_str());
 
             std::string resp = "{\"ok\":true,\"token\":\"";
             resp += token;
@@ -2536,7 +2558,7 @@ void webServerThread(httplib::SSLServer &svr,
         // POST /auth/register/complete — verify admin proof + WebAuthn credential
         svr.Post("/auth/register/complete",
             [&config, &adminRateLimiter](const httplib::Request &req, httplib::Response &res) {
-                if (!adminRateLimiter.tryAcquire(req.remote_addr))
+                if (!adminRateLimiter.tryAcquire(effectiveClientIP(req, config)))
                 {
                     res.status = 429;
                     res.set_header("Retry-After", "60");

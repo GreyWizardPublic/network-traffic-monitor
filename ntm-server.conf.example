@@ -64,6 +64,13 @@ web_bind=127.0.0.1
 # Max web requests per IP per minute (0 = unlimited). Default 30.
 # web_rate_limit_rpm=30
 
+# Trusted reverse-proxy IP address. When set, HTTP connections arriving from this
+# IP are trusted to carry the real client IP in CF-Connecting-IP (Cloudflare) or
+# X-Forwarded-For. Set to 127.0.0.1 when using Cloudflare Tunnel (cloudflared
+# running on the same host). Leave unset for direct LAN access.
+# Requires WebAuthn mode — legacy LAN-only mode does not support Cloudflare Tunnel.
+# trusted_proxy=127.0.0.1
+
 # ── Aggregation ──────────────────────────────────────────────────────────────
 
 # Rolling aggregation window in days (1-365). When window+1 days exist, only the oldest day is dropped.

@@ -405,7 +405,32 @@ The page auto-refreshes every 30 seconds and shows:
 | HTTPS (TLS) | Always enforced (mandatory) | Always enforced (mandatory) |
 | RFC 1918 LAN-only IP filter | **Bypassed** — authentication handled by passkey session | Always enforced |
 | Passkey session | Required for all protected endpoints | Not available |
-| Rate limiting | 30 req/min per IP (configurable via `web_rate_limit_rpm`) | Same |
+| Rate limiting | 30 req/min per real client IP (configurable via `web_rate_limit_rpm`) | Same |
+
+### Cloudflare Tunnel and multi-device sessions
+
+When using Cloudflare Tunnel (`web_bind=127.0.0.1`), all browser connections arrive at
+the server from `127.0.0.1` (the cloudflared process on the same host). Without
+additional configuration the rate limiter and dashboard overhead tracker treat every
+browser on every device as the same client — one device's request burst can exhaust
+the rate limit for another device.
+
+Add `trusted_proxy=127.0.0.1` to the config file to fix this:
+
+```ini
+trusted_proxy=127.0.0.1
+```
+
+With this setting, the server reads the real client IP from the `CF-Connecting-IP`
+header (set by Cloudflare) on every request that arrives from `127.0.0.1`. If
+`CF-Connecting-IP` is absent it falls back to the first entry of `X-Forwarded-For`.
+Requests that do **not** arrive from the trusted proxy IP are never affected — the
+header values are ignored and `remote_addr` is used directly, preventing spoofing.
+
+**This requires WebAuthn mode.** Legacy LAN-only mode relies on source-IP filtering
+(`isLanIP`) to grant access; when `trusted_proxy` is active the real (external) client
+IP is used for that check, so external browsers correctly receive 403. There is no
+way to use Cloudflare Tunnel with legacy mode — use WebAuthn mode instead.
 
 ### Admin data purge
 
@@ -553,6 +578,7 @@ closed and the client reconnects with fresh session keys.
 - [ ] Ed25519 auth configured: `allowed_keys` set (mandatory — server refuses to start without it)
 - [ ] Each client started with `--identity` matching a key in `allowed_clients.txt`
 - [ ] `web_bind` set to `127.0.0.1` (Cloudflare Tunnel / WebAuthn deployment) or the server's LAN IP — do **not** leave as `0.0.0.0` in WebAuthn mode; the LAN-only source-IP filter is bypassed when WebAuthn is active
+- [ ] **Cloudflare Tunnel:** `trusted_proxy=127.0.0.1` set so each browser gets its own rate-limit bucket (requires WebAuthn mode)
 - [ ] `web_port` additionally blocked at the firewall from reaching the internet
 - [ ] `client_bind` set to the server's LAN IP (or `127.0.0.1` if all clients are local) rather than `0.0.0.0`
 - [ ] `port` (ingestion) additionally blocked at the firewall unless remote clients are used

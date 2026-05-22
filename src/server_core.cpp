@@ -96,6 +96,9 @@ struct ServerConfig
     unsigned max_d_lines_per_second_per_connection{20000};
     // Auto-update binary distribution directory. Empty = feature disabled.
     std::string update_dir;
+    // Trusted reverse-proxy IP for real-client-IP extraction (e.g. "127.0.0.1" for
+    // Cloudflare Tunnel). Empty = no proxy; req.remote_addr is used directly.
+    std::string trusted_proxy;
 
     // Admin API: path to plain-text password file. Empty = admin endpoints disabled.
     // On startup, if webauthn_admin_cred_file is also configured, the plaintext is
@@ -553,6 +556,7 @@ static const std::set<std::string> &knownServerConfigKeys()
         "webauthn_ios_app_id", "webauthn_allowed_origins",
         "webauthn_session_ttl_hours",
         "update_dir",
+        "trusted_proxy",
     };
     return keys;
 }
@@ -676,6 +680,7 @@ static ServerConfig loadServerConfig(const std::string &configPath, bool *ok = n
                     static_cast<unsigned>(std::min(720ul, std::max(1ul, u)));
             }
             else if (key == "update_dir") { cfg.update_dir = val; }
+            else if (key == "trusted_proxy") { cfg.trusted_proxy = val; }
             else if (key == "aggregation_window_days")
             {
                 u = std::stoul(val);
@@ -1860,6 +1865,7 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                     webCfg.server_ips       = serverIpSet;
                     webCfg.dashboard_ips    = dashboardIpSet;
                     webCfg.update_dir       = config.update_dir;
+                    webCfg.trusted_proxy    = config.trusted_proxy;
 
                     webThread = std::thread(webServerThread,
                                             std::ref(*webSvr),
@@ -1904,6 +1910,11 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                         serverLog(LogLevel::Warn,
                                   "ntm-server: web dashboard access restricted to LAN IPs only");
                     }
+                    if (!config.trusted_proxy.empty())
+                        serverLog(LogLevel::Warn,
+                                  "ntm-server: trusted proxy %s — real client IP read from "
+                                  "CF-Connecting-IP / X-Forwarded-For",
+                                  config.trusted_proxy.c_str());
                 }
             }
             catch (const std::exception &e)
