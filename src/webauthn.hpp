@@ -74,6 +74,10 @@ public:
     // Hash plaintext password with PBKDF2 and persist to adminCredFile.
     std::string migrateAdminPassword(const std::string &plaintext);
 
+    // Verify a plaintext password against the stored PBKDF2 hash. Constant-time.
+    // Returns true only if the admin credential is loaded AND the password matches.
+    bool verifyAdminPassword(const std::string &plaintext) const;
+
     // --- Credential listing / deletion (admin UI) ---
     std::vector<PasskeyCredential> listCredentials() const;
     bool deleteCredential(const std::string &credId);

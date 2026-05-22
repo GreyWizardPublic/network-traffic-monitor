@@ -77,6 +77,37 @@ static bool checkDemoToken(const std::string &token)
 
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
+// Admin proof tokens — short-lived cookie issued after admin password verification.
+// Separate from the WebAuthn passkey session: any passkey user can view the
+// dashboard, but only someone who also knows the admin password can enter /admin.
+// ---------------------------------------------------------------------------
+static constexpr std::int64_t kAdminProofTokenSec = 1800; // 30 minutes
+static std::mutex g_adminProofMtx;
+static std::unordered_map<std::string, std::int64_t> g_adminProofTokens; // token → expiry
+
+static std::string generateAdminProofToken()
+{
+    unsigned char buf[16];
+    RAND_bytes(buf, sizeof(buf));
+    std::string tok = "ntm_ap_";
+    tok.reserve(7 + 32);
+    for (auto b : buf) { char h[3]; std::snprintf(h, sizeof(h), "%02x", b); tok += h; }
+    return tok;
+}
+
+static bool checkAdminProofToken(const std::string &token)
+{
+    if (token.size() < 7 || token.substr(0, 7) != "ntm_ap_") return false;
+    const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    std::lock_guard<std::mutex> lk(g_adminProofMtx);
+    auto it = g_adminProofTokens.find(token);
+    if (it == g_adminProofTokens.end()) return false;
+    if (now >= it->second) { g_adminProofTokens.erase(it); return false; }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // Update manifest (scanned from update_dir on demand)
 // ---------------------------------------------------------------------------
 struct UpdateManifestEntry {
@@ -547,6 +578,18 @@ static std::string effectiveClientIP(const httplib::Request &req, const WebConfi
         return comma == std::string::npos ? xff : xff.substr(0, comma);
     }
     return req.remote_addr;
+}
+
+// Extract a named cookie value from the Cookie header.
+static std::string cookieFromRequest(const httplib::Request &req, const std::string &name)
+{
+    auto cookie = req.get_header_value("Cookie");
+    const std::string prefix = name + "=";
+    auto pos = cookie.find(prefix);
+    if (pos == std::string::npos) return {};
+    auto start = pos + prefix.size();
+    auto end   = cookie.find(';', start);
+    return cookie.substr(start, end == std::string::npos ? std::string::npos : end - start);
 }
 
 // Extract session token from Authorization: Bearer header or ntm_session cookie.
@@ -1576,6 +1619,11 @@ function esc(s){
 
 let selectedClient=null;
 
+function handleAdminExpiry(status){
+  if(status===403){window.location.href='/admin';return true;}
+  return false;
+}
+
 async function loadClients(){
   try{
     const r=await fetch('/api/summary',{cache:'no-store'});
@@ -1681,6 +1729,7 @@ async function loadClients(){
 async function loadMonitors(){
   try{
     const r=await fetch('/api/admin/monitors',{cache:'no-store'});
+    if(handleAdminExpiry(r.status))return;
     if(!r.ok)throw new Error('HTTP '+r.status);
     const d=await r.json();
     const now=Math.floor(Date.now()/1000);
@@ -1729,6 +1778,7 @@ async function doPurge(){
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({client:selectedClient})
     });
+    if(handleAdminExpiry(r.status)){btn.disabled=false;btn.textContent='Purge Client Data';return;}
     const d=await r.json();
     if(r.ok&&d.ok){
       document.getElementById('confirm_panel').style.display='none';
@@ -1769,6 +1819,7 @@ async function setDemo(enabled){
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({enabled:enabled})
     });
+    if(handleAdminExpiry(r.status))return;
     const d=await r.json();
     if(r.ok&&d.ok){updateDemoStatus(d.demo_enabled);}
     else{document.getElementById('demo_err').textContent='✗ '+(d.error||'Unknown error');}
@@ -1789,6 +1840,7 @@ async function doForceUpdate(clientId){
     const r=await fetch('/api/admin/update/force',{
       method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pubkey:clientId})
     });
+    if(handleAdminExpiry(r.status))return;
     const d=await r.json();
     document.getElementById('msg').textContent=
       (r.ok&&d.ok)?'Force update flagged. Agent will update on next daily check.':'✗ '+(d.error||'Error');
@@ -1802,6 +1854,7 @@ async function doScanManifest(){
     const r=await fetch('/api/admin/update/scan',{
       method:'POST',headers:{'Content-Type':'application/json'}
     });
+    if(handleAdminExpiry(r.status)){document.getElementById('scan_btn').disabled=false;return;}
     const d=await r.json();
     if(r.ok&&d.ok){
       document.getElementById('scan_msg').textContent='Found '+d.count+' binary(ies).';
@@ -1820,6 +1873,72 @@ async function loadAll(){
 }
 
 loadAll();
+</script>
+</body>
+</html>
+)HTML";
+
+// ---------------------------------------------------------------------------
+// Admin authentication page — shown when ntm_admin cookie is absent/expired.
+// ---------------------------------------------------------------------------
+static const char kAdminAuthHtml[] = R"HTML(<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NTM Admin &mdash; Authentication</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0d0d1a;color:#ccc;font-family:monospace;display:flex;align-items:center;justify-content:center;min-height:100vh}
+.card{background:#0d0d1a;border:1px solid #3a3a5a;border-radius:6px;padding:32px 36px;min-width:320px;max-width:400px;width:100%}
+h2{color:#7af;font-size:0.95em;margin-bottom:20px;font-weight:normal;letter-spacing:0.03em}
+label{font-size:0.78em;color:#888;display:block;margin-bottom:6px}
+input[type=password]{background:#111118;border:1px solid #3a3a5a;color:#ccc;padding:7px 10px;font-family:monospace;font-size:0.9em;border-radius:3px;width:100%;outline:none;margin-bottom:12px}
+input[type=password]:focus{border-color:#7af}
+button{background:#101828;color:#7af;border:1px solid #3a5a8a;border-radius:3px;padding:8px 0;width:100%;font-family:monospace;font-size:0.9em;cursor:pointer}
+button:hover{background:#182040}
+button:disabled{opacity:0.5;cursor:default}
+#err{color:#c44;font-size:0.8em;min-height:1.1em;margin-bottom:10px}
+.back{display:block;margin-top:16px;font-size:0.78em;color:#555;text-align:center;text-decoration:none}
+.back:hover{color:#888}
+</style>
+</head>
+<body>
+<div class="card">
+  <h2>&#128274;&nbsp; Admin Authentication</h2>
+  <label for="pwd">Admin password</label>
+  <input type="password" id="pwd" autocomplete="current-password" placeholder="Enter admin password">
+  <div id="err"></div>
+  <button id="btn" onclick="doAuth()">Enter Admin</button>
+  <a href="/" class="back">&#8592; Back to Dashboard</a>
+</div>
+<script>
+async function doAuth(){
+  const btn=document.getElementById('btn');
+  const pwd=document.getElementById('pwd').value;
+  document.getElementById('err').textContent='';
+  if(!pwd)return;
+  btn.disabled=true;btn.textContent='Verifying…';
+  try{
+    const r=await fetch('/api/admin/auth',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({password:pwd})
+    });
+    const d=await r.json();
+    if(r.ok&&d.ok){window.location.href='/admin';}
+    else{
+      document.getElementById('err').textContent='✗ '+(d.error||'Incorrect password');
+      document.getElementById('pwd').value='';
+      document.getElementById('pwd').focus();
+    }
+  }catch(e){
+    document.getElementById('err').textContent='✗ Request failed: '+e.message;
+  }
+  btn.disabled=false;btn.textContent='Enter Admin';
+}
+document.getElementById('pwd').addEventListener('keydown',e=>{if(e.key==='Enter')doAuth();});
+document.getElementById('pwd').focus();
 </script>
 </body>
 </html>
@@ -1901,6 +2020,22 @@ void webServerThread(httplib::SSLServer &svr,
                 }
                 // Authenticated dashboard client — record IP for overhead classification.
                 if (config.dashboard_ips) config.dashboard_ips->add(ip);
+
+                // Admin API paths additionally require the short-lived ntm_admin cookie
+                // issued by POST /api/admin/auth (password re-verification).
+                // /api/admin/auth itself is exempt — it is the issuance endpoint.
+                const bool isAdminApiPath = path.size() >= 11 &&
+                                            path.substr(0, 11) == "/api/admin/";
+                if (isAdminApiPath && path != "/api/admin/auth")
+                {
+                    if (!checkAdminProofToken(cookieFromRequest(req, "ntm_admin")))
+                    {
+                        res.status = 403;
+                        res.set_content("{\"error\":\"admin authentication required\"}\n",
+                                        "application/json");
+                        return httplib::Server::HandlerResponse::Handled;
+                    }
+                }
             }
 
             // Security headers on every response.
@@ -1922,12 +2057,17 @@ void webServerThread(httplib::SSLServer &svr,
         res.set_content(kLoginHtml, "text/html; charset=utf-8");
     });
 
-    // GET /admin — embedded admin page (session already verified by pre-routing handler)
+    // GET /admin — serve full dashboard or password entry page based on ntm_admin cookie.
+    // WebAuthn session is already verified by pre-routing; the ntm_admin cookie is the
+    // second factor proving the visitor knows the admin password.
     const bool adminAvailable = (config.webauthn && config.webauthn->enabled());
     if (adminAvailable)
     {
-        svr.Get("/admin", [](const httplib::Request &, httplib::Response &res) {
-            res.set_content(kAdminHtml, "text/html; charset=utf-8");
+        svr.Get("/admin", [](const httplib::Request &req, httplib::Response &res) {
+            if (checkAdminProofToken(cookieFromRequest(req, "ntm_admin")))
+                res.set_content(kAdminHtml, "text/html; charset=utf-8");
+            else
+                res.set_content(kAdminAuthHtml, "text/html; charset=utf-8");
         });
     }
 
@@ -1946,6 +2086,59 @@ void webServerThread(httplib::SSLServer &svr,
                                              config.server_ips, config.dashboard_ips),
                             "application/json");
         });
+
+    // POST /api/admin/auth — verify admin password and issue ntm_admin proof cookie.
+    // Requires a valid WebAuthn session (pre-routing) but NOT the ntm_admin cookie.
+    // Rate-limited to prevent brute-force.
+    if (adminAvailable)
+    {
+        svr.Post("/api/admin/auth",
+            [&config, &adminRateLimiter](const httplib::Request &req, httplib::Response &res)
+            {
+                if (!adminRateLimiter.tryAcquire(effectiveClientIP(req, config)))
+                {
+                    res.status = 429;
+                    res.set_header("Retry-After", "60");
+                    res.set_content("{\"error\":\"rate limit exceeded\"}\n", "application/json");
+                    return;
+                }
+                const std::string password = jsonGetString(req.body, "password");
+                if (password.empty())
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"password required\"}\n", "application/json");
+                    return;
+                }
+                if (!config.webauthn->verifyAdminPassword(password))
+                {
+                    serverLog(LogLevel::Warn,
+                              "ntm-server: admin auth REJECTED from %s",
+                              effectiveClientIP(req, config).c_str());
+                    res.status = 401;
+                    res.set_content("{\"error\":\"incorrect password\"}\n", "application/json");
+                    return;
+                }
+                const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count();
+                const std::string token = generateAdminProofToken();
+                {
+                    std::lock_guard<std::mutex> lk(g_adminProofMtx);
+                    // Lazy GC: prune expired tokens on each new login.
+                    for (auto it = g_adminProofTokens.begin(); it != g_adminProofTokens.end(); )
+                        it = (now >= it->second) ? g_adminProofTokens.erase(it) : std::next(it);
+                    g_adminProofTokens.emplace(token, now + kAdminProofTokenSec);
+                }
+                serverLog(LogLevel::Info,
+                          "ntm-server: admin auth OK from %s",
+                          effectiveClientIP(req, config).c_str());
+                res.set_header("Set-Cookie",
+                               "ntm_admin=" + token +
+                               "; HttpOnly; Secure; SameSite=Strict"
+                               "; Max-Age=" + std::to_string(kAdminProofTokenSec) +
+                               "; Path=/");
+                res.set_content("{\"ok\":true}\n", "application/json");
+            });
+    }
 
     // GET /api/admin/monitors — list active wire agents and recent dashboard clients.
     if (adminAvailable)
