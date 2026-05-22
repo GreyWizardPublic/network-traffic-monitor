@@ -106,7 +106,7 @@ software version (`server_version`).
 
 | Version | Change |
 |---|---|
-| 4 | `entities` now contains only non-overhead (regular) flows. Added `overhead_entities`, `truncated_overhead`, and `overhead_summary` to `/api/summary`. Overhead = flows involving ntm-clients, the server itself, or dashboard viewers (ntm 1.8.0). |
+| 4 | `entities` now contains only non-overhead (regular) flows. Added `overhead_entities`, `truncated_overhead`, and `overhead_summary` to `/api/summary`. Overhead = flows involving ntm-clients, the server itself, or dashboard viewers (ntm 1.8.0). Added optional `server_wire_proto_version` root field; optional `wire_proto_version` + `wire_proto_ok` per client-health entry; `proto_rejected_clients` array. These are additive optional fields and do not require a version bump (ntm-server 1.8.1). |
 | 3 | Added `POST /api/admin/client/register` — enrol Ed25519 wire-protocol client keys at runtime via the HTTPS API (ntm 1.5.0). |
 | 2 | Added WebAuthn passkey authentication; auth endpoints `/auth/*`; `/login` page; AASA endpoint. Bumped `api_version` field to `2` (ntm 1.3.0). |
 | 1 | Initial version (ntm 1.2.0) |
@@ -288,10 +288,11 @@ recognise. New optional fields may be added at any `api_version` without a bump.
 
 ```json
 {
-  "api_version":    <integer>,      // API contract revision; currently 3
-  "server_version": <string>,       // ntm software version, e.g. "1.3.0"
-  "window_start":   <integer>,      // unix epoch: start of the rolling stats window
-  "generated_at":   <integer>,      // unix epoch: when this response was built
+  "api_version":              <integer>,  // API contract revision; currently 4
+  "server_version":           <string>,   // ntm-server module version, e.g. "1.8.1"
+  "server_wire_proto_version": <integer>, // wire protocol data-phase version the server speaks
+  "window_start":              <integer>, // unix epoch: start of the rolling stats window
+  "generated_at":              <integer>, // unix epoch: when this response was built
 
   "interfaces": [                   // per-NIC totals across all connected clients
     {
@@ -347,15 +348,26 @@ recognise. New optional fields may be added at any `api_version` without a bump.
 
   "client_health": [                // one entry per connected ntm-client
     {
-      "client":         <string>,   // display name / nickname
-      "version":        <string>,   // ntm-client software version; "?" if not yet reported
-      "pcap_recv":      <integer>,  // uint64: packets delivered by pcap (cumulative session)
-      "pcap_drop":      <integer>,  // uint64: packets dropped by kernel pcap ring
-      "pcap_drop_pct":  <string>,   // formatted "N.NN" — drop % of pcap total (no % sign)
-      "buf_drop":       <integer>,  // uint64: packets dropped by client send-buffer overflow
-      "buf_drop_pct":   <string>,   // formatted "N.NN" — buf_drop % of pcap_recv
-      "reported_at":    <integer>,  // unix epoch of the last H-line; -1 if never received
-      "stale":          <boolean>   // true if no H-line received in the last 90 s
+      "client":             <string>,   // display name / nickname
+      "version":            <string>,   // ntm-client module version; "?" if not yet reported
+      "pcap_recv":          <integer>,  // uint64: packets delivered by pcap (cumulative session)
+      "pcap_drop":          <integer>,  // uint64: packets dropped by kernel pcap ring
+      "pcap_drop_pct":      <string>,   // formatted "N.NN" — drop % of pcap total (no % sign)
+      "buf_drop":           <integer>,  // uint64: packets dropped by client send-buffer overflow
+      "buf_drop_pct":       <string>,   // formatted "N.NN" — buf_drop % of pcap_recv
+      "reported_at":        <integer>,  // unix epoch of the last H-line; -1 if never received
+      "stale":              <boolean>,  // true if no H-line received in the last 90 s
+      // optional — present only after the client's first H-line includes wire_proto=N:
+      "wire_proto_version": <integer>,  // data-phase wire protocol version the client reported
+      "wire_proto_ok":      <boolean>   // true iff wire_proto_version == server_wire_proto_version
+    }
+  ],
+
+  "proto_rejected_clients": [       // auth-version-mismatch rejections; capped at 20 most-recent
+    {
+      "peer_ip":               <string>,  // connecting IP address
+      "attempted_auth_version": <integer>, // auth version byte the client sent
+      "at":                    <integer>  // unix epoch of the rejection
     }
   ]
 }
