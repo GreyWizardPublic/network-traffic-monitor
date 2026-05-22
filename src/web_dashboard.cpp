@@ -566,6 +566,32 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
         }
     }
     j += "\n  ]";
+
+    // Proto-rejected clients (auth version mismatch attempts, capped at 20).
+    j += ",\n  \"proto_rejected_clients\": [";
+    if (registry)
+    {
+        std::vector<ProtoRejectionRecord> rejSnap;
+        {
+            std::lock_guard<std::mutex> lk(registry->mtx);
+            rejSnap.assign(registry->protoRejections.begin(), registry->protoRejections.end());
+        }
+        bool rejFirst = true;
+        for (const auto &r : rejSnap)
+        {
+            if (!rejFirst) j += ',';
+            j += "\n    {\"peer_ip\":\"";
+            j += jsonEsc(r.peerIp);
+            j += "\",\"attempted_auth_version\":";
+            j += std::to_string(r.attemptedVersion);
+            j += ",\"at\":";
+            j += std::to_string(r.atSec);
+            j += '}';
+            rejFirst = false;
+        }
+    }
+    j += "\n  ]";
+
     j += "\n}\n";
     return j;
 }
@@ -768,9 +794,15 @@ tr:hover td{background:#171726}
 </div>
 
 <div class="section">Client Health</div>
-<table><thead><tr><th>Client</th><th>Version</th><th>pcap recv</th><th>kernel drop</th><th>buf drop</th><th>last report</th></tr></thead>
+<div id="proto-reject-banner" style="display:none;background:#3a2000;color:#fa0;border-radius:5px;padding:8px 14px;margin-bottom:8px;font-size:0.9em"></div>
+<table><thead><tr><th>Client</th><th>Version</th><th>Wire proto</th><th>pcap recv</th><th>kernel drop</th><th>buf drop</th><th>last report</th></tr></thead>
 <tbody id="health_body"></tbody></table>
 <div class="note" id="health_note"></div>
+<div id="proto-rejected-section" style="display:none">
+<div class="section" style="margin-top:18px">Proto-Rejected Connections</div>
+<table><thead><tr><th>Peer IP</th><th>Attempted Auth Version</th><th>Time</th></tr></thead>
+<tbody id="proto_rejected_body"></tbody></table>
+</div>
 
 <script>
 const POLL_MS=30000;
@@ -845,6 +877,7 @@ async function refresh(){
       :'<tr><td colspan="6" style="color:#555">No unidentified LAN devices detected</td></tr>';
     document.getElementById('lan_note').textContent=
       d.truncated_lan?'Results truncated to server limit.':'';
+    const srvWireProto=d.server_wire_proto_version||0;
     const health=d.client_health||[];
     document.getElementById('health_body').innerHTML=
       health.length?health.map(function(x){
@@ -853,12 +886,30 @@ async function refresh(){
         const pdC=pd>1?'#c44':pd>0.1?'#c84':'#4c4';
         const bdC=bd>1?'#c44':bd>0.1?'#c84':'#4c4';
         const st=x.stale?' <span style="color:#666">(stale)</span>':'';
+        let wpBadge;
+        if(x.wire_proto_version==null){wpBadge='<span style="color:#555">?</span>';}
+        else if(x.wire_proto_ok){wpBadge='<span style="color:#4c4">&#10003; v'+x.wire_proto_version+'</span>';}
+        else{wpBadge='<span style="color:#c44">&#10007; v'+x.wire_proto_version+' (server v'+srvWireProto+')</span>';}
         return'<tr><td>'+esc(x.client)+st+'</td><td style="color:#aaa">'+esc(x.version)+'</td><td>'+
+          wpBadge+'</td><td>'+
           x.pcap_recv.toLocaleString()+'</td><td style="color:'+pdC+'">'+
           x.pcap_drop.toLocaleString()+' ('+x.pcap_drop_pct+'%)</td><td style="color:'+bdC+'">'+
           x.buf_drop.toLocaleString()+' ('+x.buf_drop_pct+'%)</td><td>'+
           fmtT(x.reported_at)+'</td></tr>';
-      }).join(''):'<tr><td colspan="6" style="color:#555">No health data yet</td></tr>';
+      }).join(''):'<tr><td colspan="7" style="color:#555">No health data yet</td></tr>';
+    const rejected=d.proto_rejected_clients||[];
+    const rejSec=document.getElementById('proto-rejected-section');
+    const rejBanner=document.getElementById('proto-reject-banner');
+    if(rejected.length){
+      rejSec.style.display='';
+      document.getElementById('proto_rejected_body').innerHTML=rejected.map(function(r){
+        return'<tr><td>'+esc(r.peer_ip)+'</td><td style="color:#c44">'+r.attempted_auth_version+
+          '</td><td>'+fmtT(r.at)+'</td></tr>';
+      }).join('');
+      rejBanner.textContent='Warning: '+rejected.length+' connection(s) rejected due to auth-protocol mismatch. '
+        +'These clients may be running an incompatible version.';
+      rejBanner.style.display='';
+    }else{rejSec.style.display='none';rejBanner.style.display='none';}
     setS(true,'OK — '+new Date().toLocaleTimeString());
   }catch(e){setS(false,'Error: '+e.message);}
 }

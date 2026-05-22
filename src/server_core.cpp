@@ -455,7 +455,10 @@ static bool writeExact(SSL *ssl, int fd, const void *buf, std::size_t n)
 }
 
 // Verify auth message and return clientId (hex of pubkey) or empty on failure.
-static std::string verifyClientAuth(SSL *ssl, int clientFd, const AllowedClientsStore &store)
+// attemptedVersionOut: if non-null and auth fails due to unrecognised version byte
+// (not wrong key/signature), set to the version byte the client sent.
+static std::string verifyClientAuth(SSL *ssl, int clientFd, const AllowedClientsStore &store,
+                                    std::uint8_t *attemptedVersionOut = nullptr)
 {
     std::shared_lock<std::shared_mutex> lk(store.mu);
     if (store.keys.empty())
@@ -518,6 +521,9 @@ static std::string verifyClientAuth(SSL *ssl, int clientFd, const AllowedClients
         return pubkeyToIdHex(pubkeyRaw);
     }
 
+    // Unrecognised auth version — record it so the dashboard can surface it.
+    if (attemptedVersionOut)
+        *attemptedVersionOut = version;
     return {};
 }
 
@@ -924,11 +930,22 @@ void connectionThread(int clientFd,
 
     const auto sessionStart = std::chrono::steady_clock::now();
 
+    std::uint8_t attemptedAuthVersion = 0;
     std::string clientId;
-    clientId = verifyClientAuth(ssl, clientFd, *clientsStore);
+    clientId = verifyClientAuth(ssl, clientFd, *clientsStore, &attemptedAuthVersion);
     if (clientId.empty())
     {
         writeExact(ssl, clientFd, &kAuthResultReject, 1);
+        if (attemptedAuthVersion != 0 && registry)
+        {
+            const auto atSec = std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+            ProtoRejectionRecord rec{clientIp, attemptedAuthVersion, static_cast<std::int64_t>(atSec)};
+            std::lock_guard<std::mutex> lk(registry->mtx);
+            registry->protoRejections.push_back(std::move(rec));
+            if (registry->protoRejections.size() > 20)
+                registry->protoRejections.pop_front();
+        }
         return;
     }
     if (!writeExact(ssl, clientFd, &kAuthResultOk, 1))

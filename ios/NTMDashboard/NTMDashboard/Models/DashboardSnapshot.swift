@@ -15,6 +15,7 @@ struct OverheadSummary: Codable, Sendable {
 struct DashboardSnapshot: Codable, Sendable {
     let apiVersion: Int?
     let serverVersion: String
+    let serverWireProtoVersion: Int?
     let windowStart: Int
     let generatedAt: Int
     let interfaces: [InterfaceStat]
@@ -23,17 +24,20 @@ struct DashboardSnapshot: Codable, Sendable {
     let overheadSummary: OverheadSummary?
     let entitiesLan: [LanDevice]
     let clientHealth: [ClientHealth]
+    let protoRejectedClients: [ProtoRejectedClient]
 
     enum CodingKeys: String, CodingKey {
-        case apiVersion       = "api_version"
-        case serverVersion    = "server_version"
-        case windowStart      = "window_start"
-        case generatedAt      = "generated_at"
+        case apiVersion             = "api_version"
+        case serverVersion          = "server_version"
+        case serverWireProtoVersion = "server_wire_proto_version"
+        case windowStart            = "window_start"
+        case generatedAt            = "generated_at"
         case interfaces
         case entities
-        case overheadEntities = "overhead_entities"
-        case overheadSummary  = "overhead_summary"
-        case entitiesLan      = "entities_lan"
-        case clientHealth     = "client_health"
+        case overheadEntities       = "overhead_entities"
+        case overheadSummary        = "overhead_summary"
+        case entitiesLan            = "entities_lan"
+        case clientHealth           = "client_health"
+        case protoRejectedClients   = "proto_rejected_clients"
     }
 }
