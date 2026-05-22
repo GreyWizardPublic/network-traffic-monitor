@@ -49,10 +49,38 @@ struct LoginView: View {
                         showRegister = true
                     }
                     .disabled(authVM.isLoading || !serverConfigured)
+
+                    HStack {
+                        VStack { Divider() }
+                        Text("or").font(.caption).foregroundStyle(.secondary)
+                        VStack { Divider() }
+                    }
+
+                    Button {
+                        authVM.demoUnavailable = false
+                        Task { await authVM.connectDemo() }
+                    } label: {
+                        Label("Demo Server", systemImage: "play.circle")
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 4)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(authVM.isLoading)
                 }
                 .padding(.horizontal, 32)
 
-                if let fp = authVM.untrustedCertFingerprint {
+                if authVM.demoUnavailable {
+                    VStack(spacing: 6) {
+                        Text("Demo server is currently unavailable.")
+                            .foregroundStyle(.secondary)
+                            .font(.caption)
+                            .multilineTextAlignment(.center)
+                        Link("Visit support page",
+                             destination: URL(string: "https://github.com/GreyWizardPublic/network-traffic-monitor")!)
+                            .font(.caption)
+                    }
+                    .padding(.horizontal, 32)
+                } else if let fp = authVM.untrustedCertFingerprint {
                     VStack(spacing: 8) {
                         Label("Certificate not trusted", systemImage: "lock.trianglebadge.exclamationmark")
                             .foregroundStyle(.orange)
