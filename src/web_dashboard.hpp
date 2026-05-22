@@ -34,8 +34,6 @@ struct WebConfig
     // The internal clientId in TrafficStats is always the raw hex; lookup happens only at
     // JSON serialisation so renaming a client never orphans historical data.
     std::unordered_map<std::string, std::string> client_nicknames;
-    // Legacy admin purge password (plain-text path, pre-WebAuthn). Empty = disabled.
-    std::string admin_password;
     // Shared registry for per-client health stats (pcap / send-buffer drop counters).
     // Null = health section omitted from the API response.
     std::shared_ptr<ClientRegistry> registry;

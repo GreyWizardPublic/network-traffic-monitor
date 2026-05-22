@@ -76,12 +76,6 @@ static bool checkDemoToken(const std::string &token)
 }
 
 // ---------------------------------------------------------------------------
-// Admin session tokens (legacy password mode — 30-minute TTL, cleared on logout)
-// ---------------------------------------------------------------------------
-static constexpr std::int64_t kAdminSessionSec = 1800; // 30 minutes
-static std::mutex g_adminTokensMtx;
-static std::unordered_map<std::string, std::int64_t> g_adminTokens; // token → expiry
-
 // ---------------------------------------------------------------------------
 // Update manifest (scanned from update_dir on demand)
 // ---------------------------------------------------------------------------
@@ -97,39 +91,6 @@ static std::vector<UpdateManifestEntry> g_manifest;
 // Per-client force-update set: 64-hex pubkeys flagged for next check.
 static std::mutex g_forceMtx;
 static std::unordered_set<std::string> g_forceUpdateClients;
-
-static std::string generateAdminToken()
-{
-    unsigned char buf[16];
-    RAND_bytes(buf, sizeof(buf));
-    std::string tok = "adm_";
-    tok.reserve(4 + 32);
-    for (auto b : buf)
-    {
-        char hex[3];
-        std::snprintf(hex, sizeof(hex), "%02x", b);
-        tok += hex;
-    }
-    return tok;
-}
-
-static bool checkAdminToken(const std::string &token)
-{
-    if (token.size() < 4 || token.substr(0, 4) != "adm_") return false;
-    const auto now = std::chrono::duration_cast<std::chrono::seconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
-    std::lock_guard<std::mutex> lk(g_adminTokensMtx);
-    auto it = g_adminTokens.find(token);
-    if (it == g_adminTokens.end()) return false;
-    if (now >= it->second) { g_adminTokens.erase(it); return false; }
-    return true;
-}
-
-static void revokeAdminToken(const std::string &token)
-{
-    std::lock_guard<std::mutex> lk(g_adminTokensMtx);
-    g_adminTokens.erase(token);
-}
 
 // Builds /api/summary JSON for the demo server.
 // ---------------------------------------------------------------------------
@@ -1513,29 +1474,9 @@ button{font-family:monospace;font-size:0.82em;padding:5px 14px;border-radius:3px
 .btn-demo-on{background:#0d2010;color:#4c4;border-color:#1a4020}
 .btn-demo-on:hover{background:#152a18;color:#6e6}
 .btn-demo-on:disabled{opacity:0.4;cursor:default}
-/* Password overlay */
-#pwd-overlay{position:fixed;inset:0;background:rgba(10,10,20,0.93);display:flex;align-items:center;justify-content:center;z-index:100}
-.pwd-box{background:#0d0d1a;border:1px solid #3a3a5a;border-radius:6px;padding:28px 32px;min-width:320px}
-.pwd-box h2{font-size:0.95em;color:#7af;margin:0 0 16px}
-.pwd-box input{background:#111118;border:1px solid #3a3a5a;color:#ccc;padding:6px 10px;font-family:monospace;font-size:0.9em;border-radius:3px;width:100%;outline:none;margin-bottom:10px}
-.pwd-box input:focus{border-color:#7af}
-.btn-login{background:#101828;color:#7af;border-color:#3a5a8a;width:100%;padding:7px}
-.btn-login:hover{background:#182040}
-#login-err{color:#c44;font-size:0.8em;min-height:1.2em;margin-bottom:6px}
 </style>
 </head>
 <body>
-
-<!-- Password overlay (legacy mode only — hidden once token is set or WebAuthn session active) -->
-<div id="pwd-overlay" style="display:none">
-  <div class="pwd-box">
-    <h2>&#128274;&nbsp; Admin Authentication</h2>
-    <input type="password" id="login_pwd" placeholder="Admin password" autocomplete="current-password"
-           onkeydown="if(event.key==='Enter')doLogin()">
-    <div id="login-err"></div>
-    <button class="btn-login" onclick="doLogin()">Sign in</button>
-  </div>
-</div>
 
 <div id="main-content">
 <div class="hdr">
@@ -1633,64 +1574,11 @@ function esc(s){
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
-// Admin session token (legacy password mode). Null = rely on WebAuthn cookie.
-let adminToken=sessionStorage.getItem('adminToken')||null;
-
-function authHeaders(){
-  const h={'Content-Type':'application/json'};
-  if(adminToken)h['Authorization']='Bearer '+adminToken;
-  return h;
-}
-function authFetchInit(){
-  const h={};
-  if(adminToken)h['Authorization']='Bearer '+adminToken;
-  return{cache:'no-store',headers:h};
-}
-
-async function doLogin(){
-  const pwd=document.getElementById('login_pwd').value;
-  document.getElementById('login-err').textContent='';
-  if(!pwd)return;
-  try{
-    const r=await fetch('/api/admin/login',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({password:pwd})
-    });
-    const d=await r.json();
-    if(r.ok&&d.ok){
-      adminToken=d.token;
-      sessionStorage.setItem('adminToken',adminToken);
-      document.getElementById('pwd-overlay').style.display='none';
-      loadAll();
-    }else{
-      document.getElementById('login-err').textContent='✗ '+(d.error||'Incorrect password');
-      document.getElementById('login_pwd').value='';
-      document.getElementById('login_pwd').focus();
-    }
-  }catch(e){
-    document.getElementById('login-err').textContent='✗ Request failed: '+esc(e.message);
-  }
-}
-
-function logout(){
-  if(adminToken){
-    navigator.sendBeacon('/api/admin/logout',JSON.stringify({token:adminToken}));
-    sessionStorage.removeItem('adminToken');
-    adminToken=null;
-  }
-}
-
-// On back-link click or beforeunload, revoke token immediately.
-document.getElementById('back-link').addEventListener('click',logout);
-window.addEventListener('beforeunload',logout);
-
 let selectedClient=null;
 
 async function loadClients(){
   try{
-    const r=await fetch('/api/summary',authFetchInit());
-    if(r.status===401){showOverlay();return;}
+    const r=await fetch('/api/summary',{cache:'no-store'});
     if(!r.ok)throw new Error('HTTP '+r.status);
     const d=await r.json();
     // Build manifest lookup: platform → latest entry
@@ -1792,8 +1680,7 @@ async function loadClients(){
 
 async function loadMonitors(){
   try{
-    const r=await fetch('/api/admin/monitors',authFetchInit());
-    if(r.status===401){showOverlay();return;}
+    const r=await fetch('/api/admin/monitors',{cache:'no-store'});
     if(!r.ok)throw new Error('HTTP '+r.status);
     const d=await r.json();
     const now=Math.floor(Date.now()/1000);
@@ -1811,11 +1698,6 @@ async function loadMonitors(){
     document.getElementById('monitors_body').innerHTML=
       '<tr><td colspan="3" style="color:#a33">Error: '+esc(e.message)+'</td></tr>';
   }
-}
-
-function showOverlay(){
-  document.getElementById('pwd-overlay').style.display='flex';
-  setTimeout(()=>document.getElementById('login_pwd').focus(),50);
 }
 
 function selectClient(name){
@@ -1844,11 +1726,10 @@ async function doPurge(){
   try{
     const r=await fetch('/api/admin/purge',{
       method:'POST',
-      headers:authHeaders(),
+      headers:{'Content-Type':'application/json'},
       body:JSON.stringify({client:selectedClient})
     });
     const d=await r.json();
-    if(r.status===401){showOverlay();btn.disabled=false;btn.textContent='Purge Client Data';return;}
     if(r.ok&&d.ok){
       document.getElementById('confirm_panel').style.display='none';
       document.getElementById('result_client').textContent=selectedClient;
@@ -1885,10 +1766,9 @@ async function setDemo(enabled){
   try{
     const r=await fetch('/api/admin/demo',{
       method:'POST',
-      headers:authHeaders(),
+      headers:{'Content-Type':'application/json'},
       body:JSON.stringify({enabled:enabled})
     });
-    if(r.status===401){showOverlay();return;}
     const d=await r.json();
     if(r.ok&&d.ok){updateDemoStatus(d.demo_enabled);}
     else{document.getElementById('demo_err').textContent='✗ '+(d.error||'Unknown error');}
@@ -1907,9 +1787,8 @@ async function doForceUpdate(clientId){
   document.getElementById('msg').textContent='Requesting force update…';
   try{
     const r=await fetch('/api/admin/update/force',{
-      method:'POST',headers:authHeaders(),body:JSON.stringify({pubkey:clientId})
+      method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pubkey:clientId})
     });
-    if(r.status===401){showOverlay();return;}
     const d=await r.json();
     document.getElementById('msg').textContent=
       (r.ok&&d.ok)?'Force update flagged. Agent will update on next daily check.':'✗ '+(d.error||'Error');
@@ -1921,9 +1800,8 @@ async function doScanManifest(){
   document.getElementById('scan_btn').disabled=true;
   try{
     const r=await fetch('/api/admin/update/scan',{
-      method:'POST',headers:authHeaders()
+      method:'POST',headers:{'Content-Type':'application/json'}
     });
-    if(r.status===401){showOverlay();document.getElementById('scan_btn').disabled=false;return;}
     const d=await r.json();
     if(r.ok&&d.ok){
       document.getElementById('scan_msg').textContent='Found '+d.count+' binary(ies).';
@@ -1941,13 +1819,7 @@ async function loadAll(){
   await Promise.all([loadClients(),loadMonitors()]);
 }
 
-// On first load: try fetching without overlay; if 401, show overlay.
-async function init(){
-  const r=await fetch('/api/summary',authFetchInit()).catch(()=>({status:0}));
-  if(r.status===401){showOverlay();}
-  else{loadAll();}
-}
-init();
+loadAll();
 </script>
 </body>
 </html>
@@ -1984,83 +1856,50 @@ void webServerThread(httplib::SSLServer &svr,
                 return httplib::Server::HandlerResponse::Handled;
             }
 
-            if (config.webauthn && config.webauthn->enabled())
+            // WebAuthn passkey session required for all paths except auth endpoints.
+            bool isAuthPath = (path == "/login") ||
+                              (path.size() >= 6 && path.substr(0, 6) == "/auth/") ||
+                              (path == "/.well-known/apple-app-site-association") ||
+                              (path == "/api/demo/begin") ||
+                              // Update endpoints authenticate via pubkey query param.
+                              (path == "/api/update/check") ||
+                              (path == "/api/update/download");
+            if (!isAuthPath)
             {
-                // WebAuthn mode: passkey session required for all paths except the
-                // auth/login paths themselves (Cloudflare Tunnel connects from loopback;
-                // no source-IP restriction needed).
-                bool isAuthPath = (path == "/login") ||
-                                  (path.size() >= 6 && path.substr(0, 6) == "/auth/") ||
-                                  (path == "/.well-known/apple-app-site-association") ||
-                                  (path == "/api/demo/begin") ||
-                                  (path == "/api/admin/login") ||
-                                  (path == "/api/admin/logout") ||
-                                  // Update endpoints authenticate via pubkey query param.
-                                  (path == "/api/update/check") ||
-                                  (path == "/api/update/download");
-                if (!isAuthPath)
+                const std::string token = sessionFromRequest(req);
+
+                // Demo token fast-path — checked before WebAuthn session validation.
+                if (checkDemoToken(token))
                 {
-                    std::string token = sessionFromRequest(req);
-
-                    // Demo token fast-path — checked before WebAuthn session validation.
-                    if (checkDemoToken(token))
+                    // Block admin paths for demo tokens.
+                    if (path.size() >= 11 && path.substr(0, 11) == "/api/admin/")
                     {
-                        // Block admin paths for demo tokens.
-                        if (path.size() >= 11 && path.substr(0, 11) == "/api/admin/")
-                        {
-                            res.status = 403;
-                            res.set_content("{\"error\":\"admin access not available in demo mode\"}\n",
-                                            "application/json");
-                            return httplib::Server::HandlerResponse::Handled;
-                        }
-                        // Valid demo token — let request through to route handlers.
-                        return httplib::Server::HandlerResponse::Unhandled;
-                    }
-
-                    // Admin session token fast-path (legacy password mode only).
-                    // Allows admin API calls without re-submitting the password per-request.
-                    if (checkAdminToken(token))
-                        return httplib::Server::HandlerResponse::Unhandled;
-
-                    if (token.empty() || !config.webauthn->isValidSession(token))
-                    {
-                        bool isApiReq = (path.size() >= 4 && path.substr(0, 4) == "/api") ||
-                                        req.method != "GET";
-                        if (isApiReq)
-                        {
-                            res.status = 401;
-                            res.set_content("{\"error\":\"authentication required\"}\n",
-                                            "application/json");
-                        }
-                        else
-                        {
-                            res.status = 302;
-                            res.set_header("Location", "/login");
-                        }
+                        res.status = 403;
+                        res.set_content("{\"error\":\"admin access not available in demo mode\"}\n",
+                                        "application/json");
                         return httplib::Server::HandlerResponse::Handled;
                     }
-                    // Authenticated dashboard client — record IP for overhead classification.
-                    if (config.dashboard_ips) config.dashboard_ips->add(ip);
+                    return httplib::Server::HandlerResponse::Unhandled;
                 }
-            }
-            else
-            {
-                // Legacy mode: LAN-only access.
-                // /api/admin/login and /api/admin/logout are open (handle auth themselves).
-                const bool isAdminAuth = (path == "/api/admin/login") ||
-                                         (path == "/api/admin/logout") ||
-                                         (path == "/api/demo/begin") ||
-                                         // Update endpoints self-authenticate via pubkey param.
-                                         (path == "/api/update/check") ||
-                                         (path == "/api/update/download");
-                if (!isAdminAuth && !isLanIP(ip))
+
+                if (token.empty() || !config.webauthn->isValidSession(token))
                 {
-                    res.status = 403;
-                    res.set_content("{\"error\":\"forbidden: LAN clients only\"}\n",
-                                    "application/json");
+                    bool isApiReq = (path.size() >= 4 && path.substr(0, 4) == "/api") ||
+                                    req.method != "GET";
+                    if (isApiReq)
+                    {
+                        res.status = 401;
+                        res.set_content("{\"error\":\"authentication required\"}\n",
+                                        "application/json");
+                    }
+                    else
+                    {
+                        res.status = 302;
+                        res.set_header("Location", "/login");
+                    }
                     return httplib::Server::HandlerResponse::Handled;
                 }
-                // LAN dashboard client — record IP for overhead classification.
+                // Authenticated dashboard client — record IP for overhead classification.
                 if (config.dashboard_ips) config.dashboard_ips->add(ip);
             }
 
@@ -2078,17 +1917,13 @@ void webServerThread(httplib::SSLServer &svr,
         res.set_content(kDashboardHtml, "text/html; charset=utf-8");
     });
 
-    // GET /login — passkey login/registration page (WebAuthn mode only)
-    if (config.webauthn && config.webauthn->enabled())
-    {
-        svr.Get("/login", [](const httplib::Request &, httplib::Response &res) {
-            res.set_content(kLoginHtml, "text/html; charset=utf-8");
-        });
-    }
+    // GET /login — passkey login/registration page
+    svr.Get("/login", [](const httplib::Request &, httplib::Response &res) {
+        res.set_content(kLoginHtml, "text/html; charset=utf-8");
+    });
 
-    // GET /admin — embedded admin page
-    const bool adminAvailable = !config.admin_password.empty() ||
-                                 (config.webauthn && config.webauthn->enabled());
+    // GET /admin — embedded admin page (session already verified by pre-routing handler)
+    const bool adminAvailable = (config.webauthn && config.webauthn->enabled());
     if (adminAvailable)
     {
         svr.Get("/admin", [](const httplib::Request &, httplib::Response &res) {
@@ -2111,76 +1946,6 @@ void webServerThread(httplib::SSLServer &svr,
                                              config.server_ips, config.dashboard_ips),
                             "application/json");
         });
-
-    // POST /api/admin/login — validate admin password, issue a 30-minute admin session token.
-    // Only registered in legacy (non-WebAuthn) mode; WebAuthn uses passkey sessions instead.
-    if (!config.webauthn || !config.webauthn->enabled())
-    {
-        svr.Post("/api/admin/login",
-            [&config, &adminRateLimiter](const httplib::Request &req, httplib::Response &res)
-            {
-                if (!adminRateLimiter.tryAcquire(effectiveClientIP(req, config)))
-                {
-                    res.status = 429;
-                    res.set_header("Retry-After", "60");
-                    res.set_content("{\"error\":\"rate limit exceeded\"}\n", "application/json");
-                    return;
-                }
-                if (config.admin_password.empty())
-                {
-                    res.status = 503;
-                    res.set_content("{\"error\":\"admin not configured\"}\n", "application/json");
-                    return;
-                }
-                const std::string password = jsonGetString(req.body, "password");
-                if (password.empty())
-                {
-                    res.status = 400;
-                    res.set_content("{\"error\":\"password required\"}\n", "application/json");
-                    return;
-                }
-                const std::string &stored = config.admin_password;
-                const bool ok = (password.size() == stored.size()) &&
-                                (CRYPTO_memcmp(password.data(), stored.data(), stored.size()) == 0);
-                if (!ok)
-                {
-                    serverLog(LogLevel::Warn,
-                              "ntm-server: admin login REJECTED from %s",
-                              effectiveClientIP(req, config).c_str());
-                    res.status = 401;
-                    res.set_content("{\"error\":\"unauthorized\"}\n", "application/json");
-                    return;
-                }
-                const auto now = std::chrono::duration_cast<std::chrono::seconds>(
-                    std::chrono::system_clock::now().time_since_epoch()).count();
-                const std::string token = generateAdminToken();
-                {
-                    std::lock_guard<std::mutex> lk(g_adminTokensMtx);
-                    // Lazy GC: prune expired tokens on each new login.
-                    for (auto it = g_adminTokens.begin(); it != g_adminTokens.end(); )
-                        it = (now >= it->second) ? g_adminTokens.erase(it) : std::next(it);
-                    g_adminTokens.emplace(token, now + kAdminSessionSec);
-                }
-                serverLog(LogLevel::Info,
-                          "ntm-server: admin login OK from %s",
-                          effectiveClientIP(req, config).c_str());
-                std::string resp = "{\"ok\":true,\"token\":\"";
-                resp += token;
-                resp += "\",\"expires_in\":";
-                resp += std::to_string(kAdminSessionSec);
-                resp += "}\n";
-                res.set_content(resp, "application/json");
-            });
-
-        // POST /api/admin/logout — invalidate an admin session token immediately.
-        svr.Post("/api/admin/logout",
-            [](const httplib::Request &req, httplib::Response &res)
-            {
-                const std::string token = sessionFromRequest(req);
-                if (!token.empty()) revokeAdminToken(token);
-                res.set_content("{\"ok\":true}\n", "application/json");
-            });
-    }
 
     // GET /api/admin/monitors — list active wire agents and recent dashboard clients.
     if (adminAvailable)
@@ -2245,37 +2010,7 @@ void webServerThread(httplib::SSLServer &svr,
                     return;
                 }
 
-                // In legacy mode: accept a valid admin session token (preferred)
-                // or fall back to the legacy per-request password in the body.
-                if (!config.webauthn || !config.webauthn->enabled())
-                {
-                    const std::string token = sessionFromRequest(req);
-                    if (!checkAdminToken(token))
-                    {
-                        // Legacy per-request password fallback (deprecated path).
-                        std::string password = jsonGetString(body, "password");
-                        if (password.empty())
-                        {
-                            res.status = 401;
-                            res.set_content("{\"error\":\"authentication required\"}\n",
-                                            "application/json");
-                            return;
-                        }
-                        const std::string &stored = config.admin_password;
-                        bool pwdOk = (password.size() == stored.size()) &&
-                                     (CRYPTO_memcmp(password.data(), stored.data(), stored.size()) == 0);
-                        if (!pwdOk)
-                        {
-                            serverLog(LogLevel::Warn,
-                                      "ntm-server: admin purge REJECTED from %s (wrong password, client='%s')",
-                                      ip.c_str(), clientName.c_str());
-                            res.status = 401;
-                            res.set_content("{\"error\":\"unauthorized\"}\n", "application/json");
-                            return;
-                        }
-                    }
-                }
-                // In WebAuthn mode: session already verified by pre-routing handler.
+                // Session already verified by pre-routing handler.
 
                 // Resolve display name → hex client ID.
                 // Try nickname reverse lookup first, then accept a raw 64-char hex ID directly.
@@ -2449,31 +2184,7 @@ void webServerThread(httplib::SSLServer &svr,
         svr.Post("/api/admin/demo",
             [&config](const httplib::Request &req, httplib::Response &res)
             {
-                // In legacy mode: accept admin session token or legacy per-request password.
-                if (!config.webauthn || !config.webauthn->enabled())
-                {
-                    const std::string token = sessionFromRequest(req);
-                    if (!checkAdminToken(token))
-                    {
-                        std::string password = jsonGetString(req.body, "password");
-                        if (password.empty())
-                        {
-                            res.status = 401;
-                            res.set_content("{\"error\":\"authentication required\"}\n",
-                                            "application/json");
-                            return;
-                        }
-                        const std::string &stored = config.admin_password;
-                        bool pwdOk = (password.size() == stored.size()) &&
-                                     (CRYPTO_memcmp(password.data(), stored.data(), stored.size()) == 0);
-                        if (!pwdOk)
-                        {
-                            res.status = 401;
-                            res.set_content("{\"error\":\"unauthorized\"}\n", "application/json");
-                            return;
-                        }
-                    }
-                }
+                // Session already verified by pre-routing handler.
 
                 // Parse {"enabled": true|false}
                 const std::string &body = req.body;
@@ -2544,7 +2255,7 @@ void webServerThread(httplib::SSLServer &svr,
             res.set_content(resp, "application/json");
         });
 
-    // WebAuthn authentication endpoints (only registered when WebAuthn is enabled).
+    // WebAuthn authentication endpoints.
     if (config.webauthn && config.webauthn->enabled())
     {
         // GET /auth/register/begin — server returns challenge + PBKDF2 params
