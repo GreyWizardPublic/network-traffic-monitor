@@ -18,7 +18,7 @@ final class AuthViewModel {
     private var lastPinner: CertificatePinner?
     private var isDemoSession = false
 
-    private static let demoServerURL = "https://ntm.happyhomelives.me:12345"
+    private static let demoServerURL = "https://ntm.happyhomelives.me:8443"
 
     init() {
         let cfg = ServerConfig.load()
@@ -149,25 +149,40 @@ final class AuthViewModel {
         untrustedCertFingerprint = nil
         defer { isLoading = false }
 
-        guard let url = URL(string: Self.demoServerURL + "/api/summary") else { return }
+        guard let url = URL(string: Self.demoServerURL + "/api/demo/begin") else { return }
 
-        // Use CertificatePinner with no pin — accepts the demo server's own CA-signed cert
+        // Use CertificatePinner with no pin — accepts the demo server's CA-signed cert
         // without being affected by any cert the user has pinned for their own server.
         let pinner = CertificatePinner(pinnedCertData: nil)
         lastPinner = pinner
         let session = URLSession(configuration: .ephemeral, delegate: pinner, delegateQueue: nil)
 
+        var req = URLRequest(url: url, timeoutInterval: 10)
+        req.httpMethod = "POST"
+
         do {
-            let (_, response) = try await session.data(from: url)
+            let (data, response) = try await session.data(for: req)
             guard let http = response as? HTTPURLResponse else {
                 demoUnavailable = true
                 return
             }
             guard http.statusCode == 200 else {
                 demoUnavailable = true
-                demoErrorDetail = "HTTP \(http.statusCode)"
+                demoErrorDetail = http.statusCode == 503 ? "Demo server is disabled by operator" : "HTTP \(http.statusCode)"
                 return
             }
+            guard let decoded = try? JSONDecoder().decode(DemoBeginResponse.self, from: data),
+                  !decoded.token.isEmpty else {
+                demoUnavailable = true
+                demoErrorDetail = "Unexpected server response"
+                return
+            }
+            KeychainService.saveToken(decoded.token, for: Self.demoServerURL)
+            var cfg = ServerConfig.load()
+            cfg.serverURL = Self.demoServerURL
+            cfg.save()
+            isDemoSession = true
+            isAuthenticated = true
         } catch {
             if isCertError(error), let cert = lastPinner?.lastSeenCert {
                 capturedCert = cert
@@ -176,14 +191,7 @@ final class AuthViewModel {
                 demoUnavailable = true
                 demoErrorDetail = (error as NSError).localizedDescription
             }
-            return
         }
-
-        var cfg = ServerConfig.load()
-        cfg.serverURL = Self.demoServerURL
-        cfg.save()
-        isDemoSession = true
-        isAuthenticated = true
     }
 
     func logout() async {
@@ -383,6 +391,18 @@ private struct LoginCompleteBody: Encodable {
 private struct LoginCompleteResponse: Decodable {
     let ok: Bool
     let token: String?
+}
+
+private struct DemoBeginResponse: Decodable {
+    let ok: Bool
+    let token: String
+    let expiresIn: Int
+
+    enum CodingKeys: String, CodingKey {
+        case ok
+        case token
+        case expiresIn = "expires_in"
+    }
 }
 
 // MARK: - Base64URL helpers
