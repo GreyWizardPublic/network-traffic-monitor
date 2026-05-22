@@ -25,7 +25,7 @@ struct ClientConfig
     unsigned reconnectIntervalSec{60};
     // Auto-update: check for new binary via server HTTPS API once per day.
     bool auto_update{false};            // default off; opt-in via config
-    std::uint16_t update_port{8443};    // server's HTTPS API port (web_port)
+    std::uint16_t web_port{8443};       // server's HTTPS API port (matches server web_port)
 };
 
 // Load from one config file (key=value, # comment). Returns defaults for missing keys. Returns false if file missing.

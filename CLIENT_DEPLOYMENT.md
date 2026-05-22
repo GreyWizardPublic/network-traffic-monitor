@@ -657,8 +657,8 @@ Add the following to the client config file:
 # Enable automatic binary updates (opt-in, default: false)
 auto_update = true
 
-# HTTPS API port on the server (must match web_port in server config; default: 8443)
-update_port = 8443
+# HTTPS API port — must match web_port in server config (default: 8443)
+web_port = 8443
 ```
 
 The client uses the same `server`, `server_cert`, and `ca` settings already configured for
@@ -856,7 +856,7 @@ All keys are set in the config file (`key = value`) or overridden by CLI flags.
 | `reconnect_attempts` | `--reconnect-attempts` | `10` | Max consecutive reconnect failures before exit (1–1000) |
 | `reconnect_interval_sec` | `--reconnect-interval` | `60` | Seconds between reconnect attempts (1–3600) |
 | `auto_update` | — | `false` | Enable daily binary self-update check (opt-in) |
-| `update_port` | — | `8443` | Server HTTPS API port used for update checks (must match server `web_port`) |
+| `web_port` | — | `8443` | Server HTTPS API port for update checks — same key and default as `web_port` in the server config |
 | `verbose` | `--verbose` | `false` | Enable verbose logging |
 
 Precedence: **CLI flags** > **config file** > **built-in defaults**.
