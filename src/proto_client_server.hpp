@@ -12,7 +12,13 @@ namespace ntm
 
 // Wire protocol version (integer). Bump when any line format, field count, or
 // connection-lifecycle rule changes. See docs/wire-protocol.md § 6.
+// Lockstep consumers: ntm-server, ntm-client (C++), NTMClient (iOS).
 inline constexpr unsigned kWireProtoVersion = 1;
+
+// HTTPS API protocol version (integer). Bump when endpoint schemas change.
+// See docs/api-protocol.md § 5 for change classification rules.
+// Lockstep consumers: ntm-server, NTMDashboard (iOS), embedded web dashboard.
+inline constexpr unsigned kApiVersion = 4;
 
 // Default TCP port for client→server data ingestion connections.
 inline constexpr std::uint16_t kDefaultPort = 5555;
