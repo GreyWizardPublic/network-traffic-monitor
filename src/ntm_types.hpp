@@ -23,6 +23,7 @@
 #include <syslog.h>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace ntm
 {
@@ -119,19 +120,38 @@ struct AllowedClientsStore
 // serialisation time to classify entity flows as overhead vs. regular traffic.
 struct MonitoringIpSet
 {
+    struct Entry { std::string ip; std::int64_t lastSeen{0}; };
+
     mutable std::mutex mtx;
-    std::unordered_set<std::string> ips;
+    std::unordered_map<std::string, std::int64_t> ips; // ip → last_seen epoch
 
     void add(const std::string &ip)
     {
+        const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
         std::lock_guard<std::mutex> lk(mtx);
-        ips.insert(ip);
+        ips[ip] = now;
     }
 
-    std::unordered_set<std::string> snapshot() const
+    // Returns IP → last_seen pairs (copy under lock).
+    std::vector<Entry> snapshot() const
     {
         std::lock_guard<std::mutex> lk(mtx);
-        return ips;
+        std::vector<Entry> out;
+        out.reserve(ips.size());
+        for (const auto &kv : ips)
+            out.push_back({kv.first, kv.second});
+        return out;
+    }
+
+    // Returns just the IP strings as an unordered_set (for fast membership tests).
+    std::unordered_set<std::string> ipSet() const
+    {
+        std::lock_guard<std::mutex> lk(mtx);
+        std::unordered_set<std::string> out;
+        out.reserve(ips.size());
+        for (const auto &kv : ips) out.insert(kv.first);
+        return out;
     }
 };
 
