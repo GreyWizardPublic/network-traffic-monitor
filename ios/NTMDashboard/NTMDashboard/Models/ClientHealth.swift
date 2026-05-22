@@ -11,6 +11,8 @@ struct ClientHealth: Codable, Identifiable, Sendable {
     let stale: Bool
     let wireProtoVersion: Int?
     let wireProtoOk: Bool?
+    let clientId: String?
+    let platform: String?
 
     var id: String { client }
 
@@ -25,5 +27,7 @@ struct ClientHealth: Codable, Identifiable, Sendable {
         case stale
         case wireProtoVersion = "wire_proto_version"
         case wireProtoOk     = "wire_proto_ok"
+        case clientId        = "client_id"
+        case platform
     }
 }
