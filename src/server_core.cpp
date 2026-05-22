@@ -1858,7 +1858,6 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                     webCfg.rate_limit_rpm   = config.web_rate_limit_rpm;
                     webCfg.max_entity_lines = config.max_entity_lines_in_summary;
                     webCfg.client_nicknames = clientsStore->nicknames;
-                    webCfg.admin_password   = adminPassword;
                     webCfg.registry         = clientRegistry;
                     webCfg.webauthn         = webAuthnRP;
                     webCfg.clients_store    = clientsStore;
@@ -1867,10 +1866,11 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                     webCfg.update_dir       = config.update_dir;
                     webCfg.trusted_proxy    = config.trusted_proxy;
 
-                    webThread = std::thread(webServerThread,
-                                            std::ref(*webSvr),
-                                            std::ref(stats),
-                                            webCfg);
+                    if (webSvr)
+                        webThread = std::thread(webServerThread,
+                                                std::ref(*webSvr),
+                                                std::ref(stats),
+                                                webCfg);
 
                     // Demo server — same cert/key, fixed port kDemoPort (12345).
                     // Disabled by default; operator enables via admin page.
@@ -1890,7 +1890,15 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                         demoSvr.reset();
                     }
 
-                    if (webAuthnRP && webAuthnRP->enabled())
+                    if (!webAuthnRP || !webAuthnRP->enabled())
+                    {
+                        serverLog(LogLevel::Err,
+                                  "ntm-server: web dashboard requires WebAuthn mode "
+                                  "(webauthn_rp_id not configured) — web server disabled");
+                        webSvr->stop();
+                        webSvr.reset();
+                    }
+                    else
                     {
                         serverLog(LogLevel::Warn,
                                   "ntm-server: HTTPS web dashboard on %s:%u "
@@ -1898,17 +1906,6 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                                   config.web_bind.c_str(),
                                   static_cast<unsigned>(config.web_port),
                                   config.web_rate_limit_rpm);
-                    }
-                    else
-                    {
-                        serverLog(LogLevel::Warn,
-                                  "ntm-server: HTTPS web dashboard on %s:%u "
-                                  "(LAN-only, rate-limit %u rpm)",
-                                  config.web_bind.c_str(),
-                                  static_cast<unsigned>(config.web_port),
-                                  config.web_rate_limit_rpm);
-                        serverLog(LogLevel::Warn,
-                                  "ntm-server: web dashboard access restricted to LAN IPs only");
                     }
                     if (!config.trusted_proxy.empty())
                         serverLog(LogLevel::Warn,

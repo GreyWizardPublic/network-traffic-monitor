@@ -54,21 +54,12 @@ key=/etc/ntm-server/server_key.pem
 # is handled by passkey sessions). Binding tightly here is your main perimeter.
 web_bind=127.0.0.1
 
-# Optional static bearer token.  When set, every web request must include:
-#   Authorization: Bearer <token>
-# Requests without a valid token receive HTTP 401.
-# If unset, access is limited to LAN IPs + HTTPS only (no per-user auth).
-# Recommended for any deployment where other users share the LAN.
-# web_token=
-
 # Max web requests per IP per minute (0 = unlimited). Default 30.
 # web_rate_limit_rpm=30
 
-# Trusted reverse-proxy IP address. When set, HTTP connections arriving from this
-# IP are trusted to carry the real client IP in CF-Connecting-IP (Cloudflare) or
-# X-Forwarded-For. Set to 127.0.0.1 when using Cloudflare Tunnel (cloudflared
-# running on the same host). Leave unset for direct LAN access.
-# Requires WebAuthn mode — legacy LAN-only mode does not support Cloudflare Tunnel.
+# Trusted reverse-proxy IP for real-client-IP extraction via CF-Connecting-IP / X-Forwarded-For.
+# Set to 127.0.0.1 when using Cloudflare Tunnel (cloudflared on the same host) so each
+# browser gets its own rate-limit bucket instead of sharing 127.0.0.1.
 # trusted_proxy=127.0.0.1
 
 # ── Aggregation ──────────────────────────────────────────────────────────────

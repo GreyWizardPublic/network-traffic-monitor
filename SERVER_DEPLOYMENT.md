@@ -201,29 +201,6 @@ ip_db_auto_update          = true
 ip_db_update_interval_days = 7
 ```
 
-### Minimal config — legacy LAN mode
-
-```ini
-# /etc/ntm-server/ntm-server.conf
-
-port            = 5555
-cert            = /etc/ntm-server/server_cert.pem
-key             = /etc/ntm-server/server_key.pem
-allowed_keys    = /etc/ntm-server/allowed_clients.txt
-
-web_port        = 8443
-
-aggregation_window_days = 7
-ip_db_path                 = /var/lib/ntm-server/ip2asn-combined.tsv.gz
-ip_db_auto_update          = true
-ip_db_update_interval_days = 7
-```
-
-> **Note:** In legacy mode the web dashboard is open to any LAN client — no
-> authentication is applied beyond the RFC 1918 source-IP filter. Use WebAuthn
-> mode for any deployment where the dashboard should not be freely accessible
-> to all LAN hosts.
-
 **Key precedence:** command-line flags override config file values, which override built-in
 defaults.
 
@@ -243,17 +220,17 @@ Expected startup output on stderr:
 - Confirmation that the TLS cert/key loaded successfully.
 - Number of allowed Ed25519 keys loaded.
 - IP database loaded, or a download triggered if the cache file is missing.
-- In WebAuthn mode: `admin password migrated to PBKDF2 and plaintext file erased` (first run only).
+- `admin password migrated to PBKDF2 and plaintext file erased` (first run only, WebAuthn bootstrap).
 - Listening ports for ingestion and the web dashboard.
 
 If `cert`, `key`, or `allowed_keys` are missing the server exits immediately with an error
-before opening any port.
+before opening any port. If `webauthn_rp_id` is not configured the web dashboard is disabled
+with an error log — WebAuthn mode is required.
 
 **Accessing the dashboard after first run:**
 
-- **WebAuthn mode:** open `https://ntm.example.com` (your tunnel domain). The server is
-  bound to `127.0.0.1`, so `https://<server-ip>:8443` will not work.
-- **Legacy LAN mode:** open `https://<server-ip>:8443` from any device on the same LAN.
+Open `https://ntm.example.com` (your Cloudflare Tunnel domain). The server is bound to
+`127.0.0.1`, so `https://<server-ip>:8443` will not work directly.
 
 Press `Ctrl+C` to stop. If no errors appear, proceed to daemon mode.
 
@@ -381,89 +358,42 @@ aggregation continues normally.
 
 ## 11. Web dashboard access
 
-### WebAuthn mode
+Open `https://ntm.example.com` (your Cloudflare Tunnel domain) from any device. The server
+redirects unauthenticated visits to `/login` automatically. Since the server is bound to
+`127.0.0.1`, it is **not** reachable directly via `https://<server-ip>:8443` — all access
+goes through the tunnel.
 
-Open `https://ntm.example.com` (your Cloudflare Tunnel or reverse-proxy domain) from any
-device. The server redirects unauthenticated visits to `/login` automatically.
+The dashboard requires WebAuthn (passkey) authentication. If `webauthn_rp_id` is not
+configured, the web server will not start.
 
-Since the server is bound to `127.0.0.1`, it is **not** reachable directly via
-`https://<server-ip>:8443` — all access goes through the tunnel.
+### Access controls
 
-### Legacy LAN mode
-
-Navigate to `https://<server-ip>:8443` from any device on the LAN.
-
-The page auto-refreshes every 30 seconds and shows:
-
-- **Interfaces** — per-client, per-interface packet and byte totals over the aggregation window.
-- **Entity flows** — top (src ASN, dst ASN) pairs sorted by bytes.
-
-### Access controls summary
-
-| Control | WebAuthn mode | Legacy mode |
-|---|---|---|
-| HTTPS (TLS) | Always enforced (mandatory) | Always enforced (mandatory) |
-| RFC 1918 LAN-only IP filter | **Bypassed** — authentication handled by passkey session | Always enforced |
-| Passkey session | Required for all protected endpoints | Not available |
-| Rate limiting | 30 req/min per real client IP (configurable via `web_rate_limit_rpm`) | Same |
+| Control | Behaviour |
+|---|---|
+| HTTPS (TLS) | Always enforced (mandatory) |
+| Passkey session | Required for all endpoints except `/login`, `/auth/*`, `/api/demo/begin`, `/api/update/*` |
+| Rate limiting | 30 req/min per real client IP (configurable via `web_rate_limit_rpm`) |
+| Admin endpoints | Covered by the same passkey session — no separate password required |
 
 ### Cloudflare Tunnel and multi-device sessions
 
 When using Cloudflare Tunnel (`web_bind=127.0.0.1`), all browser connections arrive at
-the server from `127.0.0.1` (the cloudflared process on the same host). Without
-additional configuration the rate limiter and dashboard overhead tracker treat every
-browser on every device as the same client — one device's request burst can exhaust
-the rate limit for another device.
+the server from `127.0.0.1`. Without additional configuration the rate limiter and dashboard
+overhead tracker treat every browser on every device as the same client.
 
-Add `trusted_proxy=127.0.0.1` to the config file to fix this:
+Add `trusted_proxy=127.0.0.1` to read the real client IP from `CF-Connecting-IP`:
 
 ```ini
 trusted_proxy=127.0.0.1
 ```
 
-With this setting, the server reads the real client IP from the `CF-Connecting-IP`
-header (set by Cloudflare) on every request that arrives from `127.0.0.1`. If
-`CF-Connecting-IP` is absent it falls back to the first entry of `X-Forwarded-For`.
-Requests that do **not** arrive from the trusted proxy IP are never affected — the
-header values are ignored and `remote_addr` is used directly, preventing spoofing.
-
-**This requires WebAuthn mode.** Legacy LAN-only mode relies on source-IP filtering
-(`isLanIP`) to grant access; when `trusted_proxy` is active the real (external) client
-IP is used for that check, so external browsers correctly receive 403. There is no
-way to use Cloudflare Tunnel with legacy mode — use WebAuthn mode instead.
-
 ### Admin data purge
 
 An admin page at `https://<host>/admin` lets an operator permanently purge all historical
-traffic data for a selected client.
+traffic data for a selected client. It is protected by the existing passkey session — no
+separate password is required.
 
-**WebAuthn mode:** no password entry required — the existing passkey session is sufficient.
-Navigate to `/admin` after signing in.
-
-**Legacy mode:** the feature is disabled (returns 404) unless `admin_password_file` is
-configured. To set up:
-
-```bash
-# Write a strong password into the file (no quotes, no newline issues)
-echo "your-strong-admin-password" | sudo tee /etc/ntm-server/admin_password > /dev/null
-sudo chown ntm-server:ntm-server /etc/ntm-server/admin_password
-sudo chmod 600 /etc/ntm-server/admin_password
-```
-
-Add to the config file:
-
-```ini
-admin_password_file = /etc/ntm-server/admin_password
-```
-
-The server reads the first line of the file at startup and stores it in memory.
-The admin password is **stored as plain text** in the file and protected solely by
-filesystem permissions (`chmod 600`). In WebAuthn mode, set up `admin_password_file`
-only temporarily to bootstrap — it is migrated to PBKDF2 and the plaintext erased on
-first start.
-
-**Rate limiting:** the `/api/admin/purge` endpoint has a stricter rate limit of
-5 requests per minute per IP.
+**Rate limiting:** admin endpoints have a stricter rate limit of 5 requests per minute per IP.
 
 ---
 
@@ -577,16 +507,14 @@ closed and the client reconnects with fresh session keys.
 - [ ] TLS configured: `cert` and `key` set (mandatory — server refuses to start without them)
 - [ ] Ed25519 auth configured: `allowed_keys` set (mandatory — server refuses to start without it)
 - [ ] Each client started with `--identity` matching a key in `allowed_clients.txt`
-- [ ] `web_bind` set to `127.0.0.1` (Cloudflare Tunnel / WebAuthn deployment) or the server's LAN IP — do **not** leave as `0.0.0.0` in WebAuthn mode; the LAN-only source-IP filter is bypassed when WebAuthn is active
-- [ ] **Cloudflare Tunnel:** `trusted_proxy=127.0.0.1` set so each browser gets its own rate-limit bucket (requires WebAuthn mode)
+- [ ] `web_bind` set to `127.0.0.1` — server is bound to loopback; all access via Cloudflare Tunnel
+- [ ] `trusted_proxy=127.0.0.1` set so each browser gets its own rate-limit bucket
 - [ ] `web_port` additionally blocked at the firewall from reaching the internet
 - [ ] `client_bind` set to the server's LAN IP (or `127.0.0.1` if all clients are local) rather than `0.0.0.0`
 - [ ] `port` (ingestion) additionally blocked at the firewall unless remote clients are used
-- [ ] **WebAuthn mode:** `webauthn_rp_id`, `webauthn_credentials_file`, and `webauthn_admin_cred_file` all set
-- [ ] **WebAuthn mode:** `webauthn-admin.json` and `webauthn-credentials.json` owned by service account with `chmod 600`
-- [ ] **WebAuthn mode:** admin password migration confirmed in `journalctl` on first start (`admin password migrated to PBKDF2 and plaintext file erased`)
-- [ ] **Legacy mode:** if admin interface enabled, `admin_password` file is `chmod 600`, owned by service account
-- [ ] **Legacy mode:** admin password file excluded from backups or backup ACLs restricted (plain-text storage)
+- [ ] `webauthn_rp_id`, `webauthn_credentials_file`, and `webauthn_admin_cred_file` all set
+- [ ] `webauthn-admin.json` and `webauthn-credentials.json` owned by service account with `chmod 600`
+- [ ] Admin password migration confirmed in `journalctl` on first start (`admin password migrated to PBKDF2 and plaintext file erased`)
 - [ ] `server_key.pem` permissions are `640` (owner `ntm-server`, group `ntm-server`)
 - [ ] TLS certificate expiry reminder set (self-signed default is 365 days)
 - [ ] `ip_db_auto_update=true` or a cron job in place to refresh the ASN database
@@ -605,8 +533,9 @@ closed and the client reconnects with fresh session keys.
 - Confirm `cert` and `key` are correctly set and the files are readable by the service user.
 - Use `https://` not `http://` in the browser address bar.
 - For self-signed certs, import or accept the certificate in the browser first.
-- In WebAuthn mode, use the tunnel domain URL (`https://ntm.example.com`), not the server IP
-  directly — the server is bound to `127.0.0.1` and is not reachable on the LAN interface.
+- Use the tunnel domain URL (`https://ntm.example.com`), not the server IP directly — the
+  server is bound to `127.0.0.1` and is not reachable on the LAN interface.
+- If the log shows `web dashboard requires WebAuthn mode`, add `webauthn_rp_id` to the config.
 
 **`allowed_keys` set but 0 keys loaded at startup**
 - Check the file path and that the server process can read it.
