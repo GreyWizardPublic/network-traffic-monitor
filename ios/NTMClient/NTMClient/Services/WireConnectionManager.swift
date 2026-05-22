@@ -128,7 +128,7 @@ final class WireViewModel {
             if elapsed >= Double(kMaxSessionSec) - 60 { return }
 
             try await client.sendLine(
-                "H pcap_recv=\(packetsSent) pcap_drop=0 buf_drop=0 ver=\(kClientVersion)"
+                "H pcap_recv=\(packetsSent) pcap_drop=0 buf_drop=0 ver=\(kClientVersion) wire_proto=\(kWireProtoVersion)"
             )
 
             // Sleep in small chunks so task cancellation is responsive.

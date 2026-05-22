@@ -286,6 +286,7 @@ private:
                         + " pcap_drop=" + std::to_string(totalPcapDrop_.load(std::memory_order_relaxed))
                         + " buf_drop="  + std::to_string(sendBufDrops_.load(std::memory_order_relaxed))
                         + " ver=" + kClientVersion
+                        + " wire_proto=" + std::to_string(kWireProtoVersion)
                         + "\n";
                     if (!platform::writeExact(ssl_, fd_, hLine.data(), hLine.size()))
                         closeUnlocked();

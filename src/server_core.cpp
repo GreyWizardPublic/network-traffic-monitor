@@ -1214,9 +1214,10 @@ void connectionThread(int clientFd,
                         char *endp = nullptr;
                         auto n = std::strtoull(v.c_str(), &endp, 10);
                         if (endp == v.c_str()) continue;
-                        if      (k == "pcap_recv") hs.pcapRecv = static_cast<std::uint64_t>(n);
-                        else if (k == "pcap_drop") hs.pcapDrop = static_cast<std::uint64_t>(n);
-                        else if (k == "buf_drop")  hs.bufDrop  = static_cast<std::uint64_t>(n);
+                        if      (k == "pcap_recv")   hs.pcapRecv         = static_cast<std::uint64_t>(n);
+                        else if (k == "pcap_drop")   hs.pcapDrop         = static_cast<std::uint64_t>(n);
+                        else if (k == "buf_drop")    hs.bufDrop          = static_cast<std::uint64_t>(n);
+                        else if (k == "wire_proto")  hs.wireProtoVersion = static_cast<unsigned>(n);
                     }
                     std::lock_guard<std::mutex> lk(registry->mtx);
                     registry->clientHealth[clientId] = hs;
