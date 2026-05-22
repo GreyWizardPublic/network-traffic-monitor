@@ -21,6 +21,7 @@
 #include <vector>
 
 #include <openssl/crypto.h>   // CRYPTO_memcmp
+#include <openssl/rand.h>     // RAND_bytes
 
 namespace ntm
 {
@@ -37,6 +38,38 @@ static std::atomic<bool> g_demoEnabled{false};
 // Set on first request; auto-resets after kDemoSessionSec so a fresh
 // reviewer always gets a full 15-minute window.
 static std::atomic<std::int64_t> g_demoSessionStart{0};
+
+// In-memory store of active demo tokens: token → expiry epoch (seconds).
+static std::mutex g_demoTokensMtx;
+static std::unordered_map<std::string, std::int64_t> g_demoTokens;
+
+static std::string generateDemoToken()
+{
+    unsigned char buf[16];
+    RAND_bytes(buf, sizeof(buf));
+    std::string tok = "demo_";
+    tok.reserve(5 + 32);
+    for (auto b : buf)
+    {
+        char hex[3];
+        std::snprintf(hex, sizeof(hex), "%02x", b);
+        tok += hex;
+    }
+    return tok;
+}
+
+// Returns true if token is a valid, unexpired demo token. Lazily prunes expired entries.
+static bool checkDemoToken(const std::string &token)
+{
+    if (token.size() < 5 || token.substr(0, 5) != "demo_") return false;
+    const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    std::lock_guard<std::mutex> lk(g_demoTokensMtx);
+    auto it = g_demoTokens.find(token);
+    if (it == g_demoTokens.end()) return false;
+    if (now >= it->second) { g_demoTokens.erase(it); return false; }
+    return true;
+}
 
 // Builds /api/summary JSON for the demo server.
 // Schema MUST mirror buildSummaryJson() — update whenever that function changes.
@@ -1376,10 +1409,28 @@ void webServerThread(httplib::SSLServer &svr,
                 // no source-IP restriction needed).
                 bool isAuthPath = (path == "/login") ||
                                   (path.size() >= 6 && path.substr(0, 6) == "/auth/") ||
-                                  (path == "/.well-known/apple-app-site-association");
+                                  (path == "/.well-known/apple-app-site-association") ||
+                                  (path == "/api/demo/begin");
                 if (!isAuthPath)
                 {
                     std::string token = sessionFromRequest(req);
+
+                    // Demo token fast-path — checked before WebAuthn session validation.
+                    if (checkDemoToken(token))
+                    {
+                        // Block admin paths for demo tokens.
+                        if (path.size() >= 11 && path.substr(0, 11) == "/api/admin/")
+                        {
+                            res.status = 403;
+                            res.set_content("{\"error\":\"admin access not available in demo mode\"}\n",
+                                            "application/json");
+                            return httplib::Server::HandlerResponse::Handled;
+                        }
+                        // Valid demo token — let request through to route handlers.
+                        // Route handlers check checkDemoToken() themselves for data isolation.
+                        return httplib::Server::HandlerResponse::Unhandled;
+                    }
+
                     if (token.empty() || !config.webauthn->isValidSession(token))
                     {
                         bool isApiReq = (path.size() >= 4 && path.substr(0, 4) == "/api") ||
@@ -1449,8 +1500,14 @@ void webServerThread(httplib::SSLServer &svr,
 
     // GET /api/summary — JSON snapshot of aggregated traffic
     svr.Get("/api/summary",
-        [&stats, &config](const httplib::Request &, httplib::Response &res) {
+        [&stats, &config](const httplib::Request &req, httplib::Response &res) {
             res.set_header("Cache-Control", "no-store");
+            // Demo session — return mock data, never expose real traffic stats.
+            if (checkDemoToken(sessionFromRequest(req)))
+            {
+                res.set_content(buildDemoSummaryJson(), "application/json");
+                return;
+            }
             res.set_content(buildSummaryJson(stats, config.max_entity_lines,
                                              config.client_nicknames, config.registry,
                                              config.server_ips, config.dashboard_ips),
@@ -1740,6 +1797,40 @@ void webServerThread(httplib::SSLServer &svr,
                 res.set_content(resp, "application/json");
             });
     }
+
+    // POST /api/demo/begin — issue a short-lived demo session token (no auth required).
+    // Requires demo mode to be enabled by the operator via POST /api/admin/demo.
+    svr.Post("/api/demo/begin",
+        [](const httplib::Request &req, httplib::Response &res)
+        {
+            if (!g_demoEnabled.load(std::memory_order_relaxed))
+            {
+                res.status = 503;
+                res.set_content("{\"error\":\"demo is disabled\"}\n", "application/json");
+                return;
+            }
+            const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+            const std::string token = generateDemoToken();
+            {
+                std::lock_guard<std::mutex> lk(g_demoTokensMtx);
+                // Lazy GC: prune expired tokens on each issuance.
+                for (auto it = g_demoTokens.begin(); it != g_demoTokens.end(); )
+                    it = (now >= it->second) ? g_demoTokens.erase(it) : std::next(it);
+                g_demoTokens.emplace(token, now + kDemoSessionSec);
+            }
+            // Reset demo session window so mock data timestamps look fresh.
+            g_demoSessionStart.store(0, std::memory_order_relaxed);
+            serverLog(LogLevel::Warn, "ntm-server: demo token issued to %s",
+                      req.remote_addr.c_str());
+
+            std::string resp = "{\"ok\":true,\"token\":\"";
+            resp += token;
+            resp += "\",\"expires_in\":";
+            resp += std::to_string(kDemoSessionSec);
+            resp += "}\n";
+            res.set_content(resp, "application/json");
+        });
 
     // WebAuthn authentication endpoints (only registered when WebAuthn is enabled).
     if (config.webauthn && config.webauthn->enabled())
