@@ -157,7 +157,9 @@ bool verifyServerIdentityAndPin(SSL *ssl, const std::string &host,
 bool performClientAuth(void *sslVoid, std::uintptr_t rawFd,
                        const std::string &identityPath,
                        bool isDaemon, bool verbose,
-                       std::string *errOut)
+                       std::string *errOut,
+                       bool requestCompression,
+                       std::uint8_t *negotiatedCapsOut)
 {
     auto setErr = [&](const char *msg) { if (errOut) *errOut = msg; };
     if (identityPath.empty()) return true;
@@ -201,7 +203,10 @@ bool performClientAuth(void *sslVoid, std::uintptr_t rawFd,
         return false;
     }
 
-    std::uint8_t version = static_cast<std::uint8_t>(kAuthVersionV2);
+    // Auth v3: send version, receive nonce, send pubkey+sig+caps, receive result+neg_caps.
+    // Old servers that only know v2 will reject this; for a mixed fleet the operator must
+    // update the server first (it accepts both v2 and v3 after this upgrade).
+    std::uint8_t version = static_cast<std::uint8_t>(kAuthVersionV3);
     if (!platform::writeExact(ssl, fd, &version, 1))
     {
         setErr("failed to send auth version");
@@ -239,9 +244,18 @@ bool performClientAuth(void *sslVoid, std::uintptr_t rawFd,
         return false;
     }
 
-    std::uint8_t msg[kAuthPubkeyLen + kAuthSignatureLen];
+    // Build auth message: pubkey (32B) + sig (64B) + capability byte (1B).
+    // kCapZlib requests zlib compression on the data phase.
+    // On Windows, no zlib is linked, so always send kCapNone.
+#ifdef _WIN32
+    const std::uint8_t clientCaps = kCapNone;
+#else
+    const std::uint8_t clientCaps = requestCompression ? kCapZlib : kCapNone;
+#endif
+    std::uint8_t msg[kAuthPubkeyLen + kAuthSignatureLen + 1];
     std::memcpy(msg, pubkey, kAuthPubkeyLen);
     std::memcpy(msg + kAuthPubkeyLen, sig, kAuthSignatureLen);
+    msg[kAuthPubkeyLen + kAuthSignatureLen] = clientCaps;
 
     if (!platform::writeExact(ssl, fd, msg, sizeof(msg)))
     {
@@ -249,6 +263,7 @@ bool performClientAuth(void *sslVoid, std::uintptr_t rawFd,
         return false;
     }
 
+    // Read auth result.
     std::uint8_t result = 0xff;
     if (!platform::readExact(ssl, fd, &result, 1) || result != kAuthResultOk)
     {
@@ -256,6 +271,15 @@ bool performClientAuth(void *sslVoid, std::uintptr_t rawFd,
         std::cerr << "ntm-client: server rejected authentication\n";
         return false;
     }
+
+    // v3: read the server's negotiated capability byte.
+    std::uint8_t negotiatedCaps = kCapNone;
+    if (!platform::readExact(ssl, fd, &negotiatedCaps, 1))
+    {
+        setErr("failed to read negotiated capabilities from server");
+        return false;
+    }
+    if (negotiatedCapsOut) *negotiatedCapsOut = negotiatedCaps;
     return true;
 }
 
@@ -373,6 +397,14 @@ static bool parseConfigLine(const std::string &key, const std::string &val,
             unsigned long n = std::stoul(v);
             out.aggMaxFlows = static_cast<std::uint32_t>(std::clamp(n, 100ul, 1000000ul));
         } catch (const std::exception &) {}
+        return true;
+    }
+    if (key == "compress")
+    {
+        std::string lower = v;
+        std::transform(lower.begin(), lower.end(), lower.begin(),
+                       [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+        out.useCompression = !(lower == "0" || lower == "false" || lower == "no");
         return true;
     }
     return false;

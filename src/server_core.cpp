@@ -54,6 +54,7 @@
 #include <functional>
 
 #include "ip_range_resolver.hpp"
+#include "zlib_stream.hpp"
 
 namespace ntm
 {
@@ -464,8 +465,13 @@ static bool writeExact(SSL *ssl, int fd, const void *buf, std::size_t n)
 // Verify auth message and return clientId (hex of pubkey) or empty on failure.
 // attemptedVersionOut: if non-null and auth fails due to unrecognised version byte
 // (not wrong key/signature), set to the version byte the client sent.
+// negotiatedCapsOut:   if non-null and auth succeeds via v3, set to the negotiated
+//                      capability flags (subset of client's offered caps).
+// isV3Out:             if non-null, set to true when the client used auth v3.
 static std::string verifyClientAuth(SSL *ssl, int clientFd, const AllowedClientsStore &store,
-                                    std::uint8_t *attemptedVersionOut = nullptr)
+                                    std::uint8_t *attemptedVersionOut = nullptr,
+                                    std::uint8_t *negotiatedCapsOut = nullptr,
+                                    bool *isV3Out = nullptr)
 {
     std::shared_lock<std::shared_mutex> lk(store.mu);
     if (store.keys.empty())
@@ -488,6 +494,45 @@ static std::string verifyClientAuth(SSL *ssl, int clientFd, const AllowedClients
         return clientId;
     };
 
+    // Shared verify logic for both v2 and v3 (same nonce + Ed25519 scheme).
+    auto verifyNonceAndSig = [&](const std::uint8_t *resp, std::size_t respLen) -> std::string
+    {
+        if (respLen < kAuthPubkeyLen + kAuthSignatureLen)
+            return {};
+        std::string pubkeyRaw(reinterpret_cast<const char *>(resp), kAuthPubkeyLen);
+        // M5: constant-time membership check (avoids std::set::find timing leak).
+        if (!allowedKeysContains(store.keys, pubkeyRaw))
+            return {};
+
+        std::uint8_t nonce[kAuthNonceLen];
+        if (RAND_bytes(nonce, sizeof(nonce)) != 1)
+            return {};
+        if (!writeExact(ssl, clientFd, nonce, sizeof(nonce)))
+            return {};
+
+        // Read the full response now (the nonce was already written above — this lambda
+        // is called with the response pre-read into `resp`; see callers).
+        std::string toVerify(reinterpret_cast<const char *>(kAuthSignPrefixV2), kAuthSignPrefixV2Len);
+        toVerify.append(reinterpret_cast<const char *>(nonce), sizeof(nonce));
+
+        const unsigned char *sig = reinterpret_cast<const unsigned char *>(resp + kAuthPubkeyLen);
+        EVP_PKEY *pkey = EVP_PKEY_new_raw_public_key(EVP_PKEY_ED25519, nullptr,
+                                                     reinterpret_cast<const unsigned char *>(pubkeyRaw.data()),
+                                                     pubkeyRaw.size());
+        if (!pkey) return {};
+        EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+        int ok = ctx && EVP_DigestVerifyInit(ctx, nullptr, nullptr, nullptr, pkey) == 1
+                 && EVP_DigestVerify(ctx, sig, kAuthSignatureLen,
+                                    reinterpret_cast<const unsigned char *>(toVerify.data()),
+                                    toVerify.size()) == 1;
+        EVP_MD_CTX_free(ctx);
+        EVP_PKEY_free(pkey);
+        if (!ok) return {};
+        return pubkeyToIdHex(pubkeyRaw);
+    };
+    // suppress unused-warning on non-lambda path
+    (void)verifyNonceAndSig;
+
     if (version == kAuthVersionV2)
     {
         // Server challenge nonce
@@ -503,7 +548,6 @@ static std::string verifyClientAuth(SSL *ssl, int clientFd, const AllowedClients
             return {};
 
         std::string pubkeyRaw(reinterpret_cast<const char *>(resp), kAuthPubkeyLen);
-        // M5: constant-time membership check (avoids std::set::find timing leak).
         if (!allowedKeysContains(store.keys, pubkeyRaw))
             return {};
 
@@ -525,6 +569,50 @@ static std::string verifyClientAuth(SSL *ssl, int clientFd, const AllowedClients
         EVP_PKEY_free(pkey);
         if (!ok)
             return {};
+        // v2: no capability exchange; negotiatedCaps and isV3Out stay at defaults.
+        return pubkeyToIdHex(pubkeyRaw);
+    }
+
+    if (version == kAuthVersionV3)
+    {
+        // Server challenge nonce
+        std::uint8_t nonce[kAuthNonceLen];
+        if (RAND_bytes(nonce, sizeof(nonce)) != 1)
+            return {};
+        if (!writeExact(ssl, clientFd, nonce, sizeof(nonce)))
+            return {};
+
+        // Client response: pubkey (32B) + signature (64B) + capability byte (1B)
+        std::uint8_t resp[kAuthPubkeyLen + kAuthSignatureLen + 1];
+        if (!readExact(ssl, clientFd, resp, sizeof(resp)))
+            return {};
+
+        std::string pubkeyRaw(reinterpret_cast<const char *>(resp), kAuthPubkeyLen);
+        if (!allowedKeysContains(store.keys, pubkeyRaw))
+            return {};
+
+        std::string toVerify(reinterpret_cast<const char *>(kAuthSignPrefixV2), kAuthSignPrefixV2Len);
+        toVerify.append(reinterpret_cast<const char *>(nonce), sizeof(nonce));
+
+        const unsigned char *sig = reinterpret_cast<const unsigned char *>(resp + kAuthPubkeyLen);
+        EVP_PKEY *pkey = EVP_PKEY_new_raw_public_key(EVP_PKEY_ED25519, nullptr,
+                                                     reinterpret_cast<const unsigned char *>(pubkeyRaw.data()),
+                                                     pubkeyRaw.size());
+        if (!pkey) return {};
+        EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+        int ok = ctx && EVP_DigestVerifyInit(ctx, nullptr, nullptr, nullptr, pkey) == 1
+                 && EVP_DigestVerify(ctx, sig, kAuthSignatureLen,
+                                    reinterpret_cast<const unsigned char *>(toVerify.data()),
+                                    toVerify.size()) == 1;
+        EVP_MD_CTX_free(ctx);
+        EVP_PKEY_free(pkey);
+        if (!ok) return {};
+
+        // Negotiate capabilities: accept the intersection of what client offers and what we support.
+        const std::uint8_t clientCaps = resp[kAuthPubkeyLen + kAuthSignatureLen];
+        const std::uint8_t negotiated  = clientCaps & kCapZlib; // server supports kCapZlib
+        if (negotiatedCapsOut) *negotiatedCapsOut = negotiated;
+        if (isV3Out) *isV3Out = true;
         return pubkeyToIdHex(pubkeyRaw);
     }
 
@@ -948,8 +1036,11 @@ void connectionThread(int clientFd,
     const auto sessionStart = std::chrono::steady_clock::now();
 
     std::uint8_t attemptedAuthVersion = 0;
+    std::uint8_t negotiatedCaps = kCapNone;
+    bool isV3 = false;
     std::string clientId;
-    clientId = verifyClientAuth(ssl, clientFd, *clientsStore, &attemptedAuthVersion);
+    clientId = verifyClientAuth(ssl, clientFd, *clientsStore,
+                                &attemptedAuthVersion, &negotiatedCaps, &isV3);
     if (clientId.empty())
     {
         writeExact(ssl, clientFd, &kAuthResultReject, 1);
@@ -967,6 +1058,20 @@ void connectionThread(int clientFd,
     }
     if (!writeExact(ssl, clientFd, &kAuthResultOk, 1))
         return;
+    // v3: send the negotiated capability byte so the client knows which features are active.
+    if (isV3 && !writeExact(ssl, clientFd, &negotiatedCaps, 1))
+        return;
+
+    // Create inflater if zlib compression was negotiated.
+    std::unique_ptr<ZlibInflater> inflater;
+    std::vector<std::uint8_t> inflatedBuf;
+    if (negotiatedCaps & kCapZlib)
+    {
+        inflater = std::make_unique<ZlibInflater>();
+        inflatedBuf.reserve(65536);
+        serverLog(LogLevel::Info,
+                  "ntm-server: zlib compression active for client %s", clientId.c_str());
+    }
 
     // RAII guard: on any exit from this scope (normal, idle timeout, exception),
     // remove all registry entries that belong to this session so that a freshly
@@ -1083,7 +1188,23 @@ void connectionThread(int clientFd,
             break;
         }
         lastActivity = now;
-        buffer.append(recvBuf, recvBuf + static_cast<std::size_t>(n));
+        if (inflater)
+        {
+            inflatedBuf.clear();
+            if (!inflater->feed(recvBuf, static_cast<std::size_t>(n), inflatedBuf))
+            {
+                serverLog(LogLevel::Warn,
+                          "ntm-server: zlib inflate error from client %s — disconnecting",
+                          clientId.c_str());
+                break;
+            }
+            buffer.append(reinterpret_cast<const char *>(inflatedBuf.data()),
+                          inflatedBuf.size());
+        }
+        else
+        {
+            buffer.append(recvBuf, recvBuf + static_cast<std::size_t>(n));
+        }
         if (buffer.size() > config.max_recv_buffer_bytes)
             break;  // disconnect: client sent too much without newline
         std::size_t pos = 0;

@@ -13,7 +13,7 @@ namespace ntm
 // Wire protocol version (integer). Bump when any line format, field count, or
 // connection-lifecycle rule changes. See docs/wire-protocol.md § 6.
 // Lockstep consumers: ntm-server, ntm-client (C++), NTMClient (iOS).
-inline constexpr unsigned kWireProtoVersion = 1;
+inline constexpr unsigned kWireProtoVersion = 2;
 
 // HTTPS API protocol version (integer). Bump when endpoint schemas change.
 // See docs/api-protocol.md § 5 for change classification rules.
@@ -48,6 +48,16 @@ inline constexpr std::size_t kAuthSignatureLen    = 64;
 inline constexpr std::size_t kAuthNonceLen        = 32;
 inline constexpr char kAuthSignPrefixV2[]         = "NTM-AUTH-v2";
 inline constexpr std::size_t kAuthSignPrefixV2Len = sizeof(kAuthSignPrefixV2) - 1;
+
+// Ed25519 authentication v3 (nonce + capability exchange).
+// Extends v2: after pubkey+sig the client appends a 1-byte capability flags field.
+// After result=kAuthResultOk the server appends a 1-byte negotiated capability flags field.
+// v2 clients are still accepted by new servers; they get no capability byte and no compression.
+inline constexpr unsigned    kAuthVersionV3 = 3;
+
+// Capability bit flags (1 byte).  Sent by client and echoed (masked) by server.
+inline constexpr std::uint8_t kCapNone = 0x00; // no optional features
+inline constexpr std::uint8_t kCapZlib = 0x01; // bit 0: zlib deflate on the data phase
 
 // Data-phase line prefixes. See docs/wire-protocol.md § 5.2.
 // All lines are newline-terminated UTF-8; fields separated by single spaces.

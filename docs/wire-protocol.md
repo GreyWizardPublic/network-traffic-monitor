@@ -1,7 +1,7 @@
-# NTM Wire Protocol — Specification v1
+# NTM Wire Protocol — Specification v2
 
-**Protocol version:** 1  
-**Software version where introduced:** ntm 1.2.0  
+**Protocol version:** 2  
+**Software version where introduced:** ntm 1.14.0 (server) / 1.11.0 (client)  
 **File owner:** This document is the authoritative specification for the TCP data-ingestion
 channel between `ntm-client` and `ntm-server`. Update it **before** changing
 any message format, field, or connection-lifecycle rule. The same single-commit
@@ -75,15 +75,33 @@ immediately. The client should not retry authentication on the same connection.
 Client authentication is **mandatory** when the server has `allowed_keys`
 configured (which is required). All byte counts are exact; no length prefixes.
 
-### 4.1 Message sequence
+Two auth versions are supported. New clients use **v3** (which adds capability
+exchange and enables optional zlib compression). Old v2 clients are still
+accepted by new servers but receive no compression.
+
+### 4.1 Message sequence — auth v3 (current)
+
+| Step | Direction | Size | Content |
+|---|---|---|---|
+| 1 | Client → Server | 1 byte | Auth algorithm version = `kAuthVersionV3` (`0x03`) |
+| 2 | Server → Client | 32 bytes | Cryptographically random nonce |
+| 3 | Client → Server | 32 bytes | Ed25519 raw public key |
+| | Client → Server | 64 bytes | Ed25519 signature (see § 4.2) |
+| | Client → Server | 1 byte | Client capability flags (see § 4.4) |
+| 4 | Server → Client | 1 byte | `kAuthResultOk` (`0x00`) = accepted **or** `kAuthResultReject` (`0x01`) = rejected |
+| 5 | Server → Client | 1 byte | Negotiated capability flags (**only sent when result = `0x00`**) |
+
+### 4.1b Message sequence — auth v2 (legacy, still accepted)
 
 | Step | Direction | Size | Content |
 |---|---|---|---|
 | 1 | Client → Server | 1 byte | Auth algorithm version = `kAuthVersionV2` (`0x02`) |
 | 2 | Server → Client | 32 bytes | Cryptographically random nonce |
 | 3 | Client → Server | 32 bytes | Ed25519 raw public key |
-| | Client → Server | 64 bytes | Ed25519 signature (see § 4.2) |
-| 4 | Server → Client | 1 byte | `kAuthResultOk` (`0x00`) = accepted **or** `kAuthResultReject` (`0x01`) = rejected |
+| | Client → Server | 64 bytes | Ed25519 signature |
+| 4 | Server → Client | 1 byte | `kAuthResultOk` / `kAuthResultReject` |
+
+No capability exchange in v2; the data phase always runs uncompressed.
 
 ### 4.2 Signature
 
@@ -93,6 +111,7 @@ message = kAuthSignPrefixV2 || nonce
 signature = Ed25519_Sign(client_private_key, message)
 ```
 
+The same message format is used for both v2 and v3.
 The server verifies using the public key presented in step 3, then checks
 that the key is in the allowed-keys file using constant-time comparison.
 
@@ -101,6 +120,35 @@ that the key is in the allowed-keys file using constant-time comparison.
 After successful authentication the client's stable identifier is the
 lowercase hex encoding of its 32-byte Ed25519 public key (64 hex chars).
 This identifier appears in all server-side data structures and dashboard output.
+
+### 4.4 Capability flags (auth v3 only)
+
+A 1-byte bit-field sent by the client (step 3) and echoed masked by the server (step 5).
+The server sets only bits that it supports; the client must respect the negotiated value.
+
+| Bit | Constant | Meaning |
+|---|---|---|
+| 0 | `kCapZlib` (`0x01`) | zlib deflate compression on the data phase |
+| 1–7 | — | Reserved; must be 0 |
+
+**Negotiation rule**: server accepts bit N if and only if both client and server support it.
+The client must not compress unless bit 0 is set in the server's negotiated caps byte.
+
+**Windows client**: always sends `kCapNone` (`0x00`) regardless of config — the Windows binary
+does not link zlib. The server responds with `0x00` and the data phase is uncompressed.
+
+### 4.5 zlib data-phase compression
+
+When `kCapZlib` is negotiated:
+- **Client** wraps every write to the data-phase SSL stream with `deflate(Z_SYNC_FLUSH)`.
+  Each write (H-line, D-line batch, X/A announce) is flushed to a deflate block boundary
+  so the server can decompress incrementally without waiting for more data.
+- **Server** inflates every chunk received from `SSL_read` before feeding it to the
+  line-parsing buffer. The inflate context is persistent across multiple `SSL_read` calls.
+- The zlib streams are **not reset** between message types; compression improves as the
+  dictionary fills up with the repetitive IP-address and line-prefix text.
+- On reconnect the client creates a new `ZlibDeflater`; the server creates a new
+  `ZlibInflater` after each re-authentication.
 
 ---
 
@@ -220,7 +268,7 @@ both fields are present and non-zero.
 ## 6. Protocol versioning
 
 **Wire protocol version** (`kWireProtoVersion`) is an integer in
-`src/proto_client_server.hpp`. Current value: **1**.
+`src/proto_client_server.hpp`. Current value: **2**.
 
 This version is independent of:
 - The ntm software version in `src/version.hpp`.
@@ -235,7 +283,8 @@ This version is independent of:
 | Add new line type with a new single-letter prefix | Bump `kWireProtoVersion`; old servers silently ignore unknown prefixes |
 | Change `D`-line field count, field type, or field order | Bump `kWireProtoVersion` |
 | Change `X` or `A` line semantics | Bump `kWireProtoVersion` |
-| Change auth phase byte layout or signature scheme | Bump `kAuthVersionV2` (the auth algorithm version byte) |
+| Add new auth algorithm version (new `kAuthVersionVN`) | Bump `kWireProtoVersion` |
+| Change the capability bit definitions | Bump `kWireProtoVersion` |
 | Remove any existing line type | Bump `kWireProtoVersion` |
 
 ### Version negotiation (future)
@@ -256,16 +305,19 @@ All constants are defined in `src/proto_client_server.hpp`.
 
 | Constant | Value | Description |
 |---|---|---|
-| `kWireProtoVersion` | 1 | Wire protocol version |
+| `kWireProtoVersion` | 2 | Wire protocol version |
 | `kDefaultPort` | 5555 | Default TCP port |
 | `kMaxSessionSeconds` | 21600 | Max session duration (6 h) |
-| `kAuthVersionV2` | 0x02 | Auth algorithm version byte |
+| `kAuthVersionV2` | 0x02 | Auth algorithm version byte (legacy, no compression) |
+| `kAuthVersionV3` | 0x03 | Auth algorithm version byte (v3, with capability exchange) |
 | `kAuthResultOk` | 0x00 | Server → client: auth accepted |
 | `kAuthResultReject` | 0x01 | Server → client: auth rejected |
+| `kCapNone` | 0x00 | Capability flags: no optional features |
+| `kCapZlib` | 0x01 | Capability flags: zlib deflate on data phase (bit 0) |
 | `kAuthPubkeyLen` | 32 | Ed25519 public key length (bytes) |
 | `kAuthSignatureLen` | 64 | Ed25519 signature length (bytes) |
 | `kAuthNonceLen` | 32 | Server nonce length (bytes) |
-| `kAuthSignPrefixV2` | `"NTM-AUTH-v2"` | Signature prefix string |
+| `kAuthSignPrefixV2` | `"NTM-AUTH-v2"` | Signature prefix string (used in both v2 and v3) |
 | `kMaxIfaceLabelLen` | 64 | Max iface field length in D-lines (bytes) |
 | `kMaxIpLabelLen` | 50 | Max IP field length in D/A/X lines (bytes) |
 | `kMaxAnnounceAddressesPerSession` | 64 | Max A-lines per announce round |
