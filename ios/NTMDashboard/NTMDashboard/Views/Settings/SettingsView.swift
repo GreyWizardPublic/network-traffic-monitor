@@ -10,10 +10,15 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section("Server") {
-                    TextField("https://ntm.yourserver.com:8443", text: $vm.config.serverURL)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .keyboardType(.URL)
+                    if dashVM.snapshot?.demo == true {
+                        Text("your-server.example.com")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        TextField("https://ntm.yourserver.com:8443", text: $vm.config.serverURL)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .keyboardType(.URL)
+                    }
                 }
 
                 if vm.config.pinnedCertData != nil {
