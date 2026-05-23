@@ -364,10 +364,13 @@ static bool parseConfigLine(const std::string &key, const std::string &val,
     }
     if (key == "web_port")
     {
-        try {
-            unsigned long p = std::stoul(v);
-            if (p != 0 && p <= 65535) out.web_port = static_cast<std::uint16_t>(p);
-        } catch (const std::exception &) {}
+        // Deprecated since server v1.15.0: the server uses one unified port
+        // (port=) for both data-ingestion and the HTTPS dashboard API.
+        // The key is still accepted so existing config files don't error, but
+        // the value is ignored — the auto-updater uses config.port instead.
+        std::cerr << "ntm-client: config: 'web_port' is deprecated since server "
+                     "v1.15.0 (unified port); the value is ignored. "
+                     "Remove it from your config file.\n";
         return true;
     }
     if (key == "agg_target_lines_per_sec")
