@@ -84,6 +84,46 @@ if(WIN32)
     # Needed for Npcap's wpcap.dll (load-time linked)
     target_compile_definitions(ntm-client PRIVATE HAVE_REMOTE)
 
+    # ---------------------------------------------------------------------------
+    # ntm-tests-windows — Windows unit test binary
+    # ---------------------------------------------------------------------------
+    # Tests pure-logic paths and the Windows platform abstraction layer.
+    # Does NOT require a live server, Npcap kernel driver, or network access.
+    # Does NOT link wpcap (no pcap functions are called in the test paths).
+    #
+    # Run with:
+    #   cmake --build build-windows --target ntm-tests-windows
+    #   build-windows\ntm-tests-windows.exe
+    # ---------------------------------------------------------------------------
+    add_executable(ntm-tests-windows
+        tests/test_main.cpp
+        tests/test_flow_aggregator.cpp
+        tests/test_windows_client.cpp
+        src/client_core.cpp
+        src/client_windows.cpp
+    )
+    target_include_directories(ntm-tests-windows PRIVATE src tests "${NPCAP_SDK}/Include")
+    target_link_libraries(ntm-tests-windows
+        PRIVATE
+            OpenSSL::SSL
+            OpenSSL::Crypto
+            ws2_32
+            iphlpapi
+            crypt32
+            bcrypt
+            Threads::Threads
+    )
+    target_compile_definitions(ntm-tests-windows PRIVATE HAVE_REMOTE)
+    target_link_options(ntm-tests-windows PRIVATE
+        -static
+        -static-libgcc
+        -static-libstdc++
+    )
+    set_target_properties(ntm-tests-windows PROPERTIES OUTPUT_NAME "ntm-tests-windows")
+
+    enable_testing()
+    add_test(NAME ntm-windows-unit-tests COMMAND ntm-tests-windows)
+
 else()
     # ---------- Linux build ----------
     find_library(PCAP_LIBRARY pcap REQUIRED)
