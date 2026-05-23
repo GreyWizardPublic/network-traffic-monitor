@@ -649,6 +649,11 @@ Unregister-ScheduledTask -TaskName "ntm-client" -Confirm:$false
 - Daemon mode is not supported on Windows. The flag prints a warning and the process
   continues in the foreground. Use Task Scheduler for background operation.
 
+**`ntm-client: config: 'web_port' is deprecated since server v1.15.0`**
+- You have a `web_port = ...` line in your config file left over from a pre-v1.15.0 server.
+  The value is silently ignored (the auto-updater now uses `port`). Remove the `web_port`
+  line to suppress this warning.
+
 ---
 
 # Auto-Update
