@@ -76,6 +76,14 @@ SSL_CTX *createClientTLSContext(const std::string &caPath,
     }
     SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3);
     SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+
+    // ALPN: advertise "ntm-wire" so the server can route this connection as a
+    // data-ingestion channel when the dashboard and client share a single port.
+    // Browsers send "http/1.1" by default; the server selects "ntm-wire" first.
+    // Wire format: 1-byte length prefix followed by the ASCII protocol name.
+    static const unsigned char kAlpn[] = "\x08ntm-wire";
+    SSL_CTX_set_alpn_protos(ctx, kAlpn, sizeof(kAlpn) - 1);
+
     (void)serverCertPath; // used at verify time, not context creation
     return ctx;
 }

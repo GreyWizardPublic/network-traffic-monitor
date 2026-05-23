@@ -62,11 +62,22 @@ struct WebConfig
     std::shared_ptr<MonitoringIpSet> dashboard_ips;
 };
 
-// Thread function: registers HTTP routes on svr, then blocks in svr.listen().
-// Call svr.stop() from another thread to unblock.
-void webServerThread(httplib::SSLServer &svr,
-                     TrafficStats       &stats,
-                     const WebConfig    &config);
+// Thin httplib::Server subclass that makes process_request() publicly accessible.
+// The unified ALPN accept loop calls process_request() directly on pre-accepted
+// SSL connections — httplib's own listen() / TLS accept path is never used.
+class NtmHttpServer : public httplib::Server
+{
+public:
+    // Lift the protected member to public scope.
+    using httplib::Server::process_request;
+};
+
+// Register all HTTP route handlers on svr (synchronous; returns immediately).
+// The unified ALPN accept loop in server_core feeds connections via
+// NtmHttpServer::process_request() — svr.listen() is never called.
+void registerWebHandlers(NtmHttpServer   &svr,
+                         TrafficStats    &stats,
+                         const WebConfig &config);
 
 // Demo server thread (App Store review, port kDemoPort).
 // Serves mock /api/summary data; no auth required; browsers rejected by User-Agent.

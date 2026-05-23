@@ -29,6 +29,30 @@ This protocol is **independent** of the Dashboard HTTP API (see
 | Max session lifetime | 6 hours (`kMaxSessionSeconds = 21600`) |
 | Plain TCP | **Forbidden.** Server closes connections that cannot complete TLS. |
 | Cert / key | Server presents a PEM certificate and private key. |
+| Port sharing | HTTPS dashboard and ntm-client share the same port via TLS ALPN. |
+
+### Port multiplexing via TLS ALPN (RFC 7301)
+
+The server listens on a single port for both the ntm-client data-ingestion
+protocol and the HTTPS dashboard. The TLS handshake's ALPN extension
+(negotiated before any application bytes are sent) determines which handler
+processes the connection:
+
+| ALPN value | Handler |
+|---|---|
+| `ntm-wire` | Wire-protocol auth + data phase (§ 3–5) |
+| `http/1.1` | HTTPS dashboard (API protocol, separate spec) |
+| *(none / unrecognised)* | Falls back to `http/1.1` handler |
+
+**Client requirement:** ntm-client **must** advertise `"ntm-wire"` in its
+TLS ClientHello ALPN extension. The constant `kAlpnNtmWire = "ntm-wire"` is
+defined in `src/proto_client_server.hpp`. A client that omits ALPN will be
+routed to the dashboard handler and its wire-protocol auth frame will result
+in an HTTP 400 Bad Request, not a meaningful error.
+
+The selection helper `selectAlpnFromClientList()` (also in
+`proto_client_server.hpp`) is a pure function with no OpenSSL dependency and
+is exercised by `tests/test_alpn.cpp`.
 
 The client optionally pins the server certificate by SHA-256 fingerprint
 (`--server-cert`). The server optionally verifies the client identity by
