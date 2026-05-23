@@ -60,16 +60,39 @@ and **cross-agent work** (see [Cross-agent handoff](#cross-agent-handoff)).
 3. **Open a PR** targeting `main` when the work is ready. PR description must
    include build instructions and a test checklist appropriate to the domain.
 
-4. **Merge the PR independently** — no sign-off from other agents is required
+4. **Test quality gate — required before merging any feature branch:**
+
+   a. **Add tests for every new feature.** Any new pure-logic function (parser,
+      classifier, helper) must have unit tests before the PR is opened. If the
+      function lives in a `.cpp` file and cannot be included by the test binary,
+      move it to a header as `inline` (see `parseDataLine` in
+      `proto_client_server.hpp` as the canonical example).
+
+   b. **Remove obsolete tests.** If a refactor deletes or renames a function,
+      remove tests that exercised the old interface in the same commit. Keeping
+      dead tests that silently pass (or worse, no longer compile) is a
+      maintenance hazard.
+
+   c. **Run the full test suite and report results in the PR description.**
+      For Arch Linux / Linux Agent: `./build-linux/ntm-tests` must show
+      `N passed, 0 failed`. For Windows Agent: `ntm-tests-windows.exe` must
+      show the same. For Swift Agent: Xcode test target must pass.
+
+   d. **If any test fails**, do not fix it silently. Document the failure in the
+      PR description with the test name, observed output, and your root-cause
+      analysis. Tag it **⚠️ FAILING TEST — human review required** and wait for
+      approval before landing a fix.
+
+5. **Merge the PR independently** — no sign-off from other agents is required
    unless the change touches a shared protocol (see Protocol Governance).
 
-5. **Delete the feature branch** after merge, both local and remote:
+6. **Delete the feature branch** after merge, both local and remote:
    ```
    git branch -d <branch>
    git push origin --delete <branch>
    ```
 
-6. **At the start of each session**, check for open PRs and GitHub Issues
+7. **At the start of each session**, check for open PRs and GitHub Issues
    addressed to your agent (see Cross-agent handoff below) and address them
    before starting new work.
 
