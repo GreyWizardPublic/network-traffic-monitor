@@ -226,60 +226,7 @@ void daemonize()
 #endif
 }
 
-bool parseDataLine(const std::string &line, PacketMeta &out,
-                  std::size_t maxIfaceLen, std::size_t maxIpLen)
-{
-    if (line.empty())
-        return false;
-
-    // Split into four whitespace-delimited tokens without per-line stream or
-    // string allocation (this runs on the hot path at up to
-    // max_d_lines_per_second_per_connection lines/sec). Runs of separators are
-    // collapsed and leading separators skipped, matching the previous
-    // `istringstream >>` semantics.
-    const char *p   = line.data();
-    const char *end = p + line.size();
-    auto isSep = [](char c) {
-        return c == ' ' || c == '\t' || c == '\r' || c == '\n';
-    };
-    auto nextTok = [&](const char *&b, const char *&e) -> bool {
-        while (p < end && isSep(*p)) ++p;
-        if (p >= end) return false;
-        b = p;
-        while (p < end && !isSep(*p)) ++p;
-        e = p;
-        return true;
-    };
-
-    const char *ib, *ie, *sb, *se, *db, *de, *bb, *be;
-    if (!nextTok(ib, ie) || !nextTok(sb, se) ||
-        !nextTok(db, de) || !nextTok(bb, be))
-        return false;
-
-    if (maxIfaceLen == 0) maxIfaceLen = kMaxIfaceLabelLen;
-    if (maxIpLen == 0) maxIpLen = kMaxIpLabelLen;
-    const std::size_t ifaceLen = static_cast<std::size_t>(ie - ib);
-    const std::size_t srcLen   = static_cast<std::size_t>(se - sb);
-    const std::size_t dstLen   = static_cast<std::size_t>(de - db);
-    if (ifaceLen > maxIfaceLen || srcLen > maxIpLen || dstLen > maxIpLen)
-        return false;
-
-    // bytes: 4th token. line.data() is NUL-terminated (std::string), so
-    // strtoul stops at the separator/terminator after the number.
-    char *numEnd = nullptr;
-    unsigned long val = std::strtoul(bb, &numEnd, 10);
-    if (numEnd == bb)
-        return false;
-    if (val > static_cast<unsigned long>(UINT32_MAX))
-        return false;
-
-    out.iface.assign(ib, ifaceLen);
-    out.srcIp.assign(sb, srcLen);
-    out.dstIp.assign(db, dstLen);
-    out.bytes = static_cast<std::uint32_t>(val);
-    (void)be;
-    return true;
-}
+// parseDataLine is defined as inline in proto_client_server.hpp (shared with tests).
 
 // Load allowed client public keys from file: one 64-char hex line per key (32 bytes).
 // M5: lookups against this set use constant-time comparison via constantTimeContains()
