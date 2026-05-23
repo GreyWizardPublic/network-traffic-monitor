@@ -91,10 +91,29 @@ and **cross-agent work** (see [Cross-agent handoff](#cross-agent-handoff)).
    git branch -d <branch>
    git push origin --delete <branch>
    ```
+   Then **verify the branch is gone from GitHub** by listing remote branches
+   for your prefix and confirming the deleted branch no longer appears:
+   ```
+   git ls-remote --heads origin <agent-prefix>/
+   ```
+   If the branch is still listed after the delete command, investigate before
+   moving on — a failed push (network error, permission issue, or wrong branch
+   name) means the remote is in an inconsistent state.
 
-7. **At the start of each session**, check for open PRs and GitHub Issues
-   addressed to your agent (see Cross-agent handoff below) and address them
-   before starting new work.
+7. **At the start of each session**, do the following in order before starting
+   new work:
+
+   a. **Check for open PRs and GitHub Issues** addressed to your agent (see
+      Cross-agent handoff below) and address them.
+
+   b. **Audit your own stale remote branches.** Run:
+      ```
+      git fetch --prune
+      git ls-remote --heads origin <agent-prefix>/
+      ```
+      Any branch whose PR is already merged (closed) must be deleted immediately.
+      Cross-reference with the closed PR list if you are unsure whether a branch
+      has been merged. Do not leave merged branches accumulating on the remote.
 
 ---
 
