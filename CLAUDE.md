@@ -169,6 +169,56 @@ compiled for Windows, `#ifdef _WIN32` blocks, and any `*_windows*`-named files);
 
 ---
 
+## Native Shell Reference
+
+**All pure `git` and `gh` CLI commands are identical across platforms.** Only
+the surrounding shell syntax differs. Use your agent's column below — do not
+guess or copy commands from another agent's column.
+
+| Task | Arch Linux Agent · **bash** | Swift Agent · **zsh/bash** | Windows Agent · **PowerShell** |
+|---|---|---|---|
+| **Native shell** | `bash` | `zsh` (default) or `bash` | `powershell` / `pwsh` |
+| **Run a local script** | `./script.sh` | `./script.sh` | `.\script.ps1` |
+| **Chain (stop on error)** | `cmd1 && cmd2` | `cmd1 && cmd2` | `cmd1; if ($LASTEXITCODE -ne 0) { exit 1 }` |
+| **Read env variable** | `$VAR` | `$VAR` | `$env:VAR` |
+| **Parallel build jobs** | `-j$(nproc)` | `-j$(sysctl -n hw.logicalcpu)` | `-j $env:NUMBER_OF_PROCESSORS` |
+| **Path separator** | `/` | `/` | `\` (CMake accepts `/` too) |
+| **Home directory** | `$HOME` | `$HOME` | `$env:USERPROFILE` |
+
+### Git & gh commands (same on all platforms)
+
+The commands below work unchanged in bash, zsh, and PowerShell — copy them
+verbatim regardless of which agent you are.
+
+```bash
+# Branch hygiene (step 6 + step 7b of the workflow)
+git fetch --prune
+git ls-remote --heads origin <agent-prefix>/   # linux/ · ios/ · win/
+git branch -d <branch>
+git push origin --delete <branch>
+git push origin --delete b1 b2 b3              # delete several at once
+
+# PR / issue inspection via gh CLI
+gh pr list --state open
+gh pr list --state closed --limit 20
+gh issue list --state open
+gh pr view <number>
+gh issue view <number>
+
+# Rebase on latest main before opening a PR
+git fetch origin
+git rebase origin/main
+
+# Amend last commit (before push)
+git commit --amend --no-edit
+```
+
+> **Windows Agent note:** PowerShell uses `\` for file paths in most
+> contexts, but CMake, `git`, and `gh` all accept forward slashes — prefer
+> `/` in any command that is shared or documented.
+
+---
+
 ### Cross-agent handoff
 
 When one agent needs another to make a change, it opens a **PR** (not just an
