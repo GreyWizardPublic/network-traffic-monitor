@@ -132,15 +132,15 @@ self-contained `IPRangeResolver` + iptoasn.com data:
 
 ```bash
 # Show every dynamic library the binaries depend on:
-ldd build/ntm-server
-ldd build/ntm-client
+ldd build-linux/ntm-server
+ldd build-linux/ntm-client
 
 # Show the upstream package each lib belongs to (Arch / pacman):
-ldd build/ntm-server | awk '/=>/ {print $3}' | sort -u \
+ldd build-linux/ntm-server | awk '/=>/ {print $3}' | sort -u \
   | xargs -I{} pacman -Qo {} 2>/dev/null
 
 # On Debian / Ubuntu:
-ldd build/ntm-server | awk '/=>/ {print $3}' | sort -u \
+ldd build-linux/ntm-server | awk '/=>/ {print $3}' | sort -u \
   | xargs -I{} dpkg -S {} 2>/dev/null
 ```
 
