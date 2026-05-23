@@ -18,6 +18,7 @@
 //   9.  daemonize stub (no crash)
 //   10. NetworkMonitor start / stop / checkAndClear lifecycle
 //   11. ClientConfig default values
+//   12. ALPN constants and selectAlpnFromClientList (port-multiplexing helper)
 
 #ifndef _WIN32
 #  error "test_windows_client.cpp is Windows-only"
@@ -614,4 +615,92 @@ TEST_CASE("ClientConfig: reconnectMaxAttempts and reconnectIntervalSec are posit
     ntm::ClientConfig cfg;
     REQUIRE(cfg.reconnectMaxAttempts > 0u);
     REQUIRE(cfg.reconnectIntervalSec > 0u);
+}
+
+// ── 12. ALPN constants and selectAlpnFromClientList ───────────────────────────
+// Covers the TLS port-multiplexing helper added in server v1.15.0 / client v1.13.0.
+// selectAlpnFromClientList parses OpenSSL wire-format ALPN offer lists
+// (length-prefixed strings) and selects "ntm-wire" > "http/1.1" > fallback.
+// Pure function — no OpenSSL dependency; compilable and testable on Windows.
+
+TEST_CASE("ALPN: kAlpnNtmWire value is \"ntm-wire\"")
+{
+    REQUIRE_EQ(std::string{ntm::kAlpnNtmWire}, std::string{"ntm-wire"});
+}
+
+TEST_CASE("ALPN: kAlpnHttp11 value is \"http/1.1\"")
+{
+    REQUIRE_EQ(std::string{ntm::kAlpnHttp11}, std::string{"http/1.1"});
+}
+
+TEST_CASE("ALPN: kAlpnNtmWire has length 8")
+{
+    // Wire encoding uses a 1-byte length prefix; the string must fit in a uint8.
+    REQUIRE_EQ(std::strlen(ntm::kAlpnNtmWire), std::size_t{8});
+}
+
+TEST_CASE("ALPN: kAlpnHttp11 has length 8")
+{
+    REQUIRE_EQ(std::strlen(ntm::kAlpnHttp11), std::size_t{8});
+}
+
+TEST_CASE("ALPN: select ntm-wire when client offers only ntm-wire")
+{
+    // Wire format: 0x08 + "ntm-wire"
+    const unsigned char offer[] = "\x08ntm-wire";
+    auto result = ntm::selectAlpnFromClientList(offer, static_cast<unsigned>(sizeof(offer) - 1));
+    REQUIRE_EQ(result, std::string{"ntm-wire"});
+}
+
+TEST_CASE("ALPN: select http/1.1 when client offers only http/1.1")
+{
+    const unsigned char offer[] = "\x08http/1.1";
+    auto result = ntm::selectAlpnFromClientList(offer, static_cast<unsigned>(sizeof(offer) - 1));
+    REQUIRE_EQ(result, std::string{"http/1.1"});
+}
+
+TEST_CASE("ALPN: ntm-wire wins over http/1.1 regardless of offer order (ntm first)")
+{
+    // Client offers ["ntm-wire", "http/1.1"]
+    const unsigned char offer[] = "\x08ntm-wire\x08http/1.1";
+    auto result = ntm::selectAlpnFromClientList(offer, static_cast<unsigned>(sizeof(offer) - 1));
+    REQUIRE_EQ(result, std::string{"ntm-wire"});
+}
+
+TEST_CASE("ALPN: ntm-wire wins over http/1.1 regardless of offer order (http first)")
+{
+    // Client offers ["http/1.1", "ntm-wire"] — browser-style offer ordering
+    const unsigned char offer[] = "\x08http/1.1\x08ntm-wire";
+    auto result = ntm::selectAlpnFromClientList(offer, static_cast<unsigned>(sizeof(offer) - 1));
+    REQUIRE_EQ(result, std::string{"ntm-wire"});
+}
+
+TEST_CASE("ALPN: fallback to http/1.1 on empty offer list")
+{
+    auto result = ntm::selectAlpnFromClientList(nullptr, 0u);
+    REQUIRE_EQ(result, std::string{"http/1.1"});
+}
+
+TEST_CASE("ALPN: fallback to http/1.1 on unrecognised protocol")
+{
+    // Client offers only "h2" (HTTP/2) — not recognised by the server
+    const unsigned char offer[] = "\x02h2";
+    auto result = ntm::selectAlpnFromClientList(offer, static_cast<unsigned>(sizeof(offer) - 1));
+    REQUIRE_EQ(result, std::string{"http/1.1"});
+}
+
+TEST_CASE("ALPN: fallback to http/1.1 on truncated input (length byte only)")
+{
+    // Malformed: length byte says 8 bytes follow, but buffer ends immediately after.
+    const unsigned char offer[] = "\x08";
+    auto result = ntm::selectAlpnFromClientList(offer, static_cast<unsigned>(sizeof(offer) - 1));
+    REQUIRE_EQ(result, std::string{"http/1.1"});
+}
+
+TEST_CASE("ALPN: ntm-wire found after unrecognised leading protocol")
+{
+    // Client offers ["h2", "ntm-wire"] — ntm-wire buried after an unknown entry
+    const unsigned char offer[] = "\x02h2\x08ntm-wire";
+    auto result = ntm::selectAlpnFromClientList(offer, static_cast<unsigned>(sizeof(offer) - 1));
+    REQUIRE_EQ(result, std::string{"ntm-wire"});
 }

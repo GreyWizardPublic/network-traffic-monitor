@@ -601,6 +601,8 @@ Unregister-ScheduledTask -TaskName "ntm-client" -Confirm:$false
 - [ ] Npcap kept up to date (security fixes are released regularly)
 - [ ] Binary installed in `C:\ProgramData\ntm\bin\` with service account ACLs (required for auto-update)
 - [ ] Binary is Authenticode code-signed (required for Windows auto-update)
+- [ ] **Server firewall (v1.15.0+):** only **one** inbound TCP rule needed (port `5555`);
+  the HTTPS dashboard now shares this port via TLS ALPN — remove any separate `8443` rule
 
 ---
 
@@ -630,7 +632,13 @@ Unregister-ScheduledTask -TaskName "ntm-client" -Confirm:$false
 
 **`connect() failed (WSA ...)`**
 - Server is not running or the port is blocked by Windows Firewall.
-- Add an inbound rule on the **server** machine: `netsh advfirewall firewall add rule name="ntm-server" dir=in action=allow protocol=TCP localport=5555`.
+- From server v1.15.0, **only one port needs to be open** (default `5555`) — it serves both
+  data ingestion and the HTTPS dashboard via TLS ALPN. If you previously opened a separate
+  port for the dashboard (typically `8443`), that rule is no longer needed.
+- Add an inbound rule on the **server** machine:
+  ```
+  netsh advfirewall firewall add rule name="ntm-server" dir=in action=allow protocol=TCP localport=5555
+  ```
 - Verify the server is reachable: `Test-NetConnection -ComputerName 192.168.1.10 -Port 5555`.
 
 **The scheduled task starts but exits immediately**
@@ -640,6 +648,11 @@ Unregister-ScheduledTask -TaskName "ntm-client" -Confirm:$false
 **`--daemon` flag has no effect**
 - Daemon mode is not supported on Windows. The flag prints a warning and the process
   continues in the foreground. Use Task Scheduler for background operation.
+
+**`ntm-client: config: 'web_port' is deprecated since server v1.15.0`**
+- You have a `web_port = ...` line in your config file left over from a pre-v1.15.0 server.
+  The value is silently ignored (the auto-updater now uses `port`). Remove the `web_port`
+  line to suppress this warning.
 
 ---
 
@@ -656,10 +669,15 @@ Add the following to the client config file:
 ```ini
 # Enable automatic binary updates (opt-in, default: false)
 auto_update = true
-
-# HTTPS API port — must match web_port in server config (default: 8443)
-web_port = 8443
 ```
+
+> **Server v1.15.0+ (ALPN port consolidation):** The HTTPS dashboard and data-ingestion
+> channel now share a single TLS port via ALPN. The update check connects to the same
+> `port` value used for data ingestion (default `5555`). **Remove any `web_port` line**
+> from the client config — it is no longer needed and the server ignores it.
+>
+> **Upgrading from server < 1.15.0:** Keep `web_port = <your-old-web_port>` (typically
+> `web_port = 8443`) until you upgrade the server. Remove the line after upgrading.
 
 The client uses the same `server`, `server_cert`, and `ca` settings already configured for
 TLS. No additional certificate configuration is needed. The first update check runs
@@ -856,7 +874,7 @@ All keys are set in the config file (`key = value`) or overridden by CLI flags.
 | `reconnect_attempts` | `--reconnect-attempts` | `10` | Max consecutive reconnect failures before exit (1–1000) |
 | `reconnect_interval_sec` | `--reconnect-interval` | `60` | Seconds between reconnect attempts (1–3600) |
 | `auto_update` | — | `false` | Enable daily binary self-update check (opt-in) |
-| `web_port` | — | `8443` | Server HTTPS API port for update checks — same key and default as `web_port` in the server config |
+| `web_port` | — | `8443` | *(Deprecated — server v1.15.0+)* HTTPS port used by auto-update to reach `/api/update/check`. Before server v1.15.0 this matched `web_port` in the server config (default `8443`). From server v1.15.0+ the dashboard shares the data-ingestion `port` via ALPN — remove this key from the config when connecting to a v1.15.0+ server. |
 | `verbose` | `--verbose` | `false` | Enable verbose logging |
 
 Precedence: **CLI flags** > **config file** > **built-in defaults**.
