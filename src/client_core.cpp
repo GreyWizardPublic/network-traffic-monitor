@@ -343,6 +343,38 @@ static bool parseConfigLine(const std::string &key, const std::string &val,
         } catch (const std::exception &) {}
         return true;
     }
+    if (key == "agg_target_lines_per_sec")
+    {
+        try {
+            unsigned long n = std::stoul(v);
+            out.aggTargetLinesPerSec = static_cast<std::uint32_t>(std::min(n, 1000000ul));
+        } catch (const std::exception &) {}
+        return true;
+    }
+    if (key == "agg_min_interval_ms")
+    {
+        try {
+            unsigned long n = std::stoul(v);
+            out.aggMinIntervalMs = static_cast<std::uint32_t>(std::clamp(n, 50ul, 5000ul));
+        } catch (const std::exception &) {}
+        return true;
+    }
+    if (key == "agg_max_interval_ms")
+    {
+        try {
+            unsigned long n = std::stoul(v);
+            out.aggMaxIntervalMs = static_cast<std::uint32_t>(std::clamp(n, 100ul, 60000ul));
+        } catch (const std::exception &) {}
+        return true;
+    }
+    if (key == "agg_max_flows")
+    {
+        try {
+            unsigned long n = std::stoul(v);
+            out.aggMaxFlows = static_cast<std::uint32_t>(std::clamp(n, 100ul, 1000000ul));
+        } catch (const std::exception &) {}
+        return true;
+    }
     return false;
 }
 
