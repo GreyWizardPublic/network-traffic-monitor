@@ -144,7 +144,7 @@ if(NOT WIN32)
     target_compile_options(ntm-tests PRIVATE -Wall -Wextra -Wpedantic)
     set_target_properties(ntm-tests PROPERTIES OUTPUT_NAME "ntm-tests")
 
-    # Register with CTest so `ctest` or `cmake --build build --target test` works.
+    # Register with CTest so `ctest` or `cmake --build build-linux --target test` works.
     enable_testing()
     add_test(NAME ntm-unit-tests COMMAND ntm-tests)
 endif()

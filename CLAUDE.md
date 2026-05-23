@@ -271,10 +271,10 @@ auto-update naming convention exactly — they can be dropped directly into
 *(Arch Linux Agent)*
 
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j$(nproc)
-# build/ntm-server
-# build/ntm-client-linux-amd64-<version>
+cmake -B build-linux -DCMAKE_BUILD_TYPE=Release
+cmake --build build-linux -j$(nproc)
+# build-linux/ntm-server
+# build-linux/ntm-client-linux-amd64-<version>
 ```
 
 ### Windows client (native Windows)
