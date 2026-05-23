@@ -60,14 +60,76 @@ inline bool isLanIP(const std::string &ip)
 // The server stores only the latest H line per client (replace, never accumulate).
 struct ClientHealthStats
 {
-    std::uint64_t pcapRecv{0};       // packets delivered to the capture callback (ps_recv)
-    std::uint64_t pcapDrop{0};       // packets dropped by kernel ring-buffer (ps_drop)
-    std::uint64_t bufDrop{0};        // packets the client received but couldn't queue to server
+    std::uint64_t pcapRecv{0};          // packets delivered to the capture callback (ps_recv)
+    std::uint64_t pcapDrop{0};          // packets dropped by kernel ring-buffer (ps_drop)
+    std::uint64_t bufDrop{0};           // packets the client received but couldn't queue to server
     std::int64_t  reportedAtSec{-1};    // epoch-seconds when the last H line was received
-    std::string   version;              // client version string from "ver=" field in H line
-    std::string   platform;            // from platform= field, e.g. "linux-amd64"
-    unsigned      wireProtoVersion{0};  // from wire_proto= field; 0 = not yet reported
+    std::string   version;              // client version string from "ver=" field
+    std::string   platform;             // e.g. "linux-amd64"
+    unsigned      wireProtoVersion{0};  // from wire_proto=; 0 = not yet reported
+    std::uint32_t aggIntervalMs{0};     // from agg_interval_ms=; 0 = not reported (old client)
+    std::uint32_t aggFlows{0};          // from agg_flows=; unique flows in last flush
 };
+
+// Parse a space-separated key=value H-line body (the part after the "H " prefix)
+// into a ClientHealthStats.  reportedAtSec is NOT set here — the caller stamps it.
+// Unknown keys are silently ignored (forward-compatibility rule).
+inline ClientHealthStats parseHealthLine(const std::string &body)
+{
+    ClientHealthStats hs;
+    std::size_t pos = 0;
+    const std::size_t len = body.size();
+
+    while (pos < len)
+    {
+        // skip whitespace
+        while (pos < len && (body[pos] == ' ' || body[pos] == '\r')) ++pos;
+        if (pos >= len) break;
+
+        // locate end of the current whitespace-delimited token
+        std::size_t tokenEnd = pos;
+        while (tokenEnd < len && body[tokenEnd] != ' ' && body[tokenEnd] != '\r')
+            ++tokenEnd;
+
+        // find '=' within this token only; skip the token if absent
+        std::size_t eq = body.find('=', pos);
+        if (eq == std::string::npos || eq >= tokenEnd) { pos = tokenEnd; continue; }
+        std::string key = body.substr(pos, eq - pos);
+        pos = eq + 1;
+
+        // find end of value (next space or end)
+        std::size_t vstart = pos;
+        while (pos < len && body[pos] != ' ' && body[pos] != '\r') ++pos;
+        std::string val = body.substr(vstart, pos - vstart);
+
+        if (val.empty()) continue;
+
+        // numeric fields
+        auto toU64 = [&](std::uint64_t &dst) {
+            try { dst = std::stoull(val); } catch (...) {}
+        };
+        auto toU32 = [&](std::uint32_t &dst) {
+            try {
+                unsigned long long v = std::stoull(val);
+                dst = (v > 0xFFFFFFFFull) ? 0xFFFFFFFFu : static_cast<std::uint32_t>(v);
+            } catch (...) {}
+        };
+        auto toUint = [&](unsigned &dst) {
+            try { dst = static_cast<unsigned>(std::stoull(val)); } catch (...) {}
+        };
+
+        if      (key == "pcap_recv")       toU64(hs.pcapRecv);
+        else if (key == "pcap_drop")       toU64(hs.pcapDrop);
+        else if (key == "buf_drop")        toU64(hs.bufDrop);
+        else if (key == "wire_proto")      toUint(hs.wireProtoVersion);
+        else if (key == "ver")             hs.version  = val;
+        else if (key == "platform")        hs.platform = val;
+        else if (key == "agg_interval_ms") toU32(hs.aggIntervalMs);
+        else if (key == "agg_flows")       toU32(hs.aggFlows);
+        // unknown keys: silently ignored
+    }
+    return hs;
+}
 
 // Auth-version mismatch connection attempt. Recorded when a client presents an
 // unrecognised auth version byte (as distinct from a wrong-key failure, which is a

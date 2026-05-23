@@ -417,12 +417,13 @@ static std::string buildDemoSummaryJson()
     j += ",\n  \"client_health\": ["
          "\n    {\"client\":\"MacBook-Air\","
          "\"client_id\":\"0000000000000000000000000000000000000000000000000000000000000001\","
-         "\"version\":\"1.8.1\",\"platform\":\"linux-amd64\","
+         "\"version\":\"1.10.0\",\"platform\":\"linux-amd64\","
          "\"pcap_recv\":"; j += std::to_string(2847281 + tick * 76);
     j += ",\"pcap_drop\":0,\"pcap_drop_pct\":\"0.00\","
          "\"buf_drop\":0,\"buf_drop_pct\":\"0.00\","
          "\"reported_at\":"; j += std::to_string(nowEpoch - 12);
-    j += ",\"stale\":false,\"wire_proto_version\":1,\"wire_proto_ok\":true}";
+    j += ",\"stale\":false,\"wire_proto_version\":1,\"wire_proto_ok\":true"
+         ",\"agg_interval_ms\":1200,\"agg_flows\":47}";
     j += ",\n    {\"client\":\"iPhone-15\","
          "\"client_id\":\"0000000000000000000000000000000000000000000000000000000000000002\","
          "\"version\":\"1.0.0\",\"platform\":\"\","
@@ -433,12 +434,13 @@ static std::string buildDemoSummaryJson()
     j += ",\"stale\":false,\"wire_proto_version\":1,\"wire_proto_ok\":true}";
     j += ",\n    {\"client\":\"Desktop-PC\","
          "\"client_id\":\"0000000000000000000000000000000000000000000000000000000000000003\","
-         "\"version\":\"1.8.1\",\"platform\":\"windows-amd64\","
+         "\"version\":\"1.10.0\",\"platform\":\"windows-amd64\","
          "\"pcap_recv\":"; j += std::to_string(4192841 + tick * 112);
     j += ",\"pcap_drop\":0,\"pcap_drop_pct\":\"0.00\","
          "\"buf_drop\":0,\"buf_drop_pct\":\"0.00\","
          "\"reported_at\":"; j += std::to_string(nowEpoch - 5);
-    j += ",\"stale\":false,\"wire_proto_version\":1,\"wire_proto_ok\":true}";
+    j += ",\"stale\":false,\"wire_proto_version\":1,\"wire_proto_ok\":true"
+         ",\"agg_interval_ms\":4800,\"agg_flows\":2400}";
     j += "\n  ]";
 
     j += ",\n  \"proto_rejected_clients\": []";
@@ -1114,6 +1116,13 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
                 j += ",\"wire_proto_ok\":";
                 j += (hs.wireProtoVersion == kWireProtoVersion) ? "true" : "false";
             }
+            if (hs.aggIntervalMs > 0)
+            {
+                j += ",\"agg_interval_ms\":";
+                j += std::to_string(hs.aggIntervalMs);
+                j += ",\"agg_flows\":";
+                j += std::to_string(hs.aggFlows);
+            }
             j += '}';
             first = false;
         }
@@ -1543,8 +1552,8 @@ button{font-family:monospace;font-size:0.82em;padding:5px 14px;border-radius:3px
 
 <div class="section" style="font-size:0.72em;margin:8px 0 4px;color:#555">Wire Agents</div>
 <table>
-  <thead><tr><th>Client</th><th>Version</th><th>Wire Proto</th><th>pcap recv</th><th>Kernel drop</th><th>Buf drop</th><th>Last report</th><th>Update</th></tr></thead>
-  <tbody id="health_body"><tr><td colspan="8" style="color:#555">Loading&#8230;</td></tr></tbody>
+  <thead><tr><th>Client</th><th>Version</th><th>Wire Proto</th><th>pcap recv</th><th>Kernel drop</th><th>Buf drop</th><th>Aggregation</th><th>Last report</th><th>Update</th></tr></thead>
+  <tbody id="health_body"><tr><td colspan="9" style="color:#555">Loading&#8230;</td></tr></tbody>
 </table>
 <div id="proto-reject-banner" style="display:none;background:#3a2000;color:#fa0;border-radius:5px;padding:8px 14px;margin:6px 0;font-size:0.88em"></div>
 <div id="proto-rejected-section" style="display:none">
@@ -1684,12 +1693,19 @@ async function loadClients(){
             }
           }
         }
+        let aggCell;
+        if(!x.agg_interval_ms){aggCell='<span style="color:#555">—</span>';}
+        else{
+          const rate=Math.round(x.agg_flows/(x.agg_interval_ms/1000));
+          const intv=(x.agg_interval_ms/1000).toFixed(1);
+          aggCell='~'+rate+'/s<br><span style="color:#555;font-size:0.85em">'+intv+'s·'+x.agg_flows+' flows</span>';
+        }
         return'<tr style="'+rowBg+'"><td>'+esc(x.client)+st+'</td><td style="color:#aaa">'+esc(x.version)+'</td><td>'+
           wpBadge+'</td><td>'+x.pcap_recv.toLocaleString()+'</td><td style="color:'+pdC+'">'+
           x.pcap_drop.toLocaleString()+' ('+x.pcap_drop_pct+'%)</td><td style="color:'+bdC+'">'+
-          x.buf_drop.toLocaleString()+' ('+x.buf_drop_pct+'%)</td><td>'+fmtT(x.reported_at)+'</td>'
+          x.buf_drop.toLocaleString()+' ('+x.buf_drop_pct+'%)</td><td>'+aggCell+'</td><td>'+fmtT(x.reported_at)+'</td>'
           +'<td>'+updCell+'</td></tr>';
-      }).join(''):'<tr><td colspan="8" style="color:#555">No wire agents connected</td></tr>';
+      }).join(''):'<tr><td colspan="9" style="color:#555">No wire agents connected</td></tr>';
     // Proto-rejected
     const rejected=d.proto_rejected_clients||[];
     const rejSec=document.getElementById('proto-rejected-section');

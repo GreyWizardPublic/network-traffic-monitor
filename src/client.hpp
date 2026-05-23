@@ -26,6 +26,13 @@ struct ClientConfig
     // Auto-update: check for new binary via server HTTPS API once per day.
     bool auto_update{false};            // default off; opt-in via config
     std::uint16_t web_port{8443};       // server's HTTPS API port (matches server web_port)
+
+    // Flow aggregation: accumulate bytes per (iface,src,dst) tuple and flush
+    // on an adaptive timer rather than sending one D-line per captured packet.
+    std::uint32_t aggTargetLinesPerSec{500};  // max D-lines/sec output (0 = no limit)
+    std::uint32_t aggMinIntervalMs{100};      // minimum flush interval (ms)
+    std::uint32_t aggMaxIntervalMs{5000};     // maximum flush interval (ms)
+    std::uint32_t aggMaxFlows{10000};         // flow-table cap; forced flush when reached
 };
 
 // Load from one config file (key=value, # comment). Returns defaults for missing keys. Returns false if file missing.
