@@ -5,9 +5,10 @@ import os
 import Security
 
 // Wire protocol constants (mirrors proto_client_server.hpp)
-private let kAuthVersionV2: UInt8   = 0x02
+private let kAuthVersionV3: UInt8   = 0x03   // auth v3: adds capability exchange
 private let kAuthResultOk: UInt8    = 0x00
-private let kAuthSignPrefix         = Data("NTM-AUTH-v2".utf8)
+private let kCapNone: UInt8         = 0x00   // no optional features requested
+private let kAuthSignPrefix         = Data("NTM-AUTH-v2".utf8)  // signature prefix unchanged
 private let kAuthNonceLen           = 32
 private let kAuthPubkeyLen          = 32
 private let kAuthSignatureLen       = 64
@@ -93,23 +94,29 @@ actor WireProtocolClient {
     // MARK: - Auth handshake
 
     private func performAuth(conn: NWConnection, privateKey: Curve25519.Signing.PrivateKey) async throws {
-        // Step 1: send auth version byte
-        try await send(Data([kAuthVersionV2]), on: conn)
+        // Step 1: send auth version byte (v3 — capability exchange)
+        try await send(Data([kAuthVersionV3]), on: conn)
 
         // Step 2: receive 32-byte nonce
         let nonce = try await receive(exactly: kAuthNonceLen, from: conn)
 
-        // Step 3: sign (prefix ‖ nonce) and send pubkey + signature
+        // Step 3: sign (prefix ‖ nonce) and send pubkey + signature + capability byte
+        // Signature message format is unchanged from v2 ("NTM-AUTH-v2" || nonce).
         var message = kAuthSignPrefix
         message.append(nonce)
         let signature = try privateKey.signature(for: message)
         var frame = privateKey.publicKey.rawRepresentation  // 32 bytes
         frame.append(contentsOf: signature)                 // 64 bytes
+        frame.append(kCapNone)                              //  1 byte — capability flags (no zlib)
         try await send(frame, on: conn)
 
         // Step 4: receive 1-byte result
         let result = try await receive(exactly: 1, from: conn)
         guard result[0] == kAuthResultOk else { throw WireError.authRejected }
+
+        // Step 5: receive 1-byte negotiated capability flags (only sent on OK in v3)
+        // We sent kCapNone so the server will echo 0x00 — no data-phase changes needed.
+        _ = try await receive(exactly: 1, from: conn)
     }
 
     // MARK: - NWConnection helpers
