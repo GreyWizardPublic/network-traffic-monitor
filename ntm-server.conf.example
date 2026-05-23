@@ -33,26 +33,29 @@ key=/etc/ntm-server/server_key.pem
 
 # ── HTTPS web dashboard ──────────────────────────────────────────────────────
 #
-# The web dashboard is an HTTPS-only endpoint that serves a browser-based
-# monitoring UI.
+# The web dashboard is served on the SAME port as ntm-client data ingestion
+# (port= above).  TLS ALPN negotiation (RFC 7301) routes each connection:
+#   • ntm-client advertises ALPN "ntm-wire"  → data-ingestion handler
+#   • Browsers advertise ALPN "http/1.1"     → HTTPS dashboard handler
+#
+# This means only ONE port needs to be open to the network — ntm-client
+# instances and browser sessions share it transparently.
 #
 # IMPORTANT: the web dashboard requires cert= and key= to be set. If they are
 # absent, the web dashboard is disabled (no plaintext fallback is created).
+#
+# web_port and web_bind are no longer used (unified port replaces them).
+# If present in an existing config file they are silently ignored.
 
-# HTTPS port for the web dashboard (1-65535). 0 = disabled. Default 8443.
-# web_port=8443
-
-# Bind address for the web dashboard (IPv4). Default 0.0.0.0 (all interfaces).
+# Bind address for the unified port (IPv4). Default 0.0.0.0 (all interfaces).
 #
 # Cloudflare Tunnel deployment (recommended): set to 127.0.0.1 — cloudflared
 # connects from localhost so the port is never exposed on the network at all.
+# Both ntm-client and dashboard browser traffic flow through the tunnel.
 #
-# Direct LAN access (no tunnel): set to the server's LAN IP (e.g. 192.168.1.x)
-# to restrict to that interface only, or leave as 0.0.0.0 and rely on firewall rules.
-#
-# WebAuthn mode: the application-layer LAN-IP filter is bypassed (authentication
-# is handled by passkey sessions). Binding tightly here is your main perimeter.
-web_bind=127.0.0.1
+# Direct access: set to a specific LAN IP or leave as 0.0.0.0 and use firewall
+# rules to restrict access.
+# client_bind=127.0.0.1
 
 # Max web requests per IP per minute (0 = unlimited). Default 30.
 # web_rate_limit_rpm=30

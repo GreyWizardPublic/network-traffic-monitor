@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <cstring>
 #include <string>
 
 // Client↔Server shared protocol constructs (data ingestion + optional Ed25519 auth).
@@ -20,8 +21,49 @@ inline constexpr unsigned kWireProtoVersion = 2;
 // Lockstep consumers: ntm-server, NTMDashboard (iOS), embedded web dashboard.
 inline constexpr unsigned kApiVersion = 7;
 
-// Default TCP port for client→server data ingestion connections.
+// Default TCP port — serves both ntm-client data ingestion and the HTTPS
+// dashboard when port consolidation is in use (see docs/wire-protocol.md § 2).
 inline constexpr std::uint16_t kDefaultPort = 5555;
+
+// TLS ALPN protocol identifiers used for port multiplexing.
+// ntm-client advertises kAlpnNtmWire; browsers advertise kAlpnHttp11 (by default).
+// The server selects "ntm-wire" > "http/1.1" > "http/1.1" fallback (no-ALPN clients).
+inline constexpr char kAlpnNtmWire[] = "ntm-wire";
+inline constexpr char kAlpnHttp11[]  = "http/1.1";
+
+// Select the ALPN protocol from the client's wire-format offer list.
+// Input: OpenSSL wire format — length-prefixed strings concatenated
+//   e.g. "\x08ntm-wire\x08http/1.1" for a client offering both.
+// Returns: "ntm-wire" > "http/1.1" (priority order); "http/1.1" as fallback
+// for clients that offer nothing recognised (e.g. older browsers with no ALPN).
+// Pure function — no OpenSSL dependency; directly unit-testable.
+inline std::string selectAlpnFromClientList(const unsigned char *in,
+                                             unsigned int         inlen)
+{
+    // First pass: look for "ntm-wire" (highest priority — data-ingestion client).
+    const unsigned char *p   = in;
+    const unsigned char *end = in + inlen;
+    while (p < end)
+    {
+        unsigned char len = *p++;
+        if (p + len > end) break;
+        if (len == 8 && std::memcmp(p, "ntm-wire", 8) == 0)
+            return kAlpnNtmWire;
+        p += len;
+    }
+    // Second pass: look for "http/1.1" (dashboard browsers).
+    p = in;
+    while (p < end)
+    {
+        unsigned char len = *p++;
+        if (p + len > end) break;
+        if (len == 8 && std::memcmp(p, "http/1.1", 8) == 0)
+            return kAlpnHttp11;
+        p += len;
+    }
+    // Fallback: no recognised protocol in the offer list (e.g. client sent no ALPN).
+    return kAlpnHttp11;
+}
 
 // Hardcoded port for the legacy App Store review demo server (port 12345).
 // The iOS client no longer uses this port — demo access now goes through

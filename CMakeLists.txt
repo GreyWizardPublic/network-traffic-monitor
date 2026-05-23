@@ -176,6 +176,7 @@ if(NOT WIN32)
         tests/test_flow_aggregator.cpp
         tests/test_health_stats.cpp
         tests/test_zlib_stream.cpp
+        tests/test_alpn.cpp
     )
     target_include_directories(ntm-tests PRIVATE src tests)
     # ntm_types.hpp uses POSIX socket headers for isLanIP(); no extra libs needed.

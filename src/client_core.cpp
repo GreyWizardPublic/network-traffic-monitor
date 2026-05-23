@@ -76,6 +76,14 @@ SSL_CTX *createClientTLSContext(const std::string &caPath,
     }
     SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3);
     SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+
+    // ALPN: advertise "ntm-wire" so the server can route this connection as a
+    // data-ingestion channel when the dashboard and client share a single port.
+    // Browsers send "http/1.1" by default; the server selects "ntm-wire" first.
+    // Wire format: 1-byte length prefix followed by the ASCII protocol name.
+    static const unsigned char kAlpn[] = "\x08ntm-wire";
+    SSL_CTX_set_alpn_protos(ctx, kAlpn, sizeof(kAlpn) - 1);
+
     (void)serverCertPath; // used at verify time, not context creation
     return ctx;
 }
@@ -356,10 +364,13 @@ static bool parseConfigLine(const std::string &key, const std::string &val,
     }
     if (key == "web_port")
     {
-        try {
-            unsigned long p = std::stoul(v);
-            if (p != 0 && p <= 65535) out.web_port = static_cast<std::uint16_t>(p);
-        } catch (const std::exception &) {}
+        // Deprecated since server v1.15.0: the server uses one unified port
+        // (port=) for both data-ingestion and the HTTPS dashboard API.
+        // The key is still accepted so existing config files don't error, but
+        // the value is ignored — the auto-updater uses config.port instead.
+        std::cerr << "ntm-client: config: 'web_port' is deprecated since server "
+                     "v1.15.0 (unified port); the value is ignored. "
+                     "Remove it from your config file.\n";
         return true;
     }
     if (key == "agg_target_lines_per_sec")
