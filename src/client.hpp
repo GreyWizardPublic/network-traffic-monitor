@@ -25,7 +25,11 @@ struct ClientConfig
     unsigned reconnectIntervalSec{60};
     // Auto-update: check for new binary via server HTTPS API once per day.
     bool auto_update{false};            // default off; opt-in via config
-    std::uint16_t web_port{8443};       // server's HTTPS API port (matches server web_port)
+    // Deprecated since server v1.15.0 (ALPN port unification): the server now uses
+    // a single port (port=) for both data-ingestion and the HTTPS dashboard API.
+    // The field is still parsed so existing config files don't error, but it is
+    // ignored — the auto-updater connects to config.port instead.
+    std::uint16_t web_port{8443};       // deprecated; ignored since server v1.15.0
 
     // Flow aggregation: accumulate bytes per (iface,src,dst) tuple and flush
     // on an adaptive timer rather than sending one D-line per captured packet.
