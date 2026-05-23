@@ -1229,31 +1229,12 @@ void connectionThread(int clientFd,
             }
             else if (line.rfind(kHealthLinePrefix, 0) == 0)
             {
-                // Health report: "H pcap_recv=N pcap_drop=N buf_drop=N" — store latest per client.
+                // Health report: parse via shared parseHealthLine() in ntm_types.hpp.
                 if (registry)
                 {
-                    ClientHealthStats hs;
+                    ClientHealthStats hs = parseHealthLine(line.substr(2));
                     hs.reportedAtSec = std::chrono::duration_cast<std::chrono::seconds>(
                         std::chrono::system_clock::now().time_since_epoch()).count();
-                    std::string payload = line.substr(2);
-                    std::istringstream hiss(payload);
-                    std::string tok;
-                    while (hiss >> tok)
-                    {
-                        auto eq = tok.find('=');
-                        if (eq == std::string::npos) continue;
-                        std::string k = tok.substr(0, eq);
-                        std::string v = tok.substr(eq + 1);
-                        if (k == "ver")      { hs.version  = v; continue; }
-                        if (k == "platform") { hs.platform = v; continue; }
-                        char *endp = nullptr;
-                        auto n = std::strtoull(v.c_str(), &endp, 10);
-                        if (endp == v.c_str()) continue;
-                        if      (k == "pcap_recv")   hs.pcapRecv         = static_cast<std::uint64_t>(n);
-                        else if (k == "pcap_drop")   hs.pcapDrop         = static_cast<std::uint64_t>(n);
-                        else if (k == "buf_drop")    hs.bufDrop          = static_cast<std::uint64_t>(n);
-                        else if (k == "wire_proto")  hs.wireProtoVersion = static_cast<unsigned>(n);
-                    }
                     std::lock_guard<std::mutex> lk(registry->mtx);
                     registry->clientHealth[clientId] = hs;
                 }

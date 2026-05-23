@@ -118,3 +118,23 @@ endif()
 set_target_properties(ntm-client PROPERTIES
     OUTPUT_NAME "ntm-client-${NTM_CLIENT_PLATFORM}-${NTM_CLIENT_VERSION}"
 )
+
+# ---------------------------------------------------------------------------
+# ntm-tests — unit test binary (Linux only; pure logic, no platform I/O)
+# ---------------------------------------------------------------------------
+
+if(NOT WIN32)
+    add_executable(ntm-tests
+        tests/test_main.cpp
+        tests/test_flow_aggregator.cpp
+        tests/test_health_stats.cpp
+    )
+    target_include_directories(ntm-tests PRIVATE src tests)
+    # ntm_types.hpp uses POSIX socket headers for isLanIP(); no extra libs needed.
+    target_compile_options(ntm-tests PRIVATE -Wall -Wextra -Wpedantic)
+    set_target_properties(ntm-tests PROPERTIES OUTPUT_NAME "ntm-tests")
+
+    # Register with CTest so `ctest` or `cmake --build build --target test` works.
+    enable_testing()
+    add_test(NAME ntm-unit-tests COMMAND ntm-tests)
+endif()
