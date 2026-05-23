@@ -114,6 +114,7 @@ struct ServerConfig
     std::string webauthn_ios_app_id;         // "<TeamID>.<BundleID>" for AASA
     std::string webauthn_allowed_origins;    // comma-separated; default: "https://<rpId>"
     unsigned    webauthn_session_ttl_hours{24};
+    unsigned    webauthn_idle_timeout_minutes{15};
 };
 
 // Tracks concurrent connections per client IP to limit one host exhausting the connection pool.
@@ -554,7 +555,7 @@ static const std::set<std::string> &knownServerConfigKeys()
         "webauthn_rp_id", "webauthn_rp_name",
         "webauthn_credentials_file", "webauthn_admin_cred_file",
         "webauthn_ios_app_id", "webauthn_allowed_origins",
-        "webauthn_session_ttl_hours",
+        "webauthn_session_ttl_hours", "webauthn_idle_timeout_minutes",
         "update_dir",
         "trusted_proxy",
     };
@@ -678,6 +679,12 @@ static ServerConfig loadServerConfig(const std::string &configPath, bool *ok = n
                 u = std::stoul(val);
                 cfg.webauthn_session_ttl_hours =
                     static_cast<unsigned>(std::min(720ul, std::max(1ul, u)));
+            }
+            else if (key == "webauthn_idle_timeout_minutes")
+            {
+                u = std::stoul(val);
+                cfg.webauthn_idle_timeout_minutes =
+                    static_cast<unsigned>(std::min(1440ul, std::max(1ul, u)));
             }
             else if (key == "update_dir") { cfg.update_dir = val; }
             else if (key == "trusted_proxy") { cfg.trusted_proxy = val; }
@@ -1612,8 +1619,9 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                                       ? config.webauthn_rp_id : config.webauthn_rp_name;
         waCfg.credentialsFile   = config.webauthn_credentials_file;
         waCfg.adminCredFile     = config.webauthn_admin_cred_file;
-        waCfg.iosAppId          = config.webauthn_ios_app_id;
-        waCfg.sessionTtlHours   = config.webauthn_session_ttl_hours;
+        waCfg.iosAppId             = config.webauthn_ios_app_id;
+        waCfg.sessionTtlHours      = config.webauthn_session_ttl_hours;
+        waCfg.idleTimeoutMinutes   = config.webauthn_idle_timeout_minutes;
         // Parse comma-separated allowed origins
         if (!config.webauthn_allowed_origins.empty())
         {
