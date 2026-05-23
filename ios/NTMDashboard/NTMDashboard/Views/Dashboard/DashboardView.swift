@@ -116,7 +116,7 @@ struct DashboardView: View {
                 }
                 if vm.snapshot?.demo == true {
                     ToolbarItem(placement: .topBarLeading) {
-                        Button("Sign out", role: .destructive) {
+                        Button("Exit Demo", role: .destructive) {
                             Task { await authVM.logout() }
                         }
                     }
