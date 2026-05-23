@@ -2,15 +2,53 @@
 
 ## Agent Roles
 
-Two Claude Code agents collaborate on this project. Each agent **detects its
-own role from the OS at the start of every session** — no manual configuration needed.
+Two Claude Code agents work **in parallel and independently** on this project.
+Each agent detects its own role from the OS at the start of every session —
+no manual configuration needed.
 
 Run `uname -s` and `uname -r` to identify the environment:
 
-| Environment | Detection | Role | Platform ownership |
+| Environment | Detection | Role | Code ownership |
 |---|---|---|---|
-| Linux / WSL2 | `uname -s` = `Linux` and `uname -r` contains `microsoft` | **C++ Agent** | Linux server · Linux client · Windows client |
-| macOS | `uname -s` = `Darwin` | **Swift Agent** | iOS apps · future macOS apps |
+| Linux / WSL2 | `uname -s` = `Linux` and `uname -r` contains `microsoft` | **C++ Agent** | `src/` · CMake · docs · config files |
+| macOS | `uname -s` = `Darwin` | **Swift Agent** | `ios/` · XcodeGen · Swift/iOS code |
+
+---
+
+### Parallel workflow — the golden rule
+
+Each agent owns its code domain exclusively and may land changes to `main` without
+waiting for the other agent. The one hard constraint is **protocol changes** — see
+[Protocol Governance](#protocol-governance) for the special rule that applies there.
+
+---
+
+### Branch & merge workflow (both agents follow this)
+
+1. **Start a feature branch** from the latest `main` before any new unit of work:
+   ```
+   git checkout main && git pull
+   git checkout -b <agent-prefix>/<short-description>
+   ```
+   Use prefix `cpp/` for C++ Agent branches, `ios/` for Swift Agent branches.
+
+2. **Commit only files inside your code domain.** Never touch the other agent's
+   files. If a cross-domain change is needed, open a GitHub Issue (see below).
+
+3. **Open a PR** targeting `main` when the work is ready. PR description must
+   include build instructions and a test checklist appropriate to the domain.
+
+4. **Merge the PR independently** — no sign-off from the other agent is required
+   unless the change touches a shared protocol (see Protocol Governance).
+
+5. **Delete the feature branch** after merge, both local and remote:
+   ```
+   git branch -d <branch>
+   git push origin --delete <branch>
+   ```
+
+6. **At the start of each session**, check for open GitHub Issues tagged for your
+   agent (see Cross-agent requests below) and address them before starting new work.
 
 ---
 
@@ -24,13 +62,8 @@ deployment guides, wire-protocol and API-protocol specs.
 - Writes documentation, config examples, and deployment guides.
 - Builds Linux server + client **and** cross-compiles Windows client on every build
   (see [C++ Build](#c-build) below).
-- Commits and pushes to **feature branches** (never directly to `main`).
-- Opens PRs targeting `main` when a unit of work is ready for the Swift Agent.
-- Reads Swift Agent PR comments and iterates until all checklist items pass.
-- Signals the Swift Agent to merge by commenting `ready to merge` on the PR.
 - **Does not** run XcodeGen, Xcode builds, or on-device tests.
-- **Does not** write Swift code — if a Swift change is needed, describe it clearly
-  in a PR comment so the Swift Agent can implement it.
+- **Does not** write Swift code — open a GitHub Issue instead (see below).
 
 ---
 
@@ -43,68 +76,34 @@ native code.
 **Responsibilities:**
 - Writes and maintains all Swift code for iOS apps (NTMDashboard, NTMClient).
 - Applies iOS-side protocol lockstep changes (e.g. bumping `supportedApiVersion`,
-  adding new model fields) when the C++ Agent bumps a protocol version.
+  adding new model fields) when a protocol version lands on `main`.
 - Runs XcodeGen (`xcodegen generate`) and builds in Xcode (⌘B).
 - Runs on-device and simulator tests; handles App Store / TestFlight publishing.
-- Reports build and test results as a PR comment covering every checklist item.
-- Merges the PR only after the C++ Agent comments `ready to merge`.
-- After merging, **deletes the feature branch** — both local and remote:
-  ```
-  git branch -d <branch>
-  git push origin --delete <branch>
-  ```
-- **Does not** write C++ code — if a C++ change is needed, describe it in a PR
-  comment with the tag `[ACTION REQUIRED — C++ AGENT]` so the C++ Agent picks
-  it up on its next session.
+- **Does not** write C++ code — open a GitHub Issue instead (see below).
 
 ---
 
-### Handoff: C++ Agent → Swift Agent
+### Cross-agent requests
 
-The C++ Agent opens every PR with this structure:
-
-```
-## Build instructions
-<xcodegen / cmake commands>
-
-## Test checklist
-- [ ] item 1
-- [ ] item 2
-
-## Watch for
-<known risks or areas that need close attention>
-
-## Files changed (focus areas)
-<brief list of the most relevant changed files>
-```
-
-The Swift Agent replies with a PR comment covering each checklist item and any
-unexpected findings.
-
----
-
-### Handoff: Swift Agent → C++ Agent
-
-When the Swift Agent needs C++ changes (bug found, new API endpoint needed, protocol
-mismatch, etc.) it leaves a PR comment with this structure:
+When one agent needs the other to make a change, it opens a GitHub Issue using
+this structure:
 
 ```
-## [ACTION REQUIRED — C++ AGENT]
+Title: [C++ AGENT] <short description>     ← or [SWIFT AGENT]
 
-### Problem
-<what is wrong or missing in the C++ code>
+## Problem
+<what is wrong or missing>
 
-### Required change
+## Required change
 <specific files, functions, or behaviour that needs to change>
 
-### Context
-<why this is needed; any relevant error messages or test failures>
+## Context
+<why this is needed; relevant error messages or test failures>
 ```
 
-The C++ Agent reads open PR comments at the start of each session, implements the
-requested changes, pushes to the same feature branch, and replies confirming what
-was done. If the Swift Agent has no open PR to comment on, it opens a new issue on
-GitHub describing the required C++ work.
+The receiving agent addresses the issue in its next session, implements the change
+on a feature branch, merges it, and closes the issue with a comment summarising
+what was done.
 
 ---
 
@@ -173,13 +172,23 @@ all of them.
 
 ### Rules
 
-1. **Update the relevant protocol doc before the commit that changes either side.**
+1. **Protocol changes land directly on `main` — never on a feature branch.**
+   Both agents may have active feature branches at any time. A protocol change on a
+   feature branch would force the other agent to rebase mid-flight and risks merge
+   conflicts in shared headers. Instead: commit protocol changes (doc update +
+   constant bump + both sides of the implementation) directly to `main`, then both
+   agents rebase their active feature branches immediately:
+   ```
+   git fetch origin
+   git rebase origin/main
+   ```
+2. **Update the relevant protocol doc before the commit that changes either side.**
    Never change a message format, field, or endpoint without updating the doc first.
-2. **Bump the protocol version constant** (`kWireProtoVersion` or `kApiVersion`) when
+3. **Bump the protocol version constant** (`kWireProtoVersion` or `kApiVersion`) when
    the change classification in the doc requires it.
-3. **Both protocols are independent.** A wire-protocol change does not require an
+4. **Both protocols are independent.** A wire-protocol change does not require an
    API version bump, and vice versa — unless the same commit touches both sides.
-4. **When a protocol bumps, bump every lockstep module** per the table above.
+5. **When a protocol bumps, bump every lockstep module** per the table above.
 
 ---
 
