@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -130,6 +131,63 @@ struct PacketMeta
     std::string dstIp;
     std::uint32_t bytes{0};
 };
+
+// Parse a D-line body (the part after the "D " prefix) into PacketMeta.
+// Format: "{iface} {src_ip} {dst_ip} {bytes}"
+// Fields are separated by any run of whitespace (space, tab, CR, LF).
+// Returns false if any field is missing, the bytes field is non-numeric,
+// bytes > UINT32_MAX, or a label exceeds its length limit.
+// maxIfaceLen and maxIpLen default to kMaxIfaceLabelLen / kMaxIpLabelLen when 0.
+// Pure function — no I/O, no OpenSSL, directly unit-testable.
+inline bool parseDataLine(const std::string &line, PacketMeta &out,
+                          std::size_t maxIfaceLen = 0,
+                          std::size_t maxIpLen    = 0)
+{
+    if (line.empty())
+        return false;
+
+    const char *p   = line.data();
+    const char *end = p + line.size();
+    auto isSep = [](char c) {
+        return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+    };
+    auto nextTok = [&](const char *&b, const char *&e) -> bool {
+        while (p < end && isSep(*p)) ++p;
+        if (p >= end) return false;
+        b = p;
+        while (p < end && !isSep(*p)) ++p;
+        e = p;
+        return true;
+    };
+
+    const char *ib, *ie, *sb, *se, *db, *de, *bb, *be;
+    if (!nextTok(ib, ie) || !nextTok(sb, se) ||
+        !nextTok(db, de) || !nextTok(bb, be))
+        return false;
+
+    if (maxIfaceLen == 0) maxIfaceLen = kMaxIfaceLabelLen;
+    if (maxIpLen    == 0) maxIpLen    = kMaxIpLabelLen;
+
+    const std::size_t ifaceLen = static_cast<std::size_t>(ie - ib);
+    const std::size_t srcLen   = static_cast<std::size_t>(se - sb);
+    const std::size_t dstLen   = static_cast<std::size_t>(de - db);
+    if (ifaceLen > maxIfaceLen || srcLen > maxIpLen || dstLen > maxIpLen)
+        return false;
+
+    char *numEnd = nullptr;
+    unsigned long val = std::strtoul(bb, &numEnd, 10);
+    if (numEnd == bb)         // no digits consumed
+        return false;
+    if (val > static_cast<unsigned long>(UINT32_MAX))
+        return false;
+
+    out.iface.assign(ib, ifaceLen);
+    out.srcIp.assign(sb, srcLen);
+    out.dstIp.assign(db, dstLen);
+    out.bytes = static_cast<std::uint32_t>(val);
+    (void)be;
+    return true;
+}
 
 } // namespace ntm
 
