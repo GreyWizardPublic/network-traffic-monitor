@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(NetworkTrafficMonitor LANGUAGES CXX)
+project(NetworkTrafficMonitor LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -50,11 +50,17 @@ if(WIN32)
             "and pass -DNPCAP_SDK=/path/to/npcap-sdk to cmake.")
     endif()
 
+    # miniz — vendored zlib-compatible library for Windows compression support.
+    # miniz.c is a C file; set_source_files_properties ensures it is compiled as C,
+    # not C++ (the rest of the project uses C++17).
+    set_source_files_properties(src/third_party/miniz/miniz.c PROPERTIES LANGUAGE C)
+
     add_executable(ntm-client
         ${NTM_CLIENT_COMMON_SOURCES}
         src/client_windows.cpp
+        src/third_party/miniz/miniz.c
     )
-    target_include_directories(ntm-client PRIVATE "${NPCAP_SDK}/Include")
+    target_include_directories(ntm-client PRIVATE "${NPCAP_SDK}/Include" src)
     target_link_directories(ntm-client PRIVATE "${NPCAP_SDK}/Lib/x64")
     target_link_libraries(ntm-client
         PRIVATE
@@ -90,7 +96,7 @@ else()
         PRIVATE
             OpenSSL::SSL
             ${PCAP_LIBRARY}
-            ZLIB::ZLIB        # zlib stream compression on the data phase (Linux client)
+            ZLIB::ZLIB        # zlib stream compression on the data phase
             Threads::Threads
     )
 endif()
