@@ -174,11 +174,15 @@ inline bool parseDataLine(const std::string &line, PacketMeta &out,
     if (ifaceLen > maxIfaceLen || srcLen > maxIpLen || dstLen > maxIpLen)
         return false;
 
+    // Use strtoull (always 64-bit) rather than strtoul so the UINT32_MAX overflow
+    // check works on both LP64 (Linux, where unsigned long is 64-bit) and LLP64
+    // (Windows, where unsigned long is 32-bit and strtoul wraps on values > UINT32_MAX,
+    // making the overflow guard unreachable).
     char *numEnd = nullptr;
-    unsigned long val = std::strtoul(bb, &numEnd, 10);
+    unsigned long long val = std::strtoull(bb, &numEnd, 10);
     if (numEnd == bb)         // no digits consumed
         return false;
-    if (val > static_cast<unsigned long>(UINT32_MAX))
+    if (val > static_cast<unsigned long long>(UINT32_MAX))
         return false;
 
     out.iface.assign(ib, ifaceLen);
