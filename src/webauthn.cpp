@@ -655,9 +655,8 @@ std::string WebAuthnRP::completeAuthentication(const std::string &sessionKey,
 
     // Issue a session token
     auto token = toBase64url(randomBytes(32));
-    auto expiry = std::chrono::steady_clock::now() +
-                  std::chrono::hours(cfg_.sessionTtlHours);
-    sessions_[token] = { expiry };
+    auto now   = std::chrono::steady_clock::now();
+    sessions_[token] = { now + std::chrono::hours(cfg_.sessionTtlHours), now };
     return token;
 }
 
@@ -665,12 +664,20 @@ std::string WebAuthnRP::completeAuthentication(const std::string &sessionKey,
 // Session management
 // ---------------------------------------------------------------------------
 
-bool WebAuthnRP::isValidSession(const std::string &token) const
+bool WebAuthnRP::isValidSession(const std::string &token)
 {
     std::lock_guard<std::mutex> lk(mtx_);
     auto it = sessions_.find(token);
     if (it == sessions_.end()) return false;
-    return std::chrono::steady_clock::now() <= it->second.expiry;
+    const auto now = std::chrono::steady_clock::now();
+    if (now > it->second.expiry) { sessions_.erase(it); return false; }
+    if (cfg_.idleTimeoutMinutes > 0 &&
+        now > it->second.lastActivity + std::chrono::minutes(cfg_.idleTimeoutMinutes))
+    {
+        sessions_.erase(it); return false;
+    }
+    it->second.lastActivity = now;   // refresh — keeps session alive while browser is active
+    return true;
 }
 
 void WebAuthnRP::invalidateSession(const std::string &token)
@@ -883,7 +890,13 @@ void WebAuthnRP::sweepExpired()
     for (auto it = pendingAuths_.begin(); it != pendingAuths_.end(); )
         it = (now > it->second.expiry) ? pendingAuths_.erase(it) : std::next(it);
     for (auto it = sessions_.begin(); it != sessions_.end(); )
-        it = (now > it->second.expiry) ? sessions_.erase(it) : std::next(it);
+    {
+        const bool expired = now > it->second.expiry;
+        const bool idle    = cfg_.idleTimeoutMinutes > 0 &&
+                             now > it->second.lastActivity +
+                                   std::chrono::minutes(cfg_.idleTimeoutMinutes);
+        it = (expired || idle) ? sessions_.erase(it) : std::next(it);
+    }
 }
 
 } // namespace ntm

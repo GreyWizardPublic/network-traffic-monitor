@@ -1320,8 +1320,11 @@ tr:hover td{background:#171726}
 .tab.active{color:#7af;background:#0e0e14;border-color:#3a3a5a}
 .tabpanel{border-top:1px solid #252535;padding-top:4px}
 .hdr{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px}
+.hdr-links{display:flex;gap:14px;align-items:baseline}
 .admin-lnk{font-size:0.78em;color:#7af;text-decoration:none;opacity:0.7}
 .admin-lnk:hover{opacity:1}
+.logout-btn{font-size:0.78em;color:#888;background:none;border:none;padding:0;font-family:monospace;cursor:pointer;opacity:0.7}
+.logout-btn:hover{color:#c66;opacity:1}
 .flt-row{display:flex;gap:4px;margin:4px 0 6px}
 .flt{background:#111118;color:#666;border:1px solid #252535;padding:2px 10px;font-family:monospace;font-size:0.78em;border-radius:3px;cursor:pointer;outline:none}
 .flt.active{color:#7af;border-color:#4a4a7a;background:#0e0e14}
@@ -1331,7 +1334,10 @@ tr:hover td{background:#171726}
 <body>
 <div class="hdr">
   <h1>Network Traffic Monitor</h1>
-  <a href="/admin" class="admin-lnk">Admin</a>
+  <div class="hdr-links">
+    <a href="/admin" class="admin-lnk">Admin</a>
+    <button class="logout-btn" onclick="doLogout()">Sign out</button>
+  </div>
 </div>
 <div id="status"><span id="dot" class="dot ok"></span><span id="smsg">Loading&#8230;</span></div>
 <div class="meta">
@@ -1372,6 +1378,10 @@ tr:hover td{background:#171726}
 
 
 <script>
+async function doLogout(){
+  try{await fetch('/auth/logout',{method:'POST'});}catch(_){}
+  window.location.href='/login';
+}
 const POLL_MS=30000;
 let allEntities=[];
 let internetEntities=[];
@@ -2532,14 +2542,22 @@ void webServerThread(httplib::SSLServer &svr,
                 res.set_content("{\"ok\":true,\"token\":\"" + token + "\"}\n", "application/json");
             });
 
-        // POST /auth/logout — invalidate session
+        // POST /auth/logout — invalidate session and clear all auth cookies
         svr.Post("/auth/logout",
             [&config](const httplib::Request &req, httplib::Response &res) {
                 std::string token = sessionFromRequest(req);
                 if (!token.empty()) config.webauthn->invalidateSession(token);
-                res.set_header("Set-Cookie",
-                    "ntm_session=; HttpOnly; Secure; SameSite=Strict; Path=/; "
-                    "Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT");
+                // Also invalidate the admin proof token if present.
+                std::string adminToken = cookieFromRequest(req, "ntm_admin");
+                if (!adminToken.empty())
+                {
+                    std::lock_guard<std::mutex> lk(g_adminProofMtx);
+                    g_adminProofTokens.erase(adminToken);
+                }
+                const std::string expired = "; HttpOnly; Secure; SameSite=Strict; Path=/; "
+                                            "Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT";
+                res.set_header("Set-Cookie", "ntm_session=" + expired);
+                res.set_header("Set-Cookie", "ntm_admin=" + expired);
                 res.set_content("{\"ok\":true}\n", "application/json");
             });
 
