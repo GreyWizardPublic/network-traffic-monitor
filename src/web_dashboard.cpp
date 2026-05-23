@@ -1974,13 +1974,16 @@ document.getElementById('pwd').focus();
 // Web server thread
 // ---------------------------------------------------------------------------
 
-void webServerThread(httplib::SSLServer &svr,
-                     TrafficStats &stats,
-                     const WebConfig &config)
+void registerWebHandlers(NtmHttpServer &svr,
+                         TrafficStats &stats,
+                         const WebConfig &config)
 {
-    WebRateLimiter rateLimiter(config.rate_limit_rpm);
+    // Rate limiters must outlive this call (routes capture them by reference).
+    // Declared static so they have program lifetime — safe because registerWebHandlers
+    // is called exactly once per server lifetime (from the main accept-loop setup).
+    static WebRateLimiter rateLimiter(config.rate_limit_rpm);
     // Separate, much stricter limiter for the admin purge endpoint.
-    WebRateLimiter adminRateLimiter(5);
+    static WebRateLimiter adminRateLimiter(5);
 
     // Scan update directory on startup so the manifest is populated immediately.
     if (!config.update_dir.empty())
@@ -2119,7 +2122,7 @@ void webServerThread(httplib::SSLServer &svr,
     if (adminAvailable)
     {
         svr.Post("/api/admin/auth",
-            [&config, &adminRateLimiter](const httplib::Request &req, httplib::Response &res)
+            [&config](const httplib::Request &req, httplib::Response &res)
             {
                 if (!adminRateLimiter.tryAcquire(effectiveClientIP(req, config)))
                 {
@@ -2203,7 +2206,7 @@ void webServerThread(httplib::SSLServer &svr,
     if (adminAvailable)
     {
         svr.Post("/api/admin/purge",
-            [&stats, &config, &adminRateLimiter](const httplib::Request &req,
+            [&stats, &config](const httplib::Request &req,
                                                   httplib::Response &res)
             {
                 const std::string ip = effectiveClientIP(req, config);
@@ -2278,7 +2281,7 @@ void webServerThread(httplib::SSLServer &svr,
     if (adminAvailable && config.clients_store)
     {
         svr.Post("/api/admin/client/register",
-            [&config, &adminRateLimiter](const httplib::Request &req, httplib::Response &res)
+            [&config](const httplib::Request &req, httplib::Response &res)
             {
                 const std::string ip = effectiveClientIP(req, config);
                 if (!adminRateLimiter.tryAcquire(ip))
@@ -2487,7 +2490,7 @@ void webServerThread(httplib::SSLServer &svr,
 
         // POST /auth/register/complete — verify admin proof + WebAuthn credential
         svr.Post("/auth/register/complete",
-            [&config, &adminRateLimiter](const httplib::Request &req, httplib::Response &res) {
+            [&config](const httplib::Request &req, httplib::Response &res) {
                 if (!adminRateLimiter.tryAcquire(effectiveClientIP(req, config)))
                 {
                     res.status = 429;
@@ -2817,7 +2820,8 @@ void webServerThread(httplib::SSLServer &svr,
             res.set_content("{\"error\":\"not found\"}\n", "application/json");
     });
 
-    svr.listen(config.bind, static_cast<int>(config.port));
+    // No svr.listen() here — the unified ALPN accept loop in server_core.cpp
+    // feeds individual connections via Server::process_request().
 }
 
 // ---------------------------------------------------------------------------

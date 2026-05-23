@@ -872,6 +872,40 @@ static ServerConfig loadServerConfig(const std::string &configPath, bool *ok = n
     return cfg;
 }
 
+// ALPN selection callback registered on the server SSL_CTX.
+// Called once per TLS handshake, before the application layer sends any bytes.
+// Priority: "ntm-wire" (data-ingestion client) > "http/1.1" (dashboard browser).
+// Clients sending no ALPN are treated as HTTP (e.g. older Safari versions).
+static int alpnSelectCallback(SSL * /*ssl*/,
+                               const unsigned char **out, unsigned char *outlen,
+                               const unsigned char *in,  unsigned int   inlen,
+                               void * /*arg*/)
+{
+    std::string selected = ntm::selectAlpnFromClientList(in, inlen);
+    // Point *out into the client's own buffer (required by the OpenSSL API).
+    // SSL_select_next_proto does this correctly; we replicate the pointer arithmetic.
+    const unsigned char *p   = in;
+    const unsigned char *end = in + inlen;
+    while (p < end)
+    {
+        unsigned char len = *p++;
+        if (p + len > end) break;
+        if (std::string_view(reinterpret_cast<const char *>(p), len) == selected)
+        {
+            *out    = p;
+            *outlen = len;
+            return SSL_TLSEXT_ERR_OK;
+        }
+        p += len;
+    }
+    // Fallback: client did not offer our selected protocol — serve http/1.1.
+    // This happens for clients with no ALPN; point into a static string.
+    static const char kHttp11[] = "http/1.1";
+    *out    = reinterpret_cast<const unsigned char *>(kHttp11);
+    *outlen = static_cast<unsigned char>(sizeof(kHttp11) - 1);
+    return SSL_TLSEXT_ERR_OK;
+}
+
 static SSL_CTX *createServerTLSContext(const std::string &certPath, const std::string &keyPath)
 {
     const SSL_METHOD *method = TLS_server_method();
@@ -898,6 +932,11 @@ static SSL_CTX *createServerTLSContext(const std::string &certPath, const std::s
     SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
     SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_OFF);
     SSL_CTX_set_timeout(ctx, static_cast<long>(kMaxSessionSeconds));
+
+    // ALPN: register selection callback so the server can multiplex ntm-client
+    // data-ingestion connections and HTTPS dashboard connections on the same port.
+    SSL_CTX_set_alpn_select_cb(ctx, alpnSelectCallback, nullptr);
+
     return ctx;
 }
 
@@ -937,7 +976,7 @@ void connectionThread(int clientFd,
                       std::atomic<std::size_t> &activeConnections,
                       PerIPConnectionLimiter &perIPLimiter,
                       const ServerConfig &config,
-                      SSL_CTX *sslCtx,
+                      SSL *preAcceptedSsl,
                       std::shared_ptr<std::atomic<bool>> doneFlag)
 {
     // H1: signal completion to the accept-loop reaper so it can join() and remove the
@@ -994,14 +1033,14 @@ void connectionThread(int clientFd,
     try
     {
 
-    if (!sslCtx)
-    {
+    // TLS handshake is completed by the unified accept loop before this thread
+    // is spawned — preAcceptedSsl is the ready-to-use SSL object.
+    if (!preAcceptedSsl)
         return;
-    }
+    ssl = preAcceptedSsl;
 
-    // M4 + NEW-N5: bound TLS handshake + auth handshake duration. We check the return
-    // of setsockopt; on failure we do NOT proceed silently, because both M4 (handshake
-    // stall protection) and the read-loop timeout depend on this option taking effect.
+    // M4: bound the auth-handshake duration (socket timeout is already set to 10s
+    // by the accept loop for the TLS handshake; we confirm it here for the auth phase).
     auto setSocketTimeout = [](int fd, unsigned secs) -> bool {
         struct timeval tv;
         tv.tv_sec = static_cast<time_t>(secs);
@@ -1015,22 +1054,9 @@ void connectionThread(int clientFd,
     if (!setSocketTimeout(clientFd, 10))
     {
         serverLog(LogLevel::Err,
-                  "ntm-server: cannot set handshake timeout on client fd: %s",
+                  "ntm-server: cannot set auth timeout on client fd: %s",
                   std::strerror(errno));
         return;  // ConnCloser cleans up
-    }
-
-    if (sslCtx)
-    {
-        ssl = SSL_new(sslCtx);
-        if (!ssl)
-            return;
-        SSL_set_fd(ssl, clientFd);
-        if (SSL_accept(ssl) <= 0)
-        {
-            ERR_clear_error();
-            return;
-        }
     }
 
     const auto sessionStart = std::chrono::steady_clock::now();
@@ -1636,6 +1662,94 @@ void keyboardWatcherThread()
     }
 }
 
+// Handle one HTTPS dashboard connection on a pre-established SSL session.
+// Called in a worker thread after the unified accept loop determines (via ALPN)
+// that the connection is HTTP, not a wire-protocol ntm-client.
+// Uses httplib's public process_request(Stream&, ...) API directly so that TLS
+// is not re-negotiated: the SSLSocketStream wraps our already-accepted SSL*.
+static void httpWebThread(int connFd,
+                           SSL *ssl,
+                           std::string remoteAddr,
+                           int         remotePort,
+                           NtmHttpServer *webSvr,
+                           std::atomic<std::size_t> &activeConnections,
+                           PerIPConnectionLimiter   &perIPLimiter,
+                           std::string               clientIp,
+                           std::shared_ptr<std::atomic<bool>> doneFlag)
+{
+    struct DoneGuard {
+        std::shared_ptr<std::atomic<bool>> flag;
+        ~DoneGuard() { if (flag) flag->store(true, std::memory_order_release); }
+    } doneGuard{doneFlag};
+
+    struct Guard {
+        std::atomic<std::size_t> &n;
+        explicit Guard(std::atomic<std::size_t> &n_) : n(n_) {}
+        ~Guard() { n--; }
+    } guard(activeConnections);
+
+    struct PerIPGuard {
+        PerIPConnectionLimiter &limiter; std::string ip;
+        PerIPGuard(PerIPConnectionLimiter &l, std::string i) : limiter(l), ip(std::move(i)) {}
+        ~PerIPGuard() { limiter.release(ip); }
+    } perIPGuard(perIPLimiter, clientIp);
+
+    // RAII: SSL shutdown + fd close on exit.
+    struct ConnCloser {
+        SSL *ssl; int fd;
+        ~ConnCloser() {
+            if (ssl) { SSL_shutdown(ssl); SSL_free(ssl); }
+            if (fd >= 0) ::close(fd);
+        }
+    } connCloser{ssl, connFd};
+
+    if (!webSvr || !ssl) return;
+
+    try
+    {
+        // Wrap the pre-accepted SSL in an httplib SSLSocketStream so the HTTP
+        // parser can read/write without knowing about our multiplexed accept loop.
+        // Timeouts: 30s read / 30s write — same as httplib's default for HTTPS.
+        httplib::detail::SSLSocketStream strm(connFd, ssl, 30, 0, 30, 0);
+
+        std::string localAddr;
+        int localPort = 0;
+        {
+            sockaddr_in sa{};
+            socklen_t slen = sizeof(sa);
+            if (::getsockname(connFd, reinterpret_cast<sockaddr *>(&sa), &slen) == 0)
+            {
+                char buf[INET_ADDRSTRLEN]{};
+                ::inet_ntop(AF_INET, &sa.sin_addr, buf, sizeof(buf));
+                localAddr = buf;
+                localPort = static_cast<int>(ntohs(sa.sin_port));
+            }
+        }
+
+        // HTTP keep-alive loop: serve up to N requests on this connection.
+        // httplib sets Connection: close when it wants to end keep-alive;
+        // process_request signals this via the close_connection out-param.
+        bool closeConn = false;
+        int  keepAlive = CPPHTTPLIB_KEEPALIVE_MAX_COUNT;
+        while (keepAlive-- > 0 && !closeConn)
+        {
+            bool connClosed = false;
+            if (!webSvr->process_request(strm,
+                                          remoteAddr, remotePort,
+                                          localAddr,  localPort,
+                                          closeConn,  connClosed,
+                                          [ssl](httplib::Request &req) { req.ssl = ssl; }))
+                break;
+            if (connClosed) break;
+        }
+    }
+    catch (const std::exception &e)
+    {
+        serverLog(LogLevel::Warn, "ntm-server: httpWebThread exception: %s", e.what());
+    }
+    catch (...) {}
+}
+
 int runServer(std::uint16_t port, bool daemonMode, bool verbose,
               const std::string &allowedKeysPath,
               const std::string &certPath, const std::string &keyPath,
@@ -1887,155 +2001,126 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
         return fd;
     };
 
+    // ── Unified listen socket ────────────────────────────────────────────────
+    // ntm-client data-ingestion and HTTPS dashboard share one port.
+    // TLS ALPN (negotiated during the handshake) routes each connection to the
+    // correct handler: "ntm-wire" → connectionThread, "http/1.1" → httpWebThread.
     int listenFdClient = createListenSocket(config.client_bind, port);
     if (listenFdClient < 0)
     {
-        serverLog(LogLevel::Err, "ntm-server: listen(client port %u) failed: %s",
+        serverLog(LogLevel::Err, "ntm-server: listen(%u) failed: %s",
                   static_cast<unsigned>(port), std::strerror(errno));
         return 1;
     }
 
-    serverLog(LogLevel::Warn, "ntm-server listening on client port %u (%s)",
-              static_cast<unsigned>(port), daemonMode ? "daemon mode" : "foreground mode");
+    serverLog(LogLevel::Warn,
+              "ntm-server: unified port %u — ntm-client (ALPN \"ntm-wire\") "
+              "and HTTPS dashboard (ALPN \"http/1.1\") (%s)",
+              static_cast<unsigned>(port),
+              daemonMode ? "daemon mode" : "foreground mode");
 
-    // Start HTTPS web dashboard if web_port > 0.
-    // Build WebConfig from ServerConfig so the web side stays decoupled.
-    std::unique_ptr<httplib::SSLServer> webSvr;
-    std::thread webThread;
+    // ── Web dashboard (httplib::Server, no TLS — TLS handled by unified loop) ──
+    // webSvr owns only route handlers; it never calls listen() itself.
+    std::unique_ptr<NtmHttpServer> webSvr;
     std::unique_ptr<httplib::SSLServer> demoSvr;
     std::thread demoThread;
-    if (config.web_port > 0)
+
     {
-        if (certPath.empty() || keyPath.empty())
+        try
         {
-            serverLog(LogLevel::Warn,
-                      "ntm-server: web_port=%u configured but --cert/--key not set; "
-                      "web dashboard disabled (HTTPS requires a certificate)",
-                      static_cast<unsigned>(config.web_port));
-        }
-        else
-        {
-            try
+            // Enumerate this server's own non-loopback LAN IPs for overhead classification.
+            auto serverIpSet = std::make_shared<MonitoringIpSet>();
             {
-                webSvr = std::make_unique<httplib::SSLServer>(certPath.c_str(), keyPath.c_str());
-                if (!webSvr->is_valid())
+                struct ifaddrs *ifap = nullptr;
+                if (::getifaddrs(&ifap) == 0 && ifap)
                 {
-                    serverLog(LogLevel::Err,
-                              "ntm-server: failed to initialise HTTPS server (bad cert/key at %s / %s)",
-                              certPath.c_str(), keyPath.c_str());
-                    webSvr.reset();
-                }
-                else
-                {
-                    // Enumerate this server's own non-loopback LAN IPs for overhead classification.
-                    auto serverIpSet = std::make_shared<MonitoringIpSet>();
+                    for (auto *ifa = ifap; ifa; ifa = ifa->ifa_next)
                     {
-                        struct ifaddrs *ifap = nullptr;
-                        if (::getifaddrs(&ifap) == 0 && ifap)
+                        if (!ifa->ifa_addr) continue;
+                        const int af = ifa->ifa_addr->sa_family;
+                        char buf[INET6_ADDRSTRLEN] = {};
+                        if (af == AF_INET)
                         {
-                            for (auto *ifa = ifap; ifa; ifa = ifa->ifa_next)
-                            {
-                                if (!ifa->ifa_addr) continue;
-                                const int af = ifa->ifa_addr->sa_family;
-                                char buf[INET6_ADDRSTRLEN] = {};
-                                if (af == AF_INET)
-                                {
-                                    auto *sin = reinterpret_cast<struct sockaddr_in *>(ifa->ifa_addr);
-                                    ::inet_ntop(AF_INET, &sin->sin_addr, buf, sizeof(buf));
-                                }
-                                else if (af == AF_INET6)
-                                {
-                                    auto *sin6 = reinterpret_cast<struct sockaddr_in6 *>(ifa->ifa_addr);
-                                    ::inet_ntop(AF_INET6, &sin6->sin6_addr, buf, sizeof(buf));
-                                }
-                                else continue;
-                                std::string ip(buf);
-                                // Strip IPv6 scope ID (e.g. "%eth0").
-                                auto pct = ip.find('%');
-                                if (pct != std::string::npos) ip.resize(pct);
-                                // Skip loopback and link-local; keep all other LAN addresses.
-                                if (ip == "127.0.0.1" || ip == "::1") continue;
-                                if (ip.size() >= 4 && ip.compare(0, 4, "fe80") == 0) continue;
-                                if (!ip.empty()) serverIpSet->add(ip);
-                            }
-                            ::freeifaddrs(ifap);
+                            auto *sin = reinterpret_cast<struct sockaddr_in *>(ifa->ifa_addr);
+                            ::inet_ntop(AF_INET, &sin->sin_addr, buf, sizeof(buf));
                         }
+                        else if (af == AF_INET6)
+                        {
+                            auto *sin6 = reinterpret_cast<struct sockaddr_in6 *>(ifa->ifa_addr);
+                            ::inet_ntop(AF_INET6, &sin6->sin6_addr, buf, sizeof(buf));
+                        }
+                        else continue;
+                        std::string ip(buf);
+                        auto pct = ip.find('%');
+                        if (pct != std::string::npos) ip.resize(pct);
+                        if (ip == "127.0.0.1" || ip == "::1") continue;
+                        if (ip.size() >= 4 && ip.compare(0, 4, "fe80") == 0) continue;
+                        if (!ip.empty()) serverIpSet->add(ip);
                     }
-                    auto dashboardIpSet = std::make_shared<MonitoringIpSet>();
-
-                    // Populate WebConfig: the web thread only gets the fields it actually uses.
-                    WebConfig webCfg;
-                    webCfg.port             = config.web_port;
-                    webCfg.bind             = config.web_bind;
-                    webCfg.rate_limit_rpm   = config.web_rate_limit_rpm;
-                    webCfg.max_entity_lines = config.max_entity_lines_in_summary;
-                    webCfg.client_nicknames = clientsStore->nicknames;
-                    webCfg.registry         = clientRegistry;
-                    webCfg.webauthn         = webAuthnRP;
-                    webCfg.clients_store    = clientsStore;
-                    webCfg.server_ips       = serverIpSet;
-                    webCfg.dashboard_ips    = dashboardIpSet;
-                    webCfg.update_dir       = config.update_dir;
-                    webCfg.trusted_proxy    = config.trusted_proxy;
-
-                    if (webSvr)
-                        webThread = std::thread(webServerThread,
-                                                std::ref(*webSvr),
-                                                std::ref(stats),
-                                                webCfg);
-
-                    // Demo server — same cert/key, fixed port kDemoPort (12345).
-                    // Disabled by default; operator enables via admin page.
-                    demoSvr = std::make_unique<httplib::SSLServer>(certPath.c_str(), keyPath.c_str());
-                    if (demoSvr->is_valid())
-                    {
-                        demoThread = std::thread(demoServerThread, std::ref(*demoSvr));
-                        serverLog(LogLevel::Warn,
-                                  "ntm-server: demo server on 0.0.0.0:%u "
-                                  "(disabled by default — enable via admin page)",
-                                  static_cast<unsigned>(kDemoPort));
-                    }
-                    else
-                    {
-                        serverLog(LogLevel::Warn,
-                                  "ntm-server: demo server failed to initialise (bad cert/key)");
-                        demoSvr.reset();
-                    }
-
-                    if (!webAuthnRP || !webAuthnRP->enabled())
-                    {
-                        serverLog(LogLevel::Err,
-                                  "ntm-server: web dashboard requires WebAuthn mode "
-                                  "(webauthn_rp_id not configured) — web server disabled");
-                        webSvr->stop();
-                        webSvr.reset();
-                    }
-                    else
-                    {
-                        serverLog(LogLevel::Warn,
-                                  "ntm-server: HTTPS web dashboard on %s:%u "
-                                  "(WebAuthn passkey auth, rate-limit %u rpm)",
-                                  config.web_bind.c_str(),
-                                  static_cast<unsigned>(config.web_port),
-                                  config.web_rate_limit_rpm);
-                    }
-                    if (!config.trusted_proxy.empty())
-                        serverLog(LogLevel::Warn,
-                                  "ntm-server: trusted proxy %s — real client IP read from "
-                                  "CF-Connecting-IP / X-Forwarded-For",
-                                  config.trusted_proxy.c_str());
+                    ::freeifaddrs(ifap);
                 }
             }
-            catch (const std::exception &e)
+            auto dashboardIpSet = std::make_shared<MonitoringIpSet>();
+
+            WebConfig webCfg;
+            webCfg.port             = port;               // informational only
+            webCfg.bind             = config.client_bind; // informational only
+            webCfg.rate_limit_rpm   = config.web_rate_limit_rpm;
+            webCfg.max_entity_lines = config.max_entity_lines_in_summary;
+            webCfg.client_nicknames = clientsStore->nicknames;
+            webCfg.registry         = clientRegistry;
+            webCfg.webauthn         = webAuthnRP;
+            webCfg.clients_store    = clientsStore;
+            webCfg.server_ips       = serverIpSet;
+            webCfg.dashboard_ips    = dashboardIpSet;
+            webCfg.update_dir       = config.update_dir;
+            webCfg.trusted_proxy    = config.trusted_proxy;
+
+            if (!webAuthnRP || !webAuthnRP->enabled())
             {
-                serverLog(LogLevel::Err, "ntm-server: web server init failed: %s", e.what());
-                webSvr.reset();
+                serverLog(LogLevel::Warn,
+                          "ntm-server: web dashboard requires WebAuthn "
+                          "(webauthn_rp_id not configured) — dashboard disabled");
+            }
+            else
+            {
+                webSvr = std::make_unique<NtmHttpServer>();
+                // registerWebHandlers registers all route handlers synchronously.
+                // No listen() call — our accept loop feeds connections via process_request().
+                registerWebHandlers(*webSvr, stats, webCfg);
+                serverLog(LogLevel::Warn,
+                          "ntm-server: HTTPS dashboard active on port %u "
+                          "(WebAuthn passkey auth, rate-limit %u rpm)",
+                          static_cast<unsigned>(port),
+                          config.web_rate_limit_rpm);
+                if (!config.trusted_proxy.empty())
+                    serverLog(LogLevel::Warn,
+                              "ntm-server: trusted proxy %s — real client IP from "
+                              "CF-Connecting-IP / X-Forwarded-For",
+                              config.trusted_proxy.c_str());
+            }
+
+            // Demo server — separate port kDemoPort (12345), unchanged.
+            demoSvr = std::make_unique<httplib::SSLServer>(certPath.c_str(), keyPath.c_str());
+            if (demoSvr->is_valid())
+            {
+                demoThread = std::thread(demoServerThread, std::ref(*demoSvr));
+                serverLog(LogLevel::Warn,
+                          "ntm-server: demo server on 0.0.0.0:%u "
+                          "(disabled by default — enable via admin page)",
+                          static_cast<unsigned>(kDemoPort));
+            }
+            else
+            {
+                serverLog(LogLevel::Warn, "ntm-server: demo server failed to initialise");
+                demoSvr.reset();
             }
         }
-    }
-    else
-    {
-        serverLog(LogLevel::Warn, "ntm-server: web dashboard disabled (web_port=0)");
+        catch (const std::exception &e)
+        {
+            serverLog(LogLevel::Err, "ntm-server: web dashboard init failed: %s", e.what());
+            webSvr.reset();
+        }
     }
 
     std::thread printer(statsPrinterThread, std::ref(stats), config.max_snapshot_entries_for_print,
@@ -2159,6 +2244,57 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
         }
         activeConnections++;
 
+        // TLS handshake + ALPN routing — done here in the accept loop so worker
+        // threads receive an already-negotiated SSL* and never touch SSL_accept().
+        SSL *ssl = SSL_new(sslCtx);
+        if (!ssl)
+        {
+            ::close(clientFd);
+            perIPLimiter.release(clientIpStr);
+            activeConnections--;
+            serverLog(LogLevel::Err, "ntm-server: SSL_new failed, dropping connection from %s",
+                      clientIpStr.c_str());
+            continue;
+        }
+        if (SSL_set_fd(ssl, clientFd) != 1)
+        {
+            SSL_free(ssl);
+            ::close(clientFd);
+            perIPLimiter.release(clientIpStr);
+            activeConnections--;
+            serverLog(LogLevel::Err, "ntm-server: SSL_set_fd failed, dropping connection from %s",
+                      clientIpStr.c_str());
+            continue;
+        }
+
+        // Short timeout for the TLS handshake itself (10 s).
+        {
+            struct timeval tv { 10, 0 };
+            ::setsockopt(clientFd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+            ::setsockopt(clientFd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+        }
+
+        if (SSL_accept(ssl) != 1)
+        {
+            SSL_free(ssl);
+            ::close(clientFd);
+            perIPLimiter.release(clientIpStr);
+            activeConnections--;
+            if (config.verbose)
+                serverLog(LogLevel::Warn, "ntm-server: TLS handshake failed from %s",
+                          clientIpStr.c_str());
+            continue;
+        }
+
+        // ALPN negotiation result — determines which handler handles this connection.
+        const unsigned char *alpnData = nullptr;
+        unsigned int         alpnLen  = 0;
+        SSL_get0_alpn_selected(ssl, &alpnData, &alpnLen);
+        const bool isWireClient = (alpnLen == 8 &&
+                                   std::memcmp(alpnData, "ntm-wire", 8) == 0);
+
+        const int remotePort = static_cast<int>(ntohs(clientAddr.sin_port));
+
         // NEW-N2: spawn the worker exception-safely.
         try
         {
@@ -2174,19 +2310,37 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
             workers.emplace_back();
             try
             {
-                workers.back().t = std::thread(connectionThread,
-                          clientFd,
-                          peerAddr,
-                          clientIpStr,
-                          clientsStore,
-                          clientRegistry,
-                          std::ref(stats),
-                          std::ref(ipDataUpdater),
-                          std::ref(activeConnections),
-                          std::ref(perIPLimiter),
-                          std::cref(config),
-                          sslCtx,
-                          doneFlag);
+                if (isWireClient)
+                {
+                    // ntm-client data-ingestion connection (ALPN "ntm-wire").
+                    workers.back().t = std::thread(connectionThread,
+                              clientFd,
+                              peerAddr,
+                              clientIpStr,
+                              clientsStore,
+                              clientRegistry,
+                              std::ref(stats),
+                              std::ref(ipDataUpdater),
+                              std::ref(activeConnections),
+                              std::ref(perIPLimiter),
+                              std::cref(config),
+                              ssl,
+                              doneFlag);
+                }
+                else
+                {
+                    // HTTPS dashboard browser (ALPN "http/1.1" or no ALPN).
+                    workers.back().t = std::thread(httpWebThread,
+                              clientFd,
+                              ssl,
+                              clientIpStr,    // remoteAddr for httplib
+                              remotePort,
+                              webSvr.get(),
+                              std::ref(activeConnections),
+                              std::ref(perIPLimiter),
+                              clientIpStr,
+                              doneFlag);
+                }
                 workers.back().done = std::move(doneFlag);
             }
             catch (...)
@@ -2199,6 +2353,7 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
         }
         catch (const std::exception &e)
         {
+            SSL_free(ssl);
             ::close(clientFd);
             perIPLimiter.release(clientIpStr);
             activeConnections--;
@@ -2208,6 +2363,7 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
         }
         catch (...)
         {
+            SSL_free(ssl);
             ::close(clientFd);
             perIPLimiter.release(clientIpStr);
             activeConnections--;
@@ -2227,12 +2383,8 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
             demoThread.join();
     }
 
-    if (webSvr)
-    {
-        webSvr->stop();
-        if (webThread.joinable())
-            webThread.join();
-    }
+    // webSvr routes are served via the unified accept loop — no separate thread to join.
+    // Workers (connectionThread / httpWebThread) are reaped below.
 
     for (auto &w : workers)
     {
