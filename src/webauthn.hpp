@@ -22,6 +22,7 @@ struct WebAuthnConfig
     std::string iosAppId;           // "<TeamID>.<BundleID>" for AASA (empty = no AASA)
     std::vector<std::string> allowedOrigins; // e.g. {"https://ntm.happyhomelives.me"}
     unsigned sessionTtlHours{24};
+    unsigned idleTimeoutMinutes{15}; // expire after this many minutes with no request (0 = disabled)
 };
 
 struct PasskeyCredential
@@ -67,7 +68,8 @@ public:
                                        std::string &errorOut);
 
     // --- Session management ---
-    bool isValidSession(const std::string &token) const;
+    // Returns true and updates lastActivity if the session is valid and not idle.
+    bool isValidSession(const std::string &token);
     void invalidateSession(const std::string &token);
 
     // --- Admin credential management ---
@@ -106,6 +108,7 @@ private:
     struct Session
     {
         std::chrono::steady_clock::time_point expiry;
+        std::chrono::steady_clock::time_point lastActivity;
     };
 
     struct AdminCred

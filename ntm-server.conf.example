@@ -62,6 +62,34 @@ web_bind=127.0.0.1
 # browser gets its own rate-limit bucket instead of sharing 127.0.0.1.
 # trusted_proxy=127.0.0.1
 
+# ── WebAuthn / passkey authentication ────────────────────────────────────────
+
+# RP identifier — must match the origin hostname exactly (no port, no scheme).
+# MANDATORY for WebAuthn; leave empty or omit to disable the web dashboard.
+# webauthn_rp_id=ntm.example.com
+
+# Human-readable RP name shown during passkey registration prompts.
+# webauthn_rp_name=Network Traffic Monitor
+
+# JSON file that persists registered passkey credentials.
+# webauthn_credentials_file=/etc/ntm-server/webauthn_credentials.json
+
+# JSON file that stores the PBKDF2-hashed admin password.
+# webauthn_admin_cred_file=/etc/ntm-server/webauthn_admin_cred.json
+
+# Comma-separated list of allowed origins. Defaults to "https://<webauthn_rp_id>".
+# webauthn_allowed_origins=https://ntm.example.com
+
+# Absolute session TTL in hours (1-720). Default 24.
+# A session is also subject to the idle timeout below.
+# webauthn_session_ttl_hours=24
+
+# Idle session timeout in minutes (1-1440). Default 15.
+# A session expires this many minutes after the last request — i.e. when the
+# browser tab is closed or the connection is dropped and no further polls arrive.
+# Set to 0 to disable idle expiry (rely on the absolute TTL only).
+# webauthn_idle_timeout_minutes=15
+
 # ── Aggregation ──────────────────────────────────────────────────────────────
 
 # Rolling aggregation window in days (1-365). When window+1 days exist, only the oldest day is dropped.
