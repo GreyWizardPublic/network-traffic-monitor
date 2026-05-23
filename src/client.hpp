@@ -33,6 +33,11 @@ struct ClientConfig
     std::uint32_t aggMinIntervalMs{100};      // minimum flush interval (ms)
     std::uint32_t aggMaxIntervalMs{5000};     // maximum flush interval (ms)
     std::uint32_t aggMaxFlows{10000};         // flow-table cap; forced flush when reached
+
+    // zlib stream compression on the data phase (auth v3 + capability exchange).
+    // Linux client only; Windows client always sends kCapNone regardless of this flag.
+    // Set to false via config key 'compress=false' or CLI flag '--no-compress'.
+    bool useCompression{true};
 };
 
 // Load from one config file (key=value, # comment). Returns defaults for missing keys. Returns false if file missing.

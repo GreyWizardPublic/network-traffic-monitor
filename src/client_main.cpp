@@ -36,8 +36,10 @@ int main(int argc, char *argv[])
             std::cout << "Usage: ntm-client [--config FILE] [--daemon] [--server HOST] [--port N]\n"
                          "             [--identity PEM_PATH] [--ca CA_FILE] [--server-cert SERVER_PEM]\n"
                          "             [--reconnect-attempts N] [--reconnect-interval SECS]\n"
+                         "             [--no-compress]\n"
                          "  --reconnect-attempts N    max consecutive reconnect failures before exit (default 10)\n"
                          "  --reconnect-interval SECS seconds between reconnect attempts (default 60)\n"
+                         "  --no-compress             disable zlib compression on the data phase\n"
                          "  All options can be set in the single config file (key=value); CLI overrides.\n";
             return 0;
         }
@@ -85,6 +87,8 @@ int main(int argc, char *argv[])
             tlsServerCertPath = argv[++i];
         else if (arg == "--verbose")
             opts.verbose = true;
+        else if (arg == "--no-compress")
+            opts.useCompression = false;
         else if (arg == "--reconnect-attempts" && i + 1 < argc)
         {
             try

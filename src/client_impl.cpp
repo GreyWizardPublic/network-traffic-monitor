@@ -6,6 +6,10 @@
 #include "client_version.hpp"
 #include "updater.hpp"
 
+#ifndef _WIN32
+#  include "zlib_stream.hpp"
+#endif
+
 #include <openssl/evp.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
@@ -64,9 +68,11 @@ public:
                      unsigned reconnectMaxAttempts = 10,
                      unsigned reconnectIntervalSec = 60,
                      AdaptiveInterval::Config aggCfg = AdaptiveInterval::Config{},
-                     std::uint32_t aggMaxFlows = kAggMaxFlows)
+                     std::uint32_t aggMaxFlows = kAggMaxFlows,
+                     bool useCompression = true)
         : aggInterval_(aggCfg)
         , aggMaxFlows_(aggMaxFlows)
+        , useCompression_(useCompression)
         , host_(std::move(host)), port_(port)
         , identityPath_(std::move(identityPath))
         , tlsCaPath_(std::move(tlsCaPath))
@@ -164,6 +170,13 @@ private:
     std::uint32_t            aggMaxFlows_{kAggMaxFlows};
     std::uint32_t            aggLastFlows_{0}; // flows emitted in last flush — reported in H-line
 
+    // ── zlib compression (Linux only) ────────────────────────────────────────
+    bool                     useCompression_{true};  // from config; actual use depends on negotiation
+#ifndef _WIN32
+    std::unique_ptr<ZlibDeflater> deflater_;   // non-null when compression is active on this session
+    std::vector<std::uint8_t>     compBuf_;    // reused scratch buffer for compressed output
+#endif
+
     // ── Connection ──────────────────────────────────────────────────────────
     mutable std::mutex       connectionMutex_;
     std::string              host_;
@@ -191,6 +204,23 @@ private:
 
     platform::NetworkMonitor netMonitor_;
 
+    // Write `data` to the connection, compressing via zlib if compression is active.
+    // Falls back to a plain write if no deflater is set (v2 auth or --no-compress).
+    bool deflateAndWrite(SSL *ssl, SockFd fd, const void *data, std::size_t len)
+    {
+        if (len == 0) return true;
+#ifndef _WIN32
+        if (deflater_)
+        {
+            compBuf_.clear();
+            if (!deflater_->feed(data, len, compBuf_)) return false;
+            return platform::writeExact(ssl, fd,
+                                        compBuf_.data(), compBuf_.size());
+        }
+#endif
+        return platform::writeExact(ssl, fd, data, len);
+    }
+
     bool sendAnnounce(SSL *ssl, SockFd fd)
     {
         auto lanAddrs = platform::collectLanAddresses();
@@ -199,12 +229,12 @@ private:
         std::string extIp = platform::queryExternalIP(externalIpUrl_, externalIpTimeoutMs_);
         std::string xLine = std::string(kExtIPLinePrefix)
                           + (extIp.empty() ? kExtIPNull : extIp) + '\n';
-        if (!platform::writeExact(ssl, fd, xLine.data(), xLine.size())) return false;
+        if (!deflateAndWrite(ssl, fd, xLine.data(), xLine.size())) return false;
 
         for (const auto &ip : lanAddrs)
         {
             std::string aLine = std::string(kAddrLinePrefix) + ip + '\n';
-            if (!platform::writeExact(ssl, fd, aLine.data(), aLine.size())) return false;
+            if (!deflateAndWrite(ssl, fd, aLine.data(), aLine.size())) return false;
         }
 
         lastReannounceTime_ = std::chrono::duration_cast<std::chrono::seconds>(
@@ -334,7 +364,7 @@ private:
                         + " agg_interval_ms=" + std::to_string(aggInterval_.intervalMs())
                         + " agg_flows="       + std::to_string(aggLastFlows_)
                         + "\n";
-                    if (!platform::writeExact(ssl_, fd_, hLine.data(), hLine.size()))
+                    if (!deflateAndWrite(ssl_, fd_, hLine.data(), hLine.size()))
                         closeUnlocked();
                 }
 
@@ -348,7 +378,7 @@ private:
                 }
 
                 if (!flushBuffer_.empty() && platform::sockValid(fd_) &&
-                    !platform::writeExact(ssl_, fd_, flushBuffer_.data(), flushBuffer_.size()))
+                    !deflateAndWrite(ssl_, fd_, flushBuffer_.data(), flushBuffer_.size()))
                     closeUnlocked();
             }
             catch (const std::exception &e)
@@ -368,6 +398,9 @@ private:
     {
         if (ssl_) { SSL_shutdown(ssl_); SSL_free(ssl_); ssl_ = nullptr; }
         if (platform::sockValid(fd_)) { platform::closeSocket(fd_); fd_ = kInvalidSock; }
+#ifndef _WIN32
+        deflater_.reset();  // new session may negotiate different caps
+#endif
     }
 
     bool connectUnlocked()
@@ -419,13 +452,27 @@ private:
             }
         }
 
+        std::uint8_t negotiatedCaps = kCapNone;
         if (!performClientAuth(ssl, static_cast<std::uintptr_t>(fd),
-                               identityPath_, false, false, &lastError_))
+                               identityPath_, false, false, &lastError_,
+                               useCompression_, &negotiatedCaps))
         {
             if (ssl) { SSL_shutdown(ssl); SSL_free(ssl); }
             platform::closeSocket(fd);
             return false;
         }
+#ifndef _WIN32
+        if (negotiatedCaps & kCapZlib)
+        {
+            deflater_ = std::make_unique<ZlibDeflater>();
+            compBuf_.reserve(65536);
+            std::cerr << "ntm-client: zlib compression enabled for this session\n";
+        }
+        else
+        {
+            deflater_.reset();
+        }
+#endif
 
         if (!sendAnnounce(ssl, fd))
         {
@@ -697,7 +744,8 @@ int runClient(bool daemonMode, const ClientConfig &config, char **argv)
                                 config.reconnectMaxAttempts,
                                 config.reconnectIntervalSec,
                                 aggCfg,
-                                config.aggMaxFlows);
+                                config.aggMaxFlows,
+                                config.useCompression);
 
     // Enumerate capturable devices. Returns false only when pcap_findalldevs
     // itself errors (hard failure at startup); an empty result is valid and
