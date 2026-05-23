@@ -6,9 +6,7 @@
 #include "client_version.hpp"
 #include "updater.hpp"
 
-#ifndef _WIN32
-#  include "zlib_stream.hpp"
-#endif
+#include "zlib_stream.hpp"
 
 #include <openssl/evp.h>
 #include <openssl/err.h>
@@ -170,12 +168,10 @@ private:
     std::uint32_t            aggMaxFlows_{kAggMaxFlows};
     std::uint32_t            aggLastFlows_{0}; // flows emitted in last flush — reported in H-line
 
-    // ── zlib compression (Linux only) ────────────────────────────────────────
+    // ── zlib compression ─────────────────────────────────────────────────────
     bool                     useCompression_{true};  // from config; actual use depends on negotiation
-#ifndef _WIN32
     std::unique_ptr<ZlibDeflater> deflater_;   // non-null when compression is active on this session
     std::vector<std::uint8_t>     compBuf_;    // reused scratch buffer for compressed output
-#endif
 
     // ── Connection ──────────────────────────────────────────────────────────
     mutable std::mutex       connectionMutex_;
@@ -209,7 +205,6 @@ private:
     bool deflateAndWrite(SSL *ssl, SockFd fd, const void *data, std::size_t len)
     {
         if (len == 0) return true;
-#ifndef _WIN32
         if (deflater_)
         {
             compBuf_.clear();
@@ -217,7 +212,6 @@ private:
             return platform::writeExact(ssl, fd,
                                         compBuf_.data(), compBuf_.size());
         }
-#endif
         return platform::writeExact(ssl, fd, data, len);
     }
 
@@ -398,9 +392,7 @@ private:
     {
         if (ssl_) { SSL_shutdown(ssl_); SSL_free(ssl_); ssl_ = nullptr; }
         if (platform::sockValid(fd_)) { platform::closeSocket(fd_); fd_ = kInvalidSock; }
-#ifndef _WIN32
         deflater_.reset();  // new session may negotiate different caps
-#endif
     }
 
     bool connectUnlocked()
@@ -461,7 +453,6 @@ private:
             platform::closeSocket(fd);
             return false;
         }
-#ifndef _WIN32
         if (negotiatedCaps & kCapZlib)
         {
             deflater_ = std::make_unique<ZlibDeflater>();
@@ -472,7 +463,6 @@ private:
         {
             deflater_.reset();
         }
-#endif
 
         if (!sendAnnounce(ssl, fd))
         {

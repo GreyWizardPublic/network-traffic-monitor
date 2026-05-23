@@ -11,9 +11,14 @@
 //   • ZlibInflater::feed()  accumulates output into the caller-supplied vector;
 //     the caller is responsible for draining that vector into its line buffer.
 //   • Both classes are NOT thread-safe; the caller must ensure single-threaded use.
-//   • Both classes are Linux-only (the Windows client links no zlib).
+//   • On Linux the system zlib is used.  On Windows, miniz (vendored in
+//     src/third_party/miniz/) provides a compatible API via preprocessor aliases.
 
-#include <zlib.h>
+#ifdef _WIN32
+#  include "third_party/miniz/miniz.h"
+#else
+#  include <zlib.h>
+#endif
 
 #include <cstddef>
 #include <cstdint>

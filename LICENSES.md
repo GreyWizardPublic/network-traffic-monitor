@@ -6,8 +6,9 @@ depend on, together with each item's SPDX identifier, upstream home page, and
 the binary it is linked into.
 
 All listed dependencies are open-source and OSI-approved. None require shipping
-their source alongside this project's binaries (they are dynamically linked
-system libraries on every supported distribution).
+their source alongside this project's binaries.  Most are dynamically linked
+system libraries; **miniz** is vendored source compiled directly into the
+Windows binary.
 
 The project's own source code is governed by the top-level [`LICENSE`](LICENSE)
 file (**MIT**); this document only covers third-party material.
@@ -27,6 +28,7 @@ These are the libraries declared in `CMakeLists.txt` via `find_package` /
 | 4 | **libpcap** | `BSD-3-Clause` | <https://www.tcpdump.org/> | `ntm-client` | Packet capture on the client side (`pcap_create`, `pcap_dispatch`, BPF filters). |
 | 5 | **POSIX threads (`pthread`)** via CMake `Threads::Threads` | Inherits from libc. <br/> glibc: `LGPL-2.1-or-later WITH GCC-exception-2.0`. <br/> musl: `MIT`. <br/> bionic (Android): `Apache-2.0`. | <https://www.gnu.org/software/libc/> (glibc) <br/> <https://musl.libc.org/> (musl) | Both binaries | Threading primitives used by `std::thread`, `std::mutex`, `std::condition_variable`. |
 | 6 | **cpp-httplib** (`src/httplib.h`) | `MIT` | <https://github.com/yhirose/cpp-httplib> (v0.20.0) | `ntm-server` | Single-header C++11 HTTP/HTTPS server and client library. Used to serve the embedded HTTPS web dashboard (`GET /` and `GET /api/summary`). TLS is provided by OpenSSL (already linked). Header is vendored at `src/httplib.h`; no additional system libraries are required. |
+| 7 | **miniz** (`src/third_party/miniz/`) | `Unlicense` (public domain) | <https://github.com/richgel999/miniz> (v3.1.1) | `ntm-client` (Windows) | Vendored zlib-compatible deflate/inflate implementation. Provides the same `z_stream`, `deflate()`, `inflate()`, `Z_SYNC_FLUSH`, etc. API as system zlib via preprocessor aliases. Compiled into the Windows cross-compiled binary so the Windows client can negotiate and use zlib compression on the data phase without requiring a MinGW zlib package. Not used on Linux (system `zlib` is linked instead). |
 
 ### Notes on OpenSSL
 
@@ -104,6 +106,7 @@ are compatible:
 | `Apache-2.0` | ✅ Yes | OpenSSL ≥ 3.0, libstdc++ via LLVM, bionic libc |
 | `BSD-2-Clause` / `BSD-3-Clause` | ✅ Yes | libpcap; libcurl is permissive in the same family |
 | `MIT` / curl license / `Zlib` | ✅ Yes | libcurl, zlib, musl libc, cpp-httplib |
+| `Unlicense` (public domain) | ✅ Yes | miniz — public domain carries zero restrictions |
 | `LGPL-2.1+` (linked dynamically) | ✅ Yes | glibc — `WITH GCC-exception-2.0` covers the static-link edge case |
 | `GPL-2.0` (kernel headers only) | ✅ Yes | `Linux-syscall-note` exception; user-space use of UAPI headers does not affect the calling code's license |
 
@@ -146,6 +149,6 @@ section 1 or section 2.
 
 ---
 
-*Last updated: 2026-05-21. If a new dependency is added (or removed), please
+*Last updated: 2026-05-23. If a new dependency is added (or removed), please
 update this file in the same commit so packagers and auditors have a single
 source of truth.*

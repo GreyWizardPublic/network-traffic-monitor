@@ -246,12 +246,7 @@ bool performClientAuth(void *sslVoid, std::uintptr_t rawFd,
 
     // Build auth message: pubkey (32B) + sig (64B) + capability byte (1B).
     // kCapZlib requests zlib compression on the data phase.
-    // On Windows, no zlib is linked, so always send kCapNone.
-#ifdef _WIN32
-    const std::uint8_t clientCaps = kCapNone;
-#else
     const std::uint8_t clientCaps = requestCompression ? kCapZlib : kCapNone;
-#endif
     std::uint8_t msg[kAuthPubkeyLen + kAuthSignatureLen + 1];
     std::memcpy(msg, pubkey, kAuthPubkeyLen);
     std::memcpy(msg + kAuthPubkeyLen, sig, kAuthSignatureLen);
