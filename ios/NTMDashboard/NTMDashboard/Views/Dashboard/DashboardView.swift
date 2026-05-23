@@ -66,7 +66,9 @@ struct DashboardView: View {
                             }
                             ConnectionBar(
                                 isConnected: true,
-                                serverHost: ServerConfig.load().baseURL?.host() ?? "",
+                                serverHost: snap.demo == true
+                                    ? "your-server.example.com"
+                                    : ServerConfig.load().baseURL?.host() ?? "",
                                 lastUpdated: vm.lastUpdated
                             )
                             InterfacesSection(interfaces: snap.interfaces)
