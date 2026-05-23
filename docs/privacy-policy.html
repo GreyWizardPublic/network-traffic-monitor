@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Privacy Policy — NTM Dashboard</title>
+<title>Privacy Policy — NTM Dashboard &amp; NTM Client</title>
 <style>
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
          max-width: 740px; margin: 48px auto; padding: 0 24px;
@@ -20,12 +20,19 @@
 <h1>Privacy Policy</h1>
 <p class="updated">Last updated: May 2026</p>
 
-<p>NTM Dashboard ("the App") is a companion app for the open-source Network Traffic Monitor
-(<a href="https://github.com/GreyWizardPublic/network-traffic-monitor">github.com/GreyWizardPublic/network-traffic-monitor</a>).
-This policy explains what data the App handles and how.</p>
+<p>This policy covers two iOS apps that are part of the open-source Network Traffic Monitor
+project (<a href="https://github.com/GreyWizardPublic/network-traffic-monitor">github.com/GreyWizardPublic/network-traffic-monitor</a>):</p>
+<ul>
+  <li><strong>NTM Dashboard</strong> — a companion viewer app that displays network traffic
+      statistics from your self-hosted NTM server.</li>
+  <li><strong>NTM Client</strong> — a network monitoring client that captures traffic flow
+      metadata from your iOS device and forwards it to your self-hosted NTM server.</li>
+</ul>
+<p>Neither app is operated as a service. Both apps connect exclusively to a server you own
+and configure. No data is sent to the developer or any third party.</p>
 
 <h2>Data we do not collect</h2>
-<p>The App does not collect, transmit, or share any personal data with the developer or any
+<p>Neither app collects, transmits, or shares any personal data with the developer or any
 third party. Specifically:</p>
 <ul>
   <li>No analytics or crash-reporting SDKs are included.</li>
@@ -33,9 +40,9 @@ third party. Specifically:</p>
   <li>No user accounts are created on any developer-operated server.</li>
 </ul>
 
-<h2>Data stored on your device</h2>
+<h2>NTM Dashboard — data stored on your device</h2>
 <ul>
-  <li><strong>Server configuration</strong> (host, port, polling interval) — stored in iOS
+  <li><strong>Server configuration</strong> (server URL, polling interval) — stored in iOS
       UserDefaults, never leaves your device except to connect to the server you configured.</li>
   <li><strong>Session token</strong> — after signing in with a passkey, an opaque Bearer token
       is stored in the iOS Keychain. It is sent only to the server you configured and is
@@ -44,17 +51,36 @@ third party. Specifically:</p>
       certificate pinning against your private server.</li>
 </ul>
 
+<h2>NTM Client — packet tunnel and traffic data</h2>
+<p>NTM Client uses iOS's Network Extension framework (NEPacketTunnelProvider) to create a
+<strong>local VPN tunnel on your device</strong>. This tunnel is used solely to observe
+network traffic flow metadata — it does not route your traffic through any external server
+or third-party infrastructure.</p>
+<ul>
+  <li><strong>What is captured:</strong> Flow metadata only — source/destination IP addresses,
+      ports, protocol, and byte counts. Packet payloads (the actual content of your
+      communications) are never read, stored, or transmitted.</li>
+  <li><strong>Where it goes:</strong> Flow metadata is forwarded exclusively to the NTM server
+      address you configure — a server you own and operate on your own network. It is never
+      sent to the developer or any third party.</li>
+  <li><strong>User consent:</strong> iOS displays a system VPN permission prompt before the
+      tunnel can be activated. You must explicitly approve it. You can revoke this permission
+      at any time in iOS Settings → VPN &amp; Device Management.</li>
+  <li><strong>Server configuration</strong> (server address, passkey credentials) — stored
+      in the iOS Keychain and UserDefaults on your device.</li>
+</ul>
+
 <h2>Network connections</h2>
-<p>The App connects exclusively to the server address you enter in Settings. It makes no
-connections to any other host. All connections use HTTPS (TLS 1.2 minimum).</p>
+<p>Both apps connect exclusively to the server address you enter in Settings. Neither app
+makes connections to any other host. All connections use TLS (1.2 minimum).</p>
 
 <h2>Passkey / WebAuthn</h2>
 <p>Passkey registration and authentication are handled entirely by iOS and your configured
-server. No biometric data or passkey material is accessible to the App — iOS manages
+server. No biometric data or passkey material is accessible to the apps — iOS manages
 passkeys in the Secure Enclave.</p>
 
 <h2>Children's privacy</h2>
-<p>The App is not directed at children under 13 and does not knowingly collect information
+<p>These apps are not directed at children under 13 and do not knowingly collect information
 from children.</p>
 
 <h2>Changes to this policy</h2>
