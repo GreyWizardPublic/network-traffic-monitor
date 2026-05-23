@@ -1,0 +1,591 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		01806CC685453BAE31599053 /* ClientVersion.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA318856E531FBB48D918BE2 /* ClientVersion.swift */; };
+		092351BEAD983DD2797FEEB9 /* WireProtocolClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0430B986E974E6856E781512 /* WireProtocolClient.swift */; };
+		0CDBF095DF3B549EDAF9050B /* NTMClientApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A6088173988E0CFBE2AACBD /* NTMClientApp.swift */; };
+		12902DD2F1F23A9ED748220F /* SetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1ACFA8082A112D7A76556ED9 /* SetupView.swift */; };
+		13E82D665D5E0BB02BD1D6E2 /* IPPacket.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7257FF87FEE6FB02762EC9FF /* IPPacket.swift */; };
+		1B9816F189C8F5F0CFEBFC47 /* ServerConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6103464000751A4CE291334 /* ServerConfig.swift */; };
+		2E8FDA7D30D52F54254C96AE /* NTMClientPacketTunnel.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = E6AA64668CF4B0671FB65168 /* NTMClientPacketTunnel.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		2F0B2823D41CF9F5C208C0D5 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 63D11CD11AA78B9AA4F5DC04 /* Assets.xcassets */; };
+		393FBCD4C750D6E0CE7C685A /* TunnelManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 633D6EA2B5070A85323C6F61 /* TunnelManager.swift */; };
+		400BAC27FC7BCA2CB2176554 /* PacketTunnelProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A7315F3D2FCBA954166BC61 /* PacketTunnelProvider.swift */; };
+		4CC20BEF12D33E70322B0DD4 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B45A5D45672FDFC63010AD1E /* RootView.swift */; };
+		4D1AB3B3F47F40B6FF1AE438 /* StatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F7D736FD24DC22081F6F728 /* StatusView.swift */; };
+		5A62D63675389F2E2451A514 /* UDPForwarder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 371B2AA559B3CF9DF352590E /* UDPForwarder.swift */; };
+		61715E671F7D7F92EFCBCF55 /* WireKeyService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5549C8DA4E70BE686CE9FBB9 /* WireKeyService.swift */; };
+		7D819DE1B0CE1E0B29B417EF /* ClientVersion.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA318856E531FBB48D918BE2 /* ClientVersion.swift */; };
+		8557A261EA5EC38EC3ABFA00 /* PasskeyService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1502DD76A1978559FD70FD5D /* PasskeyService.swift */; };
+		A9BBB9E5B92B0715594F0E77 /* TCPRelay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88D08B57CF034726F8C90177 /* TCPRelay.swift */; };
+		AD90B1896A6C0E3F1EA8DDA4 /* WireConnectionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D7C5940A8A056A325687693 /* WireConnectionManager.swift */; };
+		BD64D3CCB51545FC33FE1736 /* KeychainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3E1E337334139223786A231 /* KeychainService.swift */; };
+		DBBD047E6A1826F605DA9DBD /* SetupViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC25E5332094B398085467EF /* SetupViewModel.swift */; };
+		E7D53D2038BDF40D68682C27 /* ServerConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6103464000751A4CE291334 /* ServerConfig.swift */; };
+		F2249A7DFFBFDBF676F5CA1C /* WireProtocolClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0430B986E974E6856E781512 /* WireProtocolClient.swift */; };
+		FCFFC55CC9C7D2ACE7549B8E /* CertificatePinner.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDF125D466B3D5464853390A /* CertificatePinner.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		8529488994C4A6F4BA774008 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 788A15131F01460BDE4970D9 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4D65E78D06C1A57E3260FB17;
+			remoteInfo = NTMClientPacketTunnel;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		EC5939303E525650B6E1A501 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				2E8FDA7D30D52F54254C96AE /* NTMClientPacketTunnel.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		0430B986E974E6856E781512 /* WireProtocolClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireProtocolClient.swift; sourceTree = "<group>"; };
+		1354E1ED5BF7FF8BA33D1908 /* NTMClient.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = NTMClient.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		1502DD76A1978559FD70FD5D /* PasskeyService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasskeyService.swift; sourceTree = "<group>"; };
+		1ACFA8082A112D7A76556ED9 /* SetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupView.swift; sourceTree = "<group>"; };
+		371B2AA559B3CF9DF352590E /* UDPForwarder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UDPForwarder.swift; sourceTree = "<group>"; };
+		3A7315F3D2FCBA954166BC61 /* PacketTunnelProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PacketTunnelProvider.swift; sourceTree = "<group>"; };
+		5549C8DA4E70BE686CE9FBB9 /* WireKeyService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireKeyService.swift; sourceTree = "<group>"; };
+		633D6EA2B5070A85323C6F61 /* TunnelManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TunnelManager.swift; sourceTree = "<group>"; };
+		63D11CD11AA78B9AA4F5DC04 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		6A6088173988E0CFBE2AACBD /* NTMClientApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NTMClientApp.swift; sourceTree = "<group>"; };
+		6D7C5940A8A056A325687693 /* WireConnectionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireConnectionManager.swift; sourceTree = "<group>"; };
+		7257FF87FEE6FB02762EC9FF /* IPPacket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IPPacket.swift; sourceTree = "<group>"; };
+		7F7D736FD24DC22081F6F728 /* StatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusView.swift; sourceTree = "<group>"; };
+		88D08B57CF034726F8C90177 /* TCPRelay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TCPRelay.swift; sourceTree = "<group>"; };
+		95CAF4D679EE03D75A0C43E9 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		AC25E5332094B398085467EF /* SetupViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupViewModel.swift; sourceTree = "<group>"; };
+		B3E1E337334139223786A231 /* KeychainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainService.swift; sourceTree = "<group>"; };
+		B45A5D45672FDFC63010AD1E /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		CA318856E531FBB48D918BE2 /* ClientVersion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientVersion.swift; sourceTree = "<group>"; };
+		CAFDF0EFC40F6202A918319D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		CDF125D466B3D5464853390A /* CertificatePinner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CertificatePinner.swift; sourceTree = "<group>"; };
+		D5C705210A76CF1B743A2CB9 /* NTMClient.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = NTMClient.entitlements; sourceTree = "<group>"; };
+		DD4AAD8C77BD6EA9C55737F3 /* PacketTunnel.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = PacketTunnel.entitlements; sourceTree = "<group>"; };
+		E6103464000751A4CE291334 /* ServerConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerConfig.swift; sourceTree = "<group>"; };
+		E6AA64668CF4B0671FB65168 /* NTMClientPacketTunnel.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = NTMClientPacketTunnel.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		2BC43FFBE6C1E522C523B9D6 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				1354E1ED5BF7FF8BA33D1908 /* NTMClient.app */,
+				E6AA64668CF4B0671FB65168 /* NTMClientPacketTunnel.appex */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		2D11E0B06E11851E1C5A22B2 /* NTMClient */ = {
+			isa = PBXGroup;
+			children = (
+				CAFDF0EFC40F6202A918319D /* Info.plist */,
+				D5C705210A76CF1B743A2CB9 /* NTMClient.entitlements */,
+				CA066CA7BA50E5D28E748A66 /* App */,
+				F42B031D455DA16998CF3E38 /* Resources */,
+				6A8A4AFBB9ED97689294DB2F /* Services */,
+				E935D765E6AFF73D5DD24903 /* ViewModels */,
+				46506AAE413EE842CFD5C6D9 /* Views */,
+			);
+			path = NTMClient;
+			sourceTree = "<group>";
+		};
+		3E7C158CF218F7C50D137A9D = {
+			isa = PBXGroup;
+			children = (
+				2D11E0B06E11851E1C5A22B2 /* NTMClient */,
+				95F6C516447ADAA208F2D8BE /* PacketTunnel */,
+				A6347F5905F5F4EF429FEFA7 /* Shared */,
+				2BC43FFBE6C1E522C523B9D6 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		46506AAE413EE842CFD5C6D9 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				E96E577DCB8DBCC11A8DB3FC /* Setup */,
+				F805D1F02CC21DFE0C59D93D /* Status */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		6A8A4AFBB9ED97689294DB2F /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				CDF125D466B3D5464853390A /* CertificatePinner.swift */,
+				B3E1E337334139223786A231 /* KeychainService.swift */,
+				1502DD76A1978559FD70FD5D /* PasskeyService.swift */,
+				633D6EA2B5070A85323C6F61 /* TunnelManager.swift */,
+				6D7C5940A8A056A325687693 /* WireConnectionManager.swift */,
+				5549C8DA4E70BE686CE9FBB9 /* WireKeyService.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		95F6C516447ADAA208F2D8BE /* PacketTunnel */ = {
+			isa = PBXGroup;
+			children = (
+				95CAF4D679EE03D75A0C43E9 /* Info.plist */,
+				7257FF87FEE6FB02762EC9FF /* IPPacket.swift */,
+				DD4AAD8C77BD6EA9C55737F3 /* PacketTunnel.entitlements */,
+				3A7315F3D2FCBA954166BC61 /* PacketTunnelProvider.swift */,
+				88D08B57CF034726F8C90177 /* TCPRelay.swift */,
+				371B2AA559B3CF9DF352590E /* UDPForwarder.swift */,
+			);
+			path = PacketTunnel;
+			sourceTree = "<group>";
+		};
+		A6347F5905F5F4EF429FEFA7 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				CA318856E531FBB48D918BE2 /* ClientVersion.swift */,
+				E6103464000751A4CE291334 /* ServerConfig.swift */,
+				0430B986E974E6856E781512 /* WireProtocolClient.swift */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
+		CA066CA7BA50E5D28E748A66 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				6A6088173988E0CFBE2AACBD /* NTMClientApp.swift */,
+				B45A5D45672FDFC63010AD1E /* RootView.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		E935D765E6AFF73D5DD24903 /* ViewModels */ = {
+			isa = PBXGroup;
+			children = (
+				AC25E5332094B398085467EF /* SetupViewModel.swift */,
+			);
+			path = ViewModels;
+			sourceTree = "<group>";
+		};
+		E96E577DCB8DBCC11A8DB3FC /* Setup */ = {
+			isa = PBXGroup;
+			children = (
+				1ACFA8082A112D7A76556ED9 /* SetupView.swift */,
+			);
+			path = Setup;
+			sourceTree = "<group>";
+		};
+		F42B031D455DA16998CF3E38 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				63D11CD11AA78B9AA4F5DC04 /* Assets.xcassets */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		F805D1F02CC21DFE0C59D93D /* Status */ = {
+			isa = PBXGroup;
+			children = (
+				7F7D736FD24DC22081F6F728 /* StatusView.swift */,
+			);
+			path = Status;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		417AE96BB65344506062B1C4 /* NTMClient */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = FD3B7827AEB65C3ED2C21F9E /* Build configuration list for PBXNativeTarget "NTMClient" */;
+			buildPhases = (
+				F53D7D1592AFC68A972E3D19 /* Sources */,
+				DA931C4557121701EFA6E080 /* Resources */,
+				EC5939303E525650B6E1A501 /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				BD30EAF14292BE1D082A3B79 /* PBXTargetDependency */,
+			);
+			name = NTMClient;
+			packageProductDependencies = (
+			);
+			productName = NTMClient;
+			productReference = 1354E1ED5BF7FF8BA33D1908 /* NTMClient.app */;
+			productType = "com.apple.product-type.application";
+		};
+		4D65E78D06C1A57E3260FB17 /* NTMClientPacketTunnel */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 3F040404FD49BDC39C5BD383 /* Build configuration list for PBXNativeTarget "NTMClientPacketTunnel" */;
+			buildPhases = (
+				B9D79D4303B1B1727B26351A /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = NTMClientPacketTunnel;
+			packageProductDependencies = (
+			);
+			productName = NTMClientPacketTunnel;
+			productReference = E6AA64668CF4B0671FB65168 /* NTMClientPacketTunnel.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		788A15131F01460BDE4970D9 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					417AE96BB65344506062B1C4 = {
+						DevelopmentTeam = W65LG3MSG6;
+					};
+					4D65E78D06C1A57E3260FB17 = {
+						DevelopmentTeam = W65LG3MSG6;
+					};
+				};
+			};
+			buildConfigurationList = 28A4D951800EDB0F9172703F /* Build configuration list for PBXProject "NTMClient" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 3E7C158CF218F7C50D137A9D;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 2BC43FFBE6C1E522C523B9D6 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				417AE96BB65344506062B1C4 /* NTMClient */,
+				4D65E78D06C1A57E3260FB17 /* NTMClientPacketTunnel */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		DA931C4557121701EFA6E080 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2F0B2823D41CF9F5C208C0D5 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		B9D79D4303B1B1727B26351A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7D819DE1B0CE1E0B29B417EF /* ClientVersion.swift in Sources */,
+				13E82D665D5E0BB02BD1D6E2 /* IPPacket.swift in Sources */,
+				400BAC27FC7BCA2CB2176554 /* PacketTunnelProvider.swift in Sources */,
+				1B9816F189C8F5F0CFEBFC47 /* ServerConfig.swift in Sources */,
+				A9BBB9E5B92B0715594F0E77 /* TCPRelay.swift in Sources */,
+				5A62D63675389F2E2451A514 /* UDPForwarder.swift in Sources */,
+				F2249A7DFFBFDBF676F5CA1C /* WireProtocolClient.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F53D7D1592AFC68A972E3D19 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				FCFFC55CC9C7D2ACE7549B8E /* CertificatePinner.swift in Sources */,
+				01806CC685453BAE31599053 /* ClientVersion.swift in Sources */,
+				BD64D3CCB51545FC33FE1736 /* KeychainService.swift in Sources */,
+				0CDBF095DF3B549EDAF9050B /* NTMClientApp.swift in Sources */,
+				8557A261EA5EC38EC3ABFA00 /* PasskeyService.swift in Sources */,
+				4CC20BEF12D33E70322B0DD4 /* RootView.swift in Sources */,
+				E7D53D2038BDF40D68682C27 /* ServerConfig.swift in Sources */,
+				12902DD2F1F23A9ED748220F /* SetupView.swift in Sources */,
+				DBBD047E6A1826F605DA9DBD /* SetupViewModel.swift in Sources */,
+				4D1AB3B3F47F40B6FF1AE438 /* StatusView.swift in Sources */,
+				393FBCD4C750D6E0CE7C685A /* TunnelManager.swift in Sources */,
+				AD90B1896A6C0E3F1EA8DDA4 /* WireConnectionManager.swift in Sources */,
+				61715E671F7D7F92EFCBCF55 /* WireKeyService.swift in Sources */,
+				092351BEAD983DD2797FEEB9 /* WireProtocolClient.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		BD30EAF14292BE1D082A3B79 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4D65E78D06C1A57E3260FB17 /* NTMClientPacketTunnel */;
+			targetProxy = 8529488994C4A6F4BA774008 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		1A8861F6491DA4C02760E773 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = NTMClient/NTMClient.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Distribution";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 3;
+				DEVELOPMENT_TEAM = W65LG3MSG6;
+				INFOPLIST_FILE = NTMClient/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.2.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ntm.NTMClient;
+				PROVISIONING_PROFILE_SPECIFIER = "NTMClient AppStore";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		3100E905C6161186F5058A01 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		4FE215E8A43F4F1513993F3C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		616DCECBB0B0B34DC92772E7 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = PacketTunnel/PacketTunnel.entitlements;
+				CURRENT_PROJECT_VERSION = 3;
+				DEVELOPMENT_TEAM = W65LG3MSG6;
+				INFOPLIST_FILE = PacketTunnel/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.2.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ntm.NTMClient.PacketTunnel;
+				SDKROOT = iphoneos;
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		820518C737A303A3CC6DC2DE /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = PacketTunnel/PacketTunnel.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Distribution";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 3;
+				DEVELOPMENT_TEAM = W65LG3MSG6;
+				INFOPLIST_FILE = PacketTunnel/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.2.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ntm.NTMClient.PacketTunnel;
+				PROVISIONING_PROFILE_SPECIFIER = "NTMClient PacketTunnel AppStore";
+				SDKROOT = iphoneos;
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		8B4E3C4AFA900342FF92CA52 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = NTMClient/NTMClient.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CURRENT_PROJECT_VERSION = 3;
+				DEVELOPMENT_TEAM = W65LG3MSG6;
+				INFOPLIST_FILE = NTMClient/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.2.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ntm.NTMClient;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		28A4D951800EDB0F9172703F /* Build configuration list for PBXProject "NTMClient" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4FE215E8A43F4F1513993F3C /* Debug */,
+				3100E905C6161186F5058A01 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		3F040404FD49BDC39C5BD383 /* Build configuration list for PBXNativeTarget "NTMClientPacketTunnel" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				616DCECBB0B0B34DC92772E7 /* Debug */,
+				820518C737A303A3CC6DC2DE /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		FD3B7827AEB65C3ED2C21F9E /* Build configuration list for PBXNativeTarget "NTMClient" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				8B4E3C4AFA900342FF92CA52 /* Debug */,
+				1A8861F6491DA4C02760E773 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 788A15131F01460BDE4970D9 /* Project object */;
+}

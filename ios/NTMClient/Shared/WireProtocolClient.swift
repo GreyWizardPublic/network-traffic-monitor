@@ -148,6 +148,14 @@ actor WireProtocolClient {
 
     private func makeTLSOptions(pinnedCertData: Data?) -> NWProtocolTLS.Options {
         let opts = NWProtocolTLS.Options()
+
+        // Advertise "ntm-wire" in the TLS ClientHello ALPN extension so
+        // servers with ALPN port unification route this connection to the
+        // data-ingestion handler rather than the HTTPS dashboard handler.
+        // Old servers without an ALPN callback ignore this field entirely.
+        sec_protocol_options_add_tls_application_protocol(
+            opts.securityProtocolOptions, kAlpnNtmWire)
+
         guard let pinnedData = pinnedCertData else { return opts }
 
         // Custom verify: accept only if the server's leaf cert DER matches the pinned value.
