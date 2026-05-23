@@ -280,26 +280,39 @@ cmake --build build-linux -j$(nproc)
 ### Windows client (native Windows)
 *(Windows Agent)*
 
-Build natively on Windows using the MinGW-w64 toolchain or MSVC.
-
-**MinGW-w64 (recommended):**
+**One-time setup** (run once, requires Administrator for PATH change):
 ```powershell
-cmake -B build-windows `
-  -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-mingw64.cmake `
-  -DNPCAP_SDK="C:\npcap-sdk" `
-  -DCMAKE_BUILD_TYPE=Release
+.\scripts\setup-toolchain-windows.ps1
+```
+
+**Every build** (from repo root in PowerShell):
+```powershell
+.\scripts\build-windows.ps1          # Release
+.\scripts\build-windows.ps1 -Clean   # wipe build-windows/ first
+.\scripts\build-windows.ps1 -Debug   # Debug build
+# output: build-windows/ntm-client-windows-amd64-<version>.exe
+```
+
+Or manually with cmake:
+```powershell
+cmake -B build-windows -G Ninja `
+      -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-windows-mingw64.cmake `
+      -DNPCAP_SDK="C:/npcap-sdk" `
+      -DCMAKE_BUILD_TYPE=Release
 cmake --build build-windows -j $env:NUMBER_OF_PROCESSORS
-# build-windows/ntm-client-windows-amd64-<version>.exe
 ```
 
 **Dependencies (Windows Agent machine):**
 
-| Dependency | Notes |
+| Dependency | Location after setup |
 |---|---|
-| MinGW-w64 | Install via [winget](https://winget.run/pkg/MSYS2/MSYS2) or MSYS2 |
-| Npcap SDK | Download from [npcap.com](https://npcap.com/#download); extract to `C:\npcap-sdk` |
-| OpenSSL static libs | Build or install via vcpkg / MSYS2 (`openssl`) |
-| Toolchain file | `cmake/toolchain-mingw64.cmake` |
+| MSYS2 | `C:\msys64` — install via `winget install MSYS2.MSYS2` |
+| MinGW-w64 GCC 16 | `C:\msys64\mingw64\bin\g++.exe` — installed by setup script |
+| CMake 4.x | `C:\msys64\mingw64\bin\cmake.exe` — installed by setup script |
+| Ninja | `C:\msys64\mingw64\bin\ninja.exe` — installed by setup script |
+| OpenSSL 3.x static | `C:\msys64\mingw64\lib\libssl.a` — installed by setup script |
+| Npcap SDK 1.13 | `C:\npcap-sdk` — downloaded and extracted by setup script |
+| Native toolchain file | `cmake/toolchain-windows-mingw64.cmake` |
 
 **Cross-compile fallback (Arch Linux Agent only, when Windows Agent is unavailable):**
 ```bash
