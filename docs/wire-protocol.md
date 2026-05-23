@@ -185,19 +185,26 @@ Server enforcement:
 #### `H` — Health heartbeat
 
 ```
-H pcap_recv={N} pcap_drop={N} buf_drop={N} ver={X.Y.Z} wire_proto={N}\n
+H pcap_recv={N} pcap_drop={N} buf_drop={N} ver={X.Y.Z} wire_proto={N} [agg_interval_ms={N} agg_flows={N}]\n
 ```
 
-Reports cumulative capture statistics and the client software version for
-the current session.
+Reports cumulative capture statistics, the client software version, and
+(when flow aggregation is active) aggregation metrics for the current session.
 
 | Key | Type | Description |
 |---|---|---|
 | `pcap_recv` | decimal uint64 | Packets delivered by pcap since session start |
 | `pcap_drop` | decimal uint64 | Packets dropped by the kernel pcap ring since session start |
 | `buf_drop` | decimal uint64 | Packets dropped due to client send-buffer overflow |
-| `ver` | string | **Module** version of the client software (e.g. `1.2.0`). Independent of the wire protocol version. Each client module (Linux, Windows, iOS) has its own version number. |
+| `ver` | string | **Module** version of the client software (e.g. `1.10.0`). Independent of the wire protocol version. Each client module (Linux, Windows, iOS) has its own version number. |
 | `wire_proto` | decimal uint | The wire protocol data-phase version the client is using (`kWireProtoVersion`). Distinct from the auth version byte. Allows the server to detect data-phase protocol mismatches. |
+| `agg_interval_ms` | decimal uint32 | **Optional.** Current flow-aggregation flush interval in milliseconds, as determined by the adaptive controller. Absent (or 0) for clients that do not implement aggregation. |
+| `agg_flows` | decimal uint32 | **Optional.** Number of unique (iface, src, dst) flows flushed in the most recent aggregation window. Absent (or 0) for non-aggregating clients. |
+
+The `agg_interval_ms` and `agg_flows` fields are emitted by clients that implement
+adaptive flow aggregation (ntm-client ≥ 1.10.0). The server displays an approximate
+output rate (`agg_flows / (agg_interval_ms / 1000)` flows/s) in the dashboard when
+both fields are present and non-zero.
 
 - Fields are `key=value` pairs separated by spaces.
 - **Order is unspecified.** Receivers must not assume order.

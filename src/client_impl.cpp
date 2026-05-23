@@ -1,6 +1,7 @@
 #include "client.hpp"
 #include "client_core.hpp"
 #include "client_platform.hpp"
+#include "flow_aggregator.hpp"
 #include "proto_client_server.hpp"
 #include "client_version.hpp"
 #include "updater.hpp"
@@ -61,8 +62,12 @@ public:
                      unsigned externalIpTimeoutMs = 5000,
                      std::atomic<bool> *gRunning = nullptr,
                      unsigned reconnectMaxAttempts = 10,
-                     unsigned reconnectIntervalSec = 60)
-        : host_(std::move(host)), port_(port)
+                     unsigned reconnectIntervalSec = 60,
+                     AdaptiveInterval::Config aggCfg = AdaptiveInterval::Config{},
+                     std::uint32_t aggMaxFlows = kAggMaxFlows)
+        : aggInterval_(aggCfg)
+        , aggMaxFlows_(aggMaxFlows)
+        , host_(std::move(host)), port_(port)
         , identityPath_(std::move(identityPath))
         , tlsCaPath_(std::move(tlsCaPath))
         , tlsServerCertPath_(std::move(tlsServerCertPath))
@@ -72,12 +77,11 @@ public:
         , reconnectIntervalSec_(reconnectIntervalSec)
         , g_runningPtr_(gRunning)
     {
-        std::size_t bufSize =
-            (sendBufferBytes >= kSendBufferMinBytes && sendBufferBytes <= kMaxIOBytes)
-            ? sendBufferBytes : kSendBufferDefaultBytes;
-        sendBuffer_.resize(bufSize);
-        flushBuffer_.resize(bufSize);
-        contentEnd_ = 0;
+        // sendBuffer_ / flushBuffer_ are no longer used for D-lines (aggregation
+        // builds D-lines directly into flushBuffer_ each flush cycle).
+        // Reserve a reasonable initial capacity to avoid frequent reallocations.
+        flushBuffer_.reserve(kSendBufferDefaultBytes);
+        (void)sendBufferBytes; // retained in signature for ABI compat
 
         if (!tlsCaPath_.empty() || !tlsServerCertPath_.empty())
         {
@@ -122,26 +126,18 @@ public:
         closeUnlocked();
     }
 
-    void sendPacket(const PacketMeta &meta)
+    // Hot path: accumulate bytes into the flow table.  One mutex lock per packet.
+    void accumulateFlow(const PacketMeta &meta)
     {
-        thread_local char buf[256];
-        int len = std::snprintf(buf, sizeof(buf), "D %.64s %.46s %.46s %u\n",
-                                meta.iface.c_str(), meta.srcIp.c_str(),
-                                meta.dstIp.c_str(), meta.bytes);
-        if (len <= 0 || static_cast<std::size_t>(len) > sizeof(buf)) return;
-        std::size_t lineLen = static_cast<std::size_t>(len);
+        FlowKey key{meta.iface, meta.srcIp, meta.dstIp};
+        std::size_t sz;
         {
-            std::lock_guard<std::mutex> lock(queueMutex_);
-            if (contentEnd_ > sendBuffer_.size()) return;
-            if (lineLen > sendBuffer_.size() - contentEnd_)
-            {
-                sendBufDrops_.fetch_add(1, std::memory_order_relaxed);
-                return;
-            }
-            std::memcpy(sendBuffer_.data() + contentEnd_, buf, lineLen);
-            contentEnd_ += lineLen;
-            if (contentEnd_ >= kSendBatchSize) queueCv_.notify_one();
+            std::lock_guard<std::mutex> lock(flowMutex_);
+            flowTable_[std::move(key)] += meta.bytes;
+            sz = flowTable_.size();
         }
+        if (sz >= aggMaxFlows_)
+            queueCv_.notify_one();   // force an early flush (cap hit)
     }
 
     void addPcapStats(std::uint32_t recv, std::uint32_t drop)
@@ -159,6 +155,16 @@ private:
     std::atomic<bool>        runningSender_{false};
     std::thread              senderThread_;
 
+    // ── Flow aggregation ────────────────────────────────────────────────────
+    // Sniffer threads write here (under flowMutex_); sender drains it.
+    std::mutex               flowMutex_;
+    FlowMap                  flowTable_;
+    FlowMap                  flowLocalTable_;  // swapped in on flush (no alloc per flush)
+    AdaptiveInterval         aggInterval_;
+    std::uint32_t            aggMaxFlows_{kAggMaxFlows};
+    std::uint32_t            aggLastFlows_{0}; // flows emitted in last flush — reported in H-line
+
+    // ── Connection ──────────────────────────────────────────────────────────
     mutable std::mutex       connectionMutex_;
     std::string              host_;
     std::uint16_t            port_;
@@ -208,31 +214,66 @@ private:
 
     void senderLoop()
     {
+        auto lastFlushTime = std::chrono::steady_clock::now();
+
         while (runningSender_.load())
         {
             try
             {
-                std::size_t toSend = 0;
+                // ── Wait for the adaptive interval or an early-wake signal ──────
+                bool forcedFlush = false;
                 {
                     std::unique_lock<std::mutex> lock(queueMutex_);
-                    queueCv_.wait_for(lock, std::chrono::milliseconds(kSenderWakeMs), [this] {
-                        return !runningSender_.load() || contentEnd_ >= kSendBatchSize;
+                    const auto waitMs = std::chrono::milliseconds(aggInterval_.intervalMs());
+                    forcedFlush = !queueCv_.wait_for(lock, waitMs, [this] {
+                        return !runningSender_.load()
+                            || flowTable_.size() >= aggMaxFlows_;
                     });
+                    // forcedFlush == true  → timer expired (normal)
+                    // forcedFlush == false → woken early (cap hit or shutdown)
                     if (!runningSender_.load()) break;
-                    toSend = contentEnd_;
-                    contentEnd_ = 0;
-                    // Swap buffers so sniffers can fill sendBuffer_ immediately
-                    // while the sender reads from flushBuffer_ without holding the lock.
-                    if (toSend > 0) std::swap(sendBuffer_, flushBuffer_);
+                    forcedFlush = (flowTable_.size() >= aggMaxFlows_);
                 }
 
+                // ── Drain the flow table ─────────────────────────────────────
+                {
+                    std::lock_guard<std::mutex> lk(flowMutex_);
+                    std::swap(flowTable_, flowLocalTable_);
+                }
+                const std::uint32_t flowCount =
+                    static_cast<std::uint32_t>(flowLocalTable_.size());
+
+                // Encode D-lines from the local snapshot into flushBuffer_.
+                flushBuffer_.clear();
+                for (const auto &kv : flowLocalTable_)
+                {
+                    char buf[256];
+                    int len = std::snprintf(buf, sizeof(buf), "D %.64s %.46s %.46s %llu\n",
+                                            kv.first.iface.c_str(),
+                                            kv.first.srcIp.c_str(),
+                                            kv.first.dstIp.c_str(),
+                                            static_cast<unsigned long long>(kv.second));
+                    if (len > 0 && static_cast<std::size_t>(len) < sizeof(buf))
+                        flushBuffer_.insert(flushBuffer_.end(), buf, buf + len);
+                }
+                flowLocalTable_.clear();
+
+                // Update the adaptive interval (skip for forced/cap flushes).
+                if (!forcedFlush)
+                {
+                    aggInterval_.update(flowCount);
+                    aggLastFlows_ = flowCount;
+                }
+                lastFlushTime = std::chrono::steady_clock::now();
+
+                // ── Periodic bookkeeping ────────────────────────────────────
                 const bool netChanged = netMonitor_.checkAndClear();
                 const auto nowEpochSec = std::chrono::duration_cast<std::chrono::seconds>(
                     std::chrono::steady_clock::now().time_since_epoch()).count();
                 const bool healthDue =
                     (nowEpochSec - lastHealthReportSec_.load(std::memory_order_relaxed)) >=
                     static_cast<std::int64_t>(kHealthIntervalSec);
-                if (toSend == 0 && !netChanged && !healthDue) continue;
+                if (flushBuffer_.empty() && !netChanged && !healthDue) continue;
 
                 std::lock_guard<std::mutex> connLock(connectionMutex_);
                 if (!platform::sockValid(fd_))
@@ -268,6 +309,7 @@ private:
                         std::cerr << "ntm-client: reconnected successfully after "
                                   << reconnectFailures_ << " failed attempt(s)\n";
                     reconnectFailures_ = 0;
+                    aggInterval_.reset();  // fresh connection — start responsive
                 }
 
                 if (platform::sockValid(fd_) && netChanged)
@@ -289,6 +331,8 @@ private:
                         + " ver=" + kClientVersion
                         + " wire_proto=" + std::to_string(kWireProtoVersion)
                         + " platform=" + kClientPlatform
+                        + " agg_interval_ms=" + std::to_string(aggInterval_.intervalMs())
+                        + " agg_flows="       + std::to_string(aggLastFlows_)
                         + "\n";
                     if (!platform::writeExact(ssl_, fd_, hLine.data(), hLine.size()))
                         closeUnlocked();
@@ -303,8 +347,8 @@ private:
                         closeUnlocked();
                 }
 
-                if (toSend > 0 && platform::sockValid(fd_) &&
-                    !platform::writeExact(ssl_, fd_, flushBuffer_.data(), toSend))
+                if (!flushBuffer_.empty() && platform::sockValid(fd_) &&
+                    !platform::writeExact(ssl_, fd_, flushBuffer_.data(), flushBuffer_.size()))
                     closeUnlocked();
             }
             catch (const std::exception &e)
@@ -499,7 +543,7 @@ private:
         meta.srcIp  = srcBuf;
         meta.dstIp  = dstBuf;
         meta.bytes  = header->len;
-        connection_.sendPacket(meta);
+        connection_.accumulateFlow(meta);
     }
 
     void run()
@@ -639,6 +683,11 @@ int runClient(bool daemonMode, const ClientConfig &config, char **argv)
         platform::ntmLog(platform::LogLevel::Info, daemonMode, rbuf);
     }
 
+    AdaptiveInterval::Config aggCfg;
+    aggCfg.targetLinesPerSec = config.aggTargetLinesPerSec;
+    aggCfg.minIntervalMs     = config.aggMinIntervalMs;
+    aggCfg.maxIntervalMs     = config.aggMaxIntervalMs;
+
     ClientConnection connection(config.server, config.port,
                                 config.identityPath, config.tlsCaPath,
                                 config.tlsServerCertPath,
@@ -646,7 +695,9 @@ int runClient(bool daemonMode, const ClientConfig &config, char **argv)
                                 config.externalIpUrl, config.externalIpTimeoutMs,
                                 &g_running,
                                 config.reconnectMaxAttempts,
-                                config.reconnectIntervalSec);
+                                config.reconnectIntervalSec,
+                                aggCfg,
+                                config.aggMaxFlows);
 
     // Enumerate capturable devices. Returns false only when pcap_findalldevs
     // itself errors (hard failure at startup); an empty result is valid and

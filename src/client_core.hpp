@@ -48,13 +48,19 @@ struct ipv6_header
 // Shared constants
 // ---------------------------------------------------------------------------
 
-inline constexpr std::size_t kMaxIOBytes           = 2 * 1024 * 1024;
-inline constexpr std::size_t kSendBatchSize        = 8192;
-inline constexpr unsigned    kSenderWakeMs         = 5;
+inline constexpr std::size_t kMaxIOBytes             = 2 * 1024 * 1024;
+inline constexpr std::size_t kSendBatchSize          = 8192;
+inline constexpr unsigned    kSenderWakeMs           = 5;
 inline constexpr std::size_t kSendBufferDefaultBytes = 512 * 1024;
-inline constexpr std::size_t kSendBufferMinBytes   = 4096;
-inline constexpr std::size_t kMaxConfigLineLen     = 8192;
-inline constexpr std::size_t kMaxConfigValueLen    = 2048;
+inline constexpr std::size_t kSendBufferMinBytes     = 4096;
+inline constexpr std::size_t kMaxConfigLineLen       = 8192;
+inline constexpr std::size_t kMaxConfigValueLen      = 2048;
+
+// Flow aggregation defaults — these match AdaptiveInterval::Config defaults.
+inline constexpr std::uint32_t kAggTargetLinesPerSec = 500;
+inline constexpr std::uint32_t kAggMinIntervalMs     = 100;
+inline constexpr std::uint32_t kAggMaxIntervalMs     = 5000;
+inline constexpr std::uint32_t kAggMaxFlows          = 10000;
 
 // ---------------------------------------------------------------------------
 // LAN address classification (pure IP arithmetic — no syscalls)
