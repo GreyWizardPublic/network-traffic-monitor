@@ -2,43 +2,65 @@
 
 ## Agent Roles
 
-Two Claude Code agents work **in parallel and independently** on this project.
-Each agent detects its own role from the OS at the start of every session —
-no manual configuration needed.
+Three Claude Code agents work **in parallel and independently** on this project,
+each on its own feature branch. Each agent detects its own role from the OS at
+the start of every session — no manual configuration needed.
 
-Run `uname -s` and `uname -r` to identify the environment:
+### Environment detection
+
+Run the appropriate command for your platform to identify your role:
+
+**On Linux** — run `uname -s` and check `/etc/arch-release`:
+```bash
+uname -s                        # must return "Linux"
+[ -f /etc/arch-release ] && echo "Arch Linux" || echo "other Linux"
+```
+
+**On macOS** — run `uname -s`:
+```bash
+uname -s                        # returns "Darwin"
+```
+
+**On Windows** — run in PowerShell:
+```powershell
+$env:OS                         # returns "Windows_NT"
+```
 
 | Environment | Detection | Role | Code ownership |
 |---|---|---|---|
-| Linux / WSL2 | `uname -s` = `Linux` and `uname -r` contains `microsoft` | **C++ Agent** | `src/` · CMake · docs · config files |
+| Arch Linux | `uname -s` = `Linux` **and** `/etc/arch-release` exists | **Arch Linux Agent** | `src/` server + Linux client · shared headers · CMake (Linux) · `docs/` · config files · Linux/server deployment guides |
 | macOS | `uname -s` = `Darwin` | **Swift Agent** | `ios/` · XcodeGen · Swift/iOS code |
+| Windows | `$env:OS` = `Windows_NT` | **Windows Agent** | `src/` Windows-specific client code · `cmake/toolchain-mingw64.cmake` · Windows CMake config · Windows deployment guide · Npcap/WinSock integration |
 
 ---
 
 ### Parallel workflow — the golden rule
 
-Each agent owns its code domain exclusively and may land changes to `main` without
-waiting for the other agent. The one hard constraint is **protocol changes** — see
-[Protocol Governance](#protocol-governance) for the special rule that applies there.
+Each agent owns its code domain exclusively and works on its own feature branch.
+Changes may land to `main` without waiting for the other agents. The two hard
+constraints are **protocol changes** (see [Protocol Governance](#protocol-governance))
+and **cross-agent work** (see [Cross-agent handoff](#cross-agent-handoff)).
 
 ---
 
-### Branch & merge workflow (both agents follow this)
+### Branch & merge workflow (all agents follow this)
 
 1. **Start a feature branch** from the latest `main` before any new unit of work:
    ```
    git checkout main && git pull
    git checkout -b <agent-prefix>/<short-description>
    ```
-   Use prefix `cpp/` for C++ Agent branches, `ios/` for Swift Agent branches.
+   Use prefix `linux/` for Arch Linux Agent branches, `ios/` for Swift Agent
+   branches, `win/` for Windows Agent branches.
 
-2. **Commit only files inside your code domain.** Never touch the other agent's
-   files. If a cross-domain change is needed, open a GitHub Issue (see below).
+2. **Commit only files inside your code domain.** Never touch another agent's
+   files directly. If a cross-domain change is needed, use the PR handoff
+   workflow (see [Cross-agent handoff](#cross-agent-handoff) below).
 
 3. **Open a PR** targeting `main` when the work is ready. PR description must
    include build instructions and a test checklist appropriate to the domain.
 
-4. **Merge the PR independently** — no sign-off from the other agent is required
+4. **Merge the PR independently** — no sign-off from other agents is required
    unless the change touches a shared protocol (see Protocol Governance).
 
 5. **Delete the feature branch** after merge, both local and remote:
@@ -47,23 +69,26 @@ waiting for the other agent. The one hard constraint is **protocol changes** —
    git push origin --delete <branch>
    ```
 
-6. **At the start of each session**, check for open GitHub Issues tagged for your
-   agent (see Cross-agent requests below) and address them before starting new work.
+6. **At the start of each session**, check for open PRs and GitHub Issues
+   addressed to your agent (see Cross-agent handoff below) and address them
+   before starting new work.
 
 ---
 
-### C++ Agent (Linux / WSL2)
+### Arch Linux Agent
 
-**Owns:** all C++ code (`src/`), CMake build system, documentation, config files,
-deployment guides, wire-protocol and API-protocol specs.
+**Owns:** C++ server code, Linux client code, and all shared/protocol headers in
+`src/`; CMake build system (Linux targets); `docs/`; config file examples;
+Linux and server deployment guides; wire-protocol and API-protocol specs.
 
 **Responsibilities:**
-- Writes and maintains all C++ code: `ntm-server`, `ntm-client` (Linux + Windows).
-- Writes documentation, config examples, and deployment guides.
-- Builds Linux server + client **and** cross-compiles Windows client on every build
-  (see [C++ Build](#c-build) below).
+- Writes and maintains all C++ code for `ntm-server` and `ntm-client` (Linux).
+- Maintains shared headers used by all C++ targets (e.g. `proto_client_server.hpp`).
+- Writes documentation, config examples, and Linux/server deployment guides.
+- Builds the Linux server and Linux client binaries (see [Linux build](#linux-client--server) below).
+- **Does not** build the Windows client — the Windows Agent owns that.
 - **Does not** run XcodeGen, Xcode builds, or on-device tests.
-- **Does not** write Swift code — open a GitHub Issue instead (see below).
+- **Does not** write Swift code — use PR handoff instead (see below).
 
 ---
 
@@ -79,17 +104,38 @@ native code.
   adding new model fields) when a protocol version lands on `main`.
 - Runs XcodeGen (`xcodegen generate`) and builds in Xcode (⌘B).
 - Runs on-device and simulator tests; handles App Store / TestFlight publishing.
-- **Does not** write C++ code — open a GitHub Issue instead (see below).
+- **Does not** write C++ code — use PR handoff instead (see below).
 
 ---
 
-### Cross-agent requests
+### Windows Agent
 
-When one agent needs the other to make a change, it opens a GitHub Issue using
-this structure:
+**Owns:** all Windows-specific C++ client code in `src/` (files conditionally
+compiled for Windows, `#ifdef _WIN32` blocks, and any `*_windows*`-named files);
+`cmake/toolchain-mingw64.cmake`; Windows-specific CMake variables and targets;
+`CLIENT_DEPLOYMENT.md` Windows sections; Npcap SDK and WinSock integration.
+
+**Responsibilities:**
+- Writes and maintains all Windows-specific code for `ntm-client` (Windows).
+- Builds the Windows client natively on Windows (see [Windows build](#windows-client-native-windows) below).
+- Maintains the Windows toolchain file and Windows CMake configuration.
+- Writes and updates Windows deployment documentation.
+- Manages Npcap SDK, WinSock2, and any other Windows-only dependencies.
+- Applies Windows-side protocol lockstep changes when a protocol version lands on `main`.
+- **Does not** build the Linux server or Linux client — the Arch Linux Agent owns that.
+- **Does not** write Swift code — use PR handoff instead (see below).
+
+---
+
+### Cross-agent handoff
+
+When one agent needs another to make a change, it opens a **PR** (not just an
+issue) that contains the required scaffolding or stub, targeting a dedicated
+handoff branch named `<receiving-agent-prefix>/handoff/<short-description>`.
+The PR body follows this structure:
 
 ```
-Title: [C++ AGENT] <short description>     ← or [SWIFT AGENT]
+Title: [WINDOWS AGENT] <short description>   ← or [LINUX AGENT] / [SWIFT AGENT]
 
 ## Problem
 <what is wrong or missing>
@@ -99,11 +145,23 @@ Title: [C++ AGENT] <short description>     ← or [SWIFT AGENT]
 
 ## Context
 <why this is needed; relevant error messages or test failures>
+
+## Starter diff (optional)
+<if the requesting agent has already drafted the change, include it here
+ so the receiving agent can review, complete, and merge>
 ```
 
-The receiving agent addresses the issue in its next session, implements the change
-on a feature branch, merges it, and closes the issue with a comment summarising
-what was done.
+**Handoff workflow:**
+
+1. Requesting agent creates a feature branch `<my-prefix>/handoff/<desc>`, adds
+   any starter code or stubs, and opens a PR targeting `main`.
+2. Receiving agent picks up the PR, implements or completes the work on its own
+   branch (`<my-prefix>/<desc>`), resolves the handoff PR (close or supersede),
+   and merges its own PR to `main`.
+3. Requesting agent rebases its active branch on the updated `main`.
+
+The receiving agent addresses the handoff in its next session and closes the
+original PR with a comment summarising what was done.
 
 ---
 
@@ -165,19 +223,19 @@ When a protocol version bumps, **every module listed below must receive at
 least a MINOR bump in the same commit**. A breaking change requires MAJOR for
 all of them.
 
-| Protocol | Lockstep modules |
-|---|---|
-| Wire (`kWireProtoVersion`) | `ntm-server`, `ntm-client` (C++), `NTMClient` (iOS) |
-| API (`kApiVersion`) | `ntm-server`, `NTMDashboard` (iOS), embedded web dashboard |
+| Protocol | Lockstep modules | Responsible agents |
+|---|---|---|
+| Wire (`kWireProtoVersion`) | `ntm-server`, `ntm-client` (Linux), `ntm-client` (Windows), `NTMClient` (iOS) | Arch Linux Agent · Windows Agent · Swift Agent |
+| API (`kApiVersion`) | `ntm-server`, `NTMDashboard` (iOS), embedded web dashboard | Arch Linux Agent · Swift Agent |
 
 ### Rules
 
 1. **Protocol changes land directly on `main` — never on a feature branch.**
-   Both agents may have active feature branches at any time. A protocol change on a
-   feature branch would force the other agent to rebase mid-flight and risks merge
+   All three agents may have active feature branches at any time. A protocol change on a
+   feature branch would force other agents to rebase mid-flight and risks merge
    conflicts in shared headers. Instead: commit protocol changes (doc update +
-   constant bump + both sides of the implementation) directly to `main`, then both
-   agents rebase their active feature branches immediately:
+   constant bump + all sides of the implementation) directly to `main`, then **all
+   agents** rebase their active feature branches immediately:
    ```
    git fetch origin
    git rebase origin/main
@@ -204,11 +262,13 @@ removed field, changed type) **must** be reflected in `buildDemoSummaryJson()` i
 
 ## C++ Build
 
-The Linux agent is responsible for building **both** the Linux and Windows client binaries.
-Always run both builds together — the Windows binary is needed for auto-update distribution
-and for operators on Windows machines.
+Each agent builds only its own platform binaries. The output filenames embed the
+platform and version (e.g. `ntm-client-linux-amd64-1.9.0`) and match the
+auto-update naming convention exactly — they can be dropped directly into
+`update_dir` on the server without renaming.
 
 ### Linux client + server
+*(Arch Linux Agent)*
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release
@@ -217,8 +277,31 @@ cmake --build build -j$(nproc)
 # build/ntm-client-linux-amd64-<version>
 ```
 
-### Windows client (cross-compile from Linux)
+### Windows client (native Windows)
+*(Windows Agent)*
 
+Build natively on Windows using the MinGW-w64 toolchain or MSVC.
+
+**MinGW-w64 (recommended):**
+```powershell
+cmake -B build-windows `
+  -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-mingw64.cmake `
+  -DNPCAP_SDK="C:\npcap-sdk" `
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build build-windows -j $env:NUMBER_OF_PROCESSORS
+# build-windows/ntm-client-windows-amd64-<version>.exe
+```
+
+**Dependencies (Windows Agent machine):**
+
+| Dependency | Notes |
+|---|---|
+| MinGW-w64 | Install via [winget](https://winget.run/pkg/MSYS2/MSYS2) or MSYS2 |
+| Npcap SDK | Download from [npcap.com](https://npcap.com/#download); extract to `C:\npcap-sdk` |
+| OpenSSL static libs | Build or install via vcpkg / MSYS2 (`openssl`) |
+| Toolchain file | `cmake/toolchain-mingw64.cmake` |
+
+**Cross-compile fallback (Arch Linux Agent only, when Windows Agent is unavailable):**
 ```bash
 cmake -B build-windows \
   -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-mingw64.cmake \
@@ -230,15 +313,9 @@ cmake --build build-windows -j$(nproc)
 # build-windows/ntm-client-windows-amd64-<version>.exe
 ```
 
-**Dependencies (pre-installed on this machine):**
-
-| Dependency | Location |
+| Cross-compile dependency | Location |
 |---|---|
 | MinGW-w64 cross-compiler | `x86_64-w64-mingw32-g++` (Arch `mingw-w64-gcc`) |
 | Npcap SDK | `/opt/npcap-sdk` |
 | MinGW OpenSSL static libs | `/usr/x86_64-w64-mingw32/lib64/libssl.a` + `libcrypto.a` |
 | Toolchain file | `cmake/toolchain-mingw64.cmake` |
-
-The output filenames embed the platform and version (e.g. `ntm-client-linux-amd64-1.9.0`)
-and match the auto-update naming convention exactly — they can be dropped directly into
-`update_dir` on the server without renaming.
