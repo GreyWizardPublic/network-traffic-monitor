@@ -34,6 +34,7 @@ struct DemoBanner: View {
 
 struct DashboardView: View {
     @Environment(DashboardViewModel.self) private var vm
+    @Environment(AuthViewModel.self) private var authVM
 
     var body: some View {
         NavigationStack {
@@ -112,6 +113,13 @@ struct DashboardView: View {
                         Image(systemName: "arrow.clockwise")
                     }
                     .disabled(vm.isLoading)
+                }
+                if vm.snapshot?.demo == true {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Sign out", role: .destructive) {
+                            Task { await authVM.logout() }
+                        }
+                    }
                 }
             }
         }
