@@ -50,8 +50,10 @@ enum WireKeyService {
             kSecAttrService: keychainService,
             kSecAttrAccount: keychainAccount,
             kSecValueData: rawKey,
-            // Accessible after first unlock so a future background extension can reach it.
-            kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            // Accessible while the device is unlocked (screen on or recently active).
+            // PacketTunnel runs only while the VPN session is active — always unlocked —
+            // so WhenUnlocked is the correct and minimal accessibility for this key.
+            kSecAttrAccessible: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         ]
         SecItemAdd(query as CFDictionary, nil)
     }

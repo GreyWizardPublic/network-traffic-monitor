@@ -1,5 +1,11 @@
 import Foundation
 
+/// Abstraction over NTMClient for testability — the ViewModel accepts any conforming actor.
+protocol SummaryFetching: Sendable {
+    func fetchSummary() async throws -> DashboardSnapshot
+    func updateConfig(_ newConfig: ServerConfig) async
+}
+
 enum NTMError: Error, LocalizedError {
     case notConfigured
     case httpError(Int)
@@ -16,7 +22,7 @@ enum NTMError: Error, LocalizedError {
     }
 }
 
-actor NTMClient {
+actor NTMClient: SummaryFetching {
     private var config: ServerConfig
     private var session: URLSession
 

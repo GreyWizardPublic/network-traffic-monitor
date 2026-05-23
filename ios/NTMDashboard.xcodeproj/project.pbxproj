@@ -1,0 +1,630 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0207EF25BB05546CCBFEFBB1 /* GlassCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17D7EA47DF8FD33E34D5FD50 /* GlassCard.swift */; };
+		19459707933237366C1F8764 /* ByteLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58A0EEF5B09B3375446F28A3 /* ByteLabel.swift */; };
+		1C7E06BBA00154ABC88F28A6 /* ServerConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBA03BA53FCA19A5FC837A71 /* ServerConfig.swift */; };
+		2EFEA0E26DAE80214ECCFFB1 /* NTMClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6458FB6A66A07ABA491D7270 /* NTMClient.swift */; };
+		4B99D0DAA7D714912CD9473F /* DashboardSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1786AF78B5E75A6D76546E5A /* DashboardSnapshot.swift */; };
+		4D403C078CEAD21BD276FBDA /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE738CC4D345F46C4C02078B /* LoginView.swift */; };
+		4DFE4BB50CF99F090A9A1358 /* Color+NTM.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B4B0DCACE152D40FFA4FDFC /* Color+NTM.swift */; };
+		5F64A17A2296ACC9B5EA4AA2 /* NTMDashboardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E773E9F0C9DB0A46025AEA74 /* NTMDashboardTests.swift */; };
+		623DE09577CF622165B294B1 /* KeychainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D1E5677279246C4C1605702 /* KeychainService.swift */; };
+		65B66C2AB9AF202EACF32A69 /* DashboardViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 830D3FF5F84A24DDA5DDD139 /* DashboardViewModel.swift */; };
+		6E34A2628B2BC76C4F570C75 /* InterfacesSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E4AB6ABFBA6D1D0F5090EB /* InterfacesSection.swift */; };
+		70D5500660FEEA05B228DEDD /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEF034F7A2B67BC03C614565 /* SettingsView.swift */; };
+		72790598B0FF0170EF68352F /* PasskeyService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2209ECC4A2BC27EDB6F141C6 /* PasskeyService.swift */; };
+		7B91896C02B41E67C75E213C /* LanDevice.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DC19E4E0E4229D577684AAC /* LanDevice.swift */; };
+		8170C0447D586E7C3AB8C218 /* EntityFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C6C15169CB5FC9E7CBBDA95 /* EntityFlow.swift */; };
+		89D1CF18AC87CA02A3B688B5 /* EntityFlowsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AB372E094EFED56458E95BD /* EntityFlowsSection.swift */; };
+		8F722091EAB8FDFB2A84A997 /* NTMDashboardApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39E3B19CB0DD2B03641509F1 /* NTMDashboardApp.swift */; };
+		9C029F8BCE9FBE3E5E7095D8 /* RegisterDeviceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A28C84A9FAFD2E66259B3B9 /* RegisterDeviceView.swift */; };
+		A5CAE318D2F9ACC241A15574 /* CertificatePinner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 211C120F7F3FAB95364C4930 /* CertificatePinner.swift */; };
+		A6DC3789757BD7F4A0B4AF12 /* ProtocolVersion.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4DD610B34BF286883320588 /* ProtocolVersion.swift */; };
+		B5330ED8E9D503B32B707D09 /* AdminProof.swift in Sources */ = {isa = PBXBuildFile; fileRef = 804A17A45D0AF55FA4B6DCBC /* AdminProof.swift */; };
+		C53E3A35A37173372D67A39D /* ProtoRejectedClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8514DAA6EF7557EBA0370386 /* ProtoRejectedClient.swift */; };
+		C908F8F4BF3BDFB7E6AC5A61 /* ByteFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C5CAAD94CB10A98C2568456 /* ByteFormatter.swift */; };
+		D056C6A0D8B89CE2EC94C9A3 /* AuthViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBAEA321AE693A8B343F6D00 /* AuthViewModel.swift */; };
+		D7B1527B74C4E45243BB5DDC /* ClientHealthSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2CC62CA763A7CB87C6A9285 /* ClientHealthSection.swift */; };
+		DC09DBE27FA6174CE4997737 /* ConnectionBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1996311C087DD337943D5408 /* ConnectionBar.swift */; };
+		E1150CEA5CE76C8881B1AF04 /* SettingsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB742ADB09B58A0C223BBED8 /* SettingsViewModel.swift */; };
+		E49A3C919A13BB61EBC848C3 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DCE5CBEE3D0940C4D62A7825 /* Assets.xcassets */; };
+		E5A205EF1A0B6AF3C8343095 /* ClientHealth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14B5DDB449A2E0FBF1884AB5 /* ClientHealth.swift */; };
+		E5E542D19AA4586456E3F6BD /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEAF32526D974799FE55C85A /* DashboardView.swift */; };
+		E84BA355775F2E9FE26B0D75 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B76070D52526C2759667B63 /* RootView.swift */; };
+		EC576FBC2AD8ECA6B274F1CB /* InterfaceStat.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEC74B35B28474BABB90D917 /* InterfaceStat.swift */; };
+		FC204BDFFB2287D1EC0A694F /* StatBadge.swift in Sources */ = {isa = PBXBuildFile; fileRef = D330C12EF81AF8FB857D866B /* StatBadge.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		0BF692FBD089EE7C55D67E78 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = EDA74CFD6F82A52EA7A17296 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 0E137D6916E3DB5CF5308AF0;
+			remoteInfo = NTMDashboard;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		0B4B0DCACE152D40FFA4FDFC /* Color+NTM.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Color+NTM.swift"; sourceTree = "<group>"; };
+		14B5DDB449A2E0FBF1884AB5 /* ClientHealth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientHealth.swift; sourceTree = "<group>"; };
+		1786AF78B5E75A6D76546E5A /* DashboardSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardSnapshot.swift; sourceTree = "<group>"; };
+		17D7EA47DF8FD33E34D5FD50 /* GlassCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassCard.swift; sourceTree = "<group>"; };
+		1996311C087DD337943D5408 /* ConnectionBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionBar.swift; sourceTree = "<group>"; };
+		211C120F7F3FAB95364C4930 /* CertificatePinner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CertificatePinner.swift; sourceTree = "<group>"; };
+		2209ECC4A2BC27EDB6F141C6 /* PasskeyService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasskeyService.swift; sourceTree = "<group>"; };
+		2DC19E4E0E4229D577684AAC /* LanDevice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanDevice.swift; sourceTree = "<group>"; };
+		39E3B19CB0DD2B03641509F1 /* NTMDashboardApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NTMDashboardApp.swift; sourceTree = "<group>"; };
+		3C5CAAD94CB10A98C2568456 /* ByteFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ByteFormatter.swift; sourceTree = "<group>"; };
+		4D1E5677279246C4C1605702 /* KeychainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainService.swift; sourceTree = "<group>"; };
+		58A0EEF5B09B3375446F28A3 /* ByteLabel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ByteLabel.swift; sourceTree = "<group>"; };
+		5AB372E094EFED56458E95BD /* EntityFlowsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntityFlowsSection.swift; sourceTree = "<group>"; };
+		6458FB6A66A07ABA491D7270 /* NTMClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NTMClient.swift; sourceTree = "<group>"; };
+		688721A5E912EE5A4A34F568 /* NTMDashboard.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = NTMDashboard.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		804A17A45D0AF55FA4B6DCBC /* AdminProof.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdminProof.swift; sourceTree = "<group>"; };
+		830D3FF5F84A24DDA5DDD139 /* DashboardViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardViewModel.swift; sourceTree = "<group>"; };
+		8514DAA6EF7557EBA0370386 /* ProtoRejectedClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtoRejectedClient.swift; sourceTree = "<group>"; };
+		8A28C84A9FAFD2E66259B3B9 /* RegisterDeviceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RegisterDeviceView.swift; sourceTree = "<group>"; };
+		9B76070D52526C2759667B63 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		9C6C15169CB5FC9E7CBBDA95 /* EntityFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntityFlow.swift; sourceTree = "<group>"; };
+		AEAF32526D974799FE55C85A /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
+		B4DD610B34BF286883320588 /* ProtocolVersion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtocolVersion.swift; sourceTree = "<group>"; };
+		BBAEA321AE693A8B343F6D00 /* AuthViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthViewModel.swift; sourceTree = "<group>"; };
+		BD248C46D564AD739F94AEFB /* NTMDashboardTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = NTMDashboardTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		BEF034F7A2B67BC03C614565 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		D2CC62CA763A7CB87C6A9285 /* ClientHealthSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientHealthSection.swift; sourceTree = "<group>"; };
+		D330C12EF81AF8FB857D866B /* StatBadge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatBadge.swift; sourceTree = "<group>"; };
+		D4E4AB6ABFBA6D1D0F5090EB /* InterfacesSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InterfacesSection.swift; sourceTree = "<group>"; };
+		DBA03BA53FCA19A5FC837A71 /* ServerConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerConfig.swift; sourceTree = "<group>"; };
+		DCE5CBEE3D0940C4D62A7825 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		E773E9F0C9DB0A46025AEA74 /* NTMDashboardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NTMDashboardTests.swift; sourceTree = "<group>"; };
+		EE1B68D7A216B100CA819B4E /* NTMDashboard.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = NTMDashboard.entitlements; sourceTree = "<group>"; };
+		EE738CC4D345F46C4C02078B /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
+		EE96CD2C94C0093025B8331A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		EEC74B35B28474BABB90D917 /* InterfaceStat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InterfaceStat.swift; sourceTree = "<group>"; };
+		FB742ADB09B58A0C223BBED8 /* SettingsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsViewModel.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		102398FE24EA2FD1A30D06D8 /* NTMDashboard */ = {
+			isa = PBXGroup;
+			children = (
+				EE96CD2C94C0093025B8331A /* Info.plist */,
+				EE1B68D7A216B100CA819B4E /* NTMDashboard.entitlements */,
+				76EAC266314A943794613E89 /* App */,
+				F2D1F14DF25434C612E60716 /* Models */,
+				526EA26933B745133F6DACF5 /* Resources */,
+				79BD57D260C09D5C9A793D55 /* Services */,
+				955E6374CD059955CB28131E /* ViewModels */,
+				80A38747EB023B3142F7C71F /* Views */,
+			);
+			name = NTMDashboard;
+			path = NTMDashboard/NTMDashboard;
+			sourceTree = "<group>";
+		};
+		3031EDB83F71264E5AC3CD62 /* Dashboard */ = {
+			isa = PBXGroup;
+			children = (
+				D2CC62CA763A7CB87C6A9285 /* ClientHealthSection.swift */,
+				AEAF32526D974799FE55C85A /* DashboardView.swift */,
+				5AB372E094EFED56458E95BD /* EntityFlowsSection.swift */,
+				D4E4AB6ABFBA6D1D0F5090EB /* InterfacesSection.swift */,
+			);
+			path = Dashboard;
+			sourceTree = "<group>";
+		};
+		3CB18BBF752905CE7AB4E735 /* Components */ = {
+			isa = PBXGroup;
+			children = (
+				3C5CAAD94CB10A98C2568456 /* ByteFormatter.swift */,
+				58A0EEF5B09B3375446F28A3 /* ByteLabel.swift */,
+				0B4B0DCACE152D40FFA4FDFC /* Color+NTM.swift */,
+				1996311C087DD337943D5408 /* ConnectionBar.swift */,
+				17D7EA47DF8FD33E34D5FD50 /* GlassCard.swift */,
+				D330C12EF81AF8FB857D866B /* StatBadge.swift */,
+			);
+			path = Components;
+			sourceTree = "<group>";
+		};
+		440E3B8D764DAEE40DBE3FA5 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				688721A5E912EE5A4A34F568 /* NTMDashboard.app */,
+				BD248C46D564AD739F94AEFB /* NTMDashboardTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		526EA26933B745133F6DACF5 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				DCE5CBEE3D0940C4D62A7825 /* Assets.xcassets */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		5A8B1A1DF6E40BF8DAD39F7D /* NTMDashboardTests */ = {
+			isa = PBXGroup;
+			children = (
+				E773E9F0C9DB0A46025AEA74 /* NTMDashboardTests.swift */,
+			);
+			name = NTMDashboardTests;
+			path = NTMDashboard/NTMDashboardTests;
+			sourceTree = "<group>";
+		};
+		749002A82F36F356F427EC2F /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				BEF034F7A2B67BC03C614565 /* SettingsView.swift */,
+			);
+			path = Settings;
+			sourceTree = "<group>";
+		};
+		76EAC266314A943794613E89 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				39E3B19CB0DD2B03641509F1 /* NTMDashboardApp.swift */,
+				9B76070D52526C2759667B63 /* RootView.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		79BD57D260C09D5C9A793D55 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				804A17A45D0AF55FA4B6DCBC /* AdminProof.swift */,
+				211C120F7F3FAB95364C4930 /* CertificatePinner.swift */,
+				4D1E5677279246C4C1605702 /* KeychainService.swift */,
+				6458FB6A66A07ABA491D7270 /* NTMClient.swift */,
+				2209ECC4A2BC27EDB6F141C6 /* PasskeyService.swift */,
+				B4DD610B34BF286883320588 /* ProtocolVersion.swift */,
+				DBA03BA53FCA19A5FC837A71 /* ServerConfig.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		80A38747EB023B3142F7C71F /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				EE738CC4D345F46C4C02078B /* LoginView.swift */,
+				8A28C84A9FAFD2E66259B3B9 /* RegisterDeviceView.swift */,
+				3CB18BBF752905CE7AB4E735 /* Components */,
+				3031EDB83F71264E5AC3CD62 /* Dashboard */,
+				749002A82F36F356F427EC2F /* Settings */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		955E6374CD059955CB28131E /* ViewModels */ = {
+			isa = PBXGroup;
+			children = (
+				BBAEA321AE693A8B343F6D00 /* AuthViewModel.swift */,
+				830D3FF5F84A24DDA5DDD139 /* DashboardViewModel.swift */,
+				FB742ADB09B58A0C223BBED8 /* SettingsViewModel.swift */,
+			);
+			path = ViewModels;
+			sourceTree = "<group>";
+		};
+		EE6E1EDE9190E8144BECF130 = {
+			isa = PBXGroup;
+			children = (
+				102398FE24EA2FD1A30D06D8 /* NTMDashboard */,
+				5A8B1A1DF6E40BF8DAD39F7D /* NTMDashboardTests */,
+				440E3B8D764DAEE40DBE3FA5 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		F2D1F14DF25434C612E60716 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				14B5DDB449A2E0FBF1884AB5 /* ClientHealth.swift */,
+				1786AF78B5E75A6D76546E5A /* DashboardSnapshot.swift */,
+				9C6C15169CB5FC9E7CBBDA95 /* EntityFlow.swift */,
+				EEC74B35B28474BABB90D917 /* InterfaceStat.swift */,
+				2DC19E4E0E4229D577684AAC /* LanDevice.swift */,
+				8514DAA6EF7557EBA0370386 /* ProtoRejectedClient.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		0E137D6916E3DB5CF5308AF0 /* NTMDashboard */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 524A1441376AC97616BB7357 /* Build configuration list for PBXNativeTarget "NTMDashboard" */;
+			buildPhases = (
+				AC54F4F8A63770978DF7D75C /* Sources */,
+				9CDC404916AC197DA653AC34 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = NTMDashboard;
+			packageProductDependencies = (
+			);
+			productName = NTMDashboard;
+			productReference = 688721A5E912EE5A4A34F568 /* NTMDashboard.app */;
+			productType = "com.apple.product-type.application";
+		};
+		218BE0BEB77AD622A4DE82EC /* NTMDashboardTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A501D31FE7044E466E8D1519 /* Build configuration list for PBXNativeTarget "NTMDashboardTests" */;
+			buildPhases = (
+				54A3E5495279274E6CB476CC /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				82B2774228002003887D8C9B /* PBXTargetDependency */,
+			);
+			name = NTMDashboardTests;
+			packageProductDependencies = (
+			);
+			productName = NTMDashboardTests;
+			productReference = BD248C46D564AD739F94AEFB /* NTMDashboardTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		EDA74CFD6F82A52EA7A17296 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					0E137D6916E3DB5CF5308AF0 = {
+						DevelopmentTeam = W65LG3MSG6;
+						ProvisioningStyle = Automatic;
+					};
+					218BE0BEB77AD622A4DE82EC = {
+						DevelopmentTeam = W65LG3MSG6;
+					};
+				};
+			};
+			buildConfigurationList = DC17DCF8F811EB84016F2AAA /* Build configuration list for PBXProject "NTMDashboard" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = EE6E1EDE9190E8144BECF130;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 440E3B8D764DAEE40DBE3FA5 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				0E137D6916E3DB5CF5308AF0 /* NTMDashboard */,
+				218BE0BEB77AD622A4DE82EC /* NTMDashboardTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		9CDC404916AC197DA653AC34 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E49A3C919A13BB61EBC848C3 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		54A3E5495279274E6CB476CC /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5F64A17A2296ACC9B5EA4AA2 /* NTMDashboardTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AC54F4F8A63770978DF7D75C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B5330ED8E9D503B32B707D09 /* AdminProof.swift in Sources */,
+				D056C6A0D8B89CE2EC94C9A3 /* AuthViewModel.swift in Sources */,
+				C908F8F4BF3BDFB7E6AC5A61 /* ByteFormatter.swift in Sources */,
+				19459707933237366C1F8764 /* ByteLabel.swift in Sources */,
+				A5CAE318D2F9ACC241A15574 /* CertificatePinner.swift in Sources */,
+				E5A205EF1A0B6AF3C8343095 /* ClientHealth.swift in Sources */,
+				D7B1527B74C4E45243BB5DDC /* ClientHealthSection.swift in Sources */,
+				4DFE4BB50CF99F090A9A1358 /* Color+NTM.swift in Sources */,
+				DC09DBE27FA6174CE4997737 /* ConnectionBar.swift in Sources */,
+				4B99D0DAA7D714912CD9473F /* DashboardSnapshot.swift in Sources */,
+				E5E542D19AA4586456E3F6BD /* DashboardView.swift in Sources */,
+				65B66C2AB9AF202EACF32A69 /* DashboardViewModel.swift in Sources */,
+				8170C0447D586E7C3AB8C218 /* EntityFlow.swift in Sources */,
+				89D1CF18AC87CA02A3B688B5 /* EntityFlowsSection.swift in Sources */,
+				0207EF25BB05546CCBFEFBB1 /* GlassCard.swift in Sources */,
+				EC576FBC2AD8ECA6B274F1CB /* InterfaceStat.swift in Sources */,
+				6E34A2628B2BC76C4F570C75 /* InterfacesSection.swift in Sources */,
+				623DE09577CF622165B294B1 /* KeychainService.swift in Sources */,
+				7B91896C02B41E67C75E213C /* LanDevice.swift in Sources */,
+				4D403C078CEAD21BD276FBDA /* LoginView.swift in Sources */,
+				2EFEA0E26DAE80214ECCFFB1 /* NTMClient.swift in Sources */,
+				8F722091EAB8FDFB2A84A997 /* NTMDashboardApp.swift in Sources */,
+				72790598B0FF0170EF68352F /* PasskeyService.swift in Sources */,
+				C53E3A35A37173372D67A39D /* ProtoRejectedClient.swift in Sources */,
+				A6DC3789757BD7F4A0B4AF12 /* ProtocolVersion.swift in Sources */,
+				9C029F8BCE9FBE3E5E7095D8 /* RegisterDeviceView.swift in Sources */,
+				E84BA355775F2E9FE26B0D75 /* RootView.swift in Sources */,
+				1C7E06BBA00154ABC88F28A6 /* ServerConfig.swift in Sources */,
+				70D5500660FEEA05B228DEDD /* SettingsView.swift in Sources */,
+				E1150CEA5CE76C8881B1AF04 /* SettingsViewModel.swift in Sources */,
+				FC204BDFFB2287D1EC0A694F /* StatBadge.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		82B2774228002003887D8C9B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 0E137D6916E3DB5CF5308AF0 /* NTMDashboard */;
+			targetProxy = 0BF692FBD089EE7C55D67E78 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		1A161FBD4DB2DC671E998EC7 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				DEVELOPMENT_TEAM = W65LG3MSG6;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.ntm.NTMDashboardTests;
+				SDKROOT = iphoneos;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/NTMDashboard.app/NTMDashboard";
+			};
+			name = Release;
+		};
+		337E90E7D1746AD341070521 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = NTMDashboard/NTMDashboard/NTMDashboard.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 16;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = W65LG3MSG6;
+				INFOPLIST_FILE = NTMDashboard/NTMDashboard/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.5.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ntm.NTMDashboard;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		3D2AF6C5BE120CADEAA78D2C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		3D7EE66D745536B27CF34F4C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = NTMDashboard/NTMDashboard/NTMDashboard.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 16;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = W65LG3MSG6;
+				INFOPLIST_FILE = NTMDashboard/NTMDashboard/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.5.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ntm.NTMDashboard;
+				SDKROOT = iphoneos;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		C552DEC28478D3D236A77056 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				DEVELOPMENT_TEAM = W65LG3MSG6;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.ntm.NTMDashboardTests;
+				SDKROOT = iphoneos;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/NTMDashboard.app/NTMDashboard";
+			};
+			name = Debug;
+		};
+		EA87413B782570DBE8C80501 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		524A1441376AC97616BB7357 /* Build configuration list for PBXNativeTarget "NTMDashboard" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				337E90E7D1746AD341070521 /* Debug */,
+				3D7EE66D745536B27CF34F4C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		A501D31FE7044E466E8D1519 /* Build configuration list for PBXNativeTarget "NTMDashboardTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C552DEC28478D3D236A77056 /* Debug */,
+				1A161FBD4DB2DC671E998EC7 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		DC17DCF8F811EB84016F2AAA /* Build configuration list for PBXProject "NTMDashboard" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				3D2AF6C5BE120CADEAA78D2C /* Debug */,
+				EA87413B782570DBE8C80501 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = EDA74CFD6F82A52EA7A17296 /* Project object */;
+}

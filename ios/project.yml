@@ -50,4 +50,21 @@ targets:
           DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
           SWIFT_OPTIMIZATION_LEVEL: "-O"
     scheme:
-      testTargets: []
+      testTargets:
+        - name: NTMDashboardTests
+
+  NTMDashboardTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources:
+      - path: NTMDashboard/NTMDashboardTests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ntm.NTMDashboardTests
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        DEVELOPMENT_TEAM: W65LG3MSG6
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: NTMDashboard

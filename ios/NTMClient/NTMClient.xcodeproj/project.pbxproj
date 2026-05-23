@@ -11,8 +11,8 @@
 		092351BEAD983DD2797FEEB9 /* WireProtocolClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0430B986E974E6856E781512 /* WireProtocolClient.swift */; };
 		0CDBF095DF3B549EDAF9050B /* NTMClientApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A6088173988E0CFBE2AACBD /* NTMClientApp.swift */; };
 		12902DD2F1F23A9ED748220F /* SetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1ACFA8082A112D7A76556ED9 /* SetupView.swift */; };
-		13E82D665D5E0BB02BD1D6E2 /* IPPacket.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7257FF87FEE6FB02762EC9FF /* IPPacket.swift */; };
 		1B9816F189C8F5F0CFEBFC47 /* ServerConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6103464000751A4CE291334 /* ServerConfig.swift */; };
+		27211026A6788523A05774DD /* IPPacket.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BA865620EA5D81471A09635 /* IPPacket.swift */; };
 		2E8FDA7D30D52F54254C96AE /* NTMClientPacketTunnel.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = E6AA64668CF4B0671FB65168 /* NTMClientPacketTunnel.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		2F0B2823D41CF9F5C208C0D5 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 63D11CD11AA78B9AA4F5DC04 /* Assets.xcassets */; };
 		393FBCD4C750D6E0CE7C685A /* TunnelManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 633D6EA2B5070A85323C6F61 /* TunnelManager.swift */; };
@@ -26,7 +26,9 @@
 		A9BBB9E5B92B0715594F0E77 /* TCPRelay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88D08B57CF034726F8C90177 /* TCPRelay.swift */; };
 		AD90B1896A6C0E3F1EA8DDA4 /* WireConnectionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D7C5940A8A056A325687693 /* WireConnectionManager.swift */; };
 		BD64D3CCB51545FC33FE1736 /* KeychainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3E1E337334139223786A231 /* KeychainService.swift */; };
+		C6087370CECDBBC2F2DAED7A /* IPPacket.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BA865620EA5D81471A09635 /* IPPacket.swift */; };
 		DBBD047E6A1826F605DA9DBD /* SetupViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC25E5332094B398085467EF /* SetupViewModel.swift */; };
+		E4ADDE4DB1FDC6510BBBE746 /* NTMClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C63BB6B23F15446BFE11E5AC /* NTMClientTests.swift */; };
 		E7D53D2038BDF40D68682C27 /* ServerConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6103464000751A4CE291334 /* ServerConfig.swift */; };
 		F2249A7DFFBFDBF676F5CA1C /* WireProtocolClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0430B986E974E6856E781512 /* WireProtocolClient.swift */; };
 		FCFFC55CC9C7D2ACE7549B8E /* CertificatePinner.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDF125D466B3D5464853390A /* CertificatePinner.swift */; };
@@ -39,6 +41,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = 4D65E78D06C1A57E3260FB17;
 			remoteInfo = NTMClientPacketTunnel;
+		};
+		FA4FF573557B9F6A0E9B732D /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 788A15131F01460BDE4970D9 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 417AE96BB65344506062B1C4;
+			remoteInfo = NTMClient;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -61,6 +70,7 @@
 		1354E1ED5BF7FF8BA33D1908 /* NTMClient.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = NTMClient.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1502DD76A1978559FD70FD5D /* PasskeyService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasskeyService.swift; sourceTree = "<group>"; };
 		1ACFA8082A112D7A76556ED9 /* SetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupView.swift; sourceTree = "<group>"; };
+		1BA865620EA5D81471A09635 /* IPPacket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IPPacket.swift; sourceTree = "<group>"; };
 		371B2AA559B3CF9DF352590E /* UDPForwarder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UDPForwarder.swift; sourceTree = "<group>"; };
 		3A7315F3D2FCBA954166BC61 /* PacketTunnelProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PacketTunnelProvider.swift; sourceTree = "<group>"; };
 		5549C8DA4E70BE686CE9FBB9 /* WireKeyService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireKeyService.swift; sourceTree = "<group>"; };
@@ -68,13 +78,13 @@
 		63D11CD11AA78B9AA4F5DC04 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		6A6088173988E0CFBE2AACBD /* NTMClientApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NTMClientApp.swift; sourceTree = "<group>"; };
 		6D7C5940A8A056A325687693 /* WireConnectionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireConnectionManager.swift; sourceTree = "<group>"; };
-		7257FF87FEE6FB02762EC9FF /* IPPacket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IPPacket.swift; sourceTree = "<group>"; };
 		7F7D736FD24DC22081F6F728 /* StatusView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusView.swift; sourceTree = "<group>"; };
 		88D08B57CF034726F8C90177 /* TCPRelay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TCPRelay.swift; sourceTree = "<group>"; };
 		95CAF4D679EE03D75A0C43E9 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		AC25E5332094B398085467EF /* SetupViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupViewModel.swift; sourceTree = "<group>"; };
 		B3E1E337334139223786A231 /* KeychainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainService.swift; sourceTree = "<group>"; };
 		B45A5D45672FDFC63010AD1E /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		C63BB6B23F15446BFE11E5AC /* NTMClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NTMClientTests.swift; sourceTree = "<group>"; };
 		CA318856E531FBB48D918BE2 /* ClientVersion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientVersion.swift; sourceTree = "<group>"; };
 		CAFDF0EFC40F6202A918319D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		CDF125D466B3D5464853390A /* CertificatePinner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CertificatePinner.swift; sourceTree = "<group>"; };
@@ -82,6 +92,7 @@
 		DD4AAD8C77BD6EA9C55737F3 /* PacketTunnel.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = PacketTunnel.entitlements; sourceTree = "<group>"; };
 		E6103464000751A4CE291334 /* ServerConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerConfig.swift; sourceTree = "<group>"; };
 		E6AA64668CF4B0671FB65168 /* NTMClientPacketTunnel.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = NTMClientPacketTunnel.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		EC8D2997363A77D312D174C0 /* NTMClientTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = NTMClientTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -90,6 +101,7 @@
 			children = (
 				1354E1ED5BF7FF8BA33D1908 /* NTMClient.app */,
 				E6AA64668CF4B0671FB65168 /* NTMClientPacketTunnel.appex */,
+				EC8D2997363A77D312D174C0 /* NTMClientTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -112,6 +124,7 @@
 			isa = PBXGroup;
 			children = (
 				2D11E0B06E11851E1C5A22B2 /* NTMClient */,
+				B13424BE3301258B57F40B4F /* NTMClientTests */,
 				95F6C516447ADAA208F2D8BE /* PacketTunnel */,
 				A6347F5905F5F4EF429FEFA7 /* Shared */,
 				2BC43FFBE6C1E522C523B9D6 /* Products */,
@@ -144,7 +157,6 @@
 			isa = PBXGroup;
 			children = (
 				95CAF4D679EE03D75A0C43E9 /* Info.plist */,
-				7257FF87FEE6FB02762EC9FF /* IPPacket.swift */,
 				DD4AAD8C77BD6EA9C55737F3 /* PacketTunnel.entitlements */,
 				3A7315F3D2FCBA954166BC61 /* PacketTunnelProvider.swift */,
 				88D08B57CF034726F8C90177 /* TCPRelay.swift */,
@@ -157,10 +169,19 @@
 			isa = PBXGroup;
 			children = (
 				CA318856E531FBB48D918BE2 /* ClientVersion.swift */,
+				1BA865620EA5D81471A09635 /* IPPacket.swift */,
 				E6103464000751A4CE291334 /* ServerConfig.swift */,
 				0430B986E974E6856E781512 /* WireProtocolClient.swift */,
 			);
 			path = Shared;
+			sourceTree = "<group>";
+		};
+		B13424BE3301258B57F40B4F /* NTMClientTests */ = {
+			isa = PBXGroup;
+			children = (
+				C63BB6B23F15446BFE11E5AC /* NTMClientTests.swift */,
+			);
+			path = NTMClientTests;
 			sourceTree = "<group>";
 		};
 		CA066CA7BA50E5D28E748A66 /* App */ = {
@@ -244,6 +265,24 @@
 			productReference = E6AA64668CF4B0671FB65168 /* NTMClientPacketTunnel.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		924521635722B3B7576DE48E /* NTMClientTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 20464F6A0BF66D1DA0167DE1 /* Build configuration list for PBXNativeTarget "NTMClientTests" */;
+			buildPhases = (
+				525EC26459E907EC6D593A8C /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				CFF9FB59435F7CF3872F3BEB /* PBXTargetDependency */,
+			);
+			name = NTMClientTests;
+			packageProductDependencies = (
+			);
+			productName = NTMClientTests;
+			productReference = EC8D2997363A77D312D174C0 /* NTMClientTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -257,6 +296,9 @@
 						DevelopmentTeam = W65LG3MSG6;
 					};
 					4D65E78D06C1A57E3260FB17 = {
+						DevelopmentTeam = W65LG3MSG6;
+					};
+					924521635722B3B7576DE48E = {
 						DevelopmentTeam = W65LG3MSG6;
 					};
 				};
@@ -277,6 +319,7 @@
 			targets = (
 				417AE96BB65344506062B1C4 /* NTMClient */,
 				4D65E78D06C1A57E3260FB17 /* NTMClientPacketTunnel */,
+				924521635722B3B7576DE48E /* NTMClientTests */,
 			);
 		};
 /* End PBXProject section */
@@ -293,12 +336,20 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		525EC26459E907EC6D593A8C /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E4ADDE4DB1FDC6510BBBE746 /* NTMClientTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		B9D79D4303B1B1727B26351A /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 				7D819DE1B0CE1E0B29B417EF /* ClientVersion.swift in Sources */,
-				13E82D665D5E0BB02BD1D6E2 /* IPPacket.swift in Sources */,
+				27211026A6788523A05774DD /* IPPacket.swift in Sources */,
 				400BAC27FC7BCA2CB2176554 /* PacketTunnelProvider.swift in Sources */,
 				1B9816F189C8F5F0CFEBFC47 /* ServerConfig.swift in Sources */,
 				A9BBB9E5B92B0715594F0E77 /* TCPRelay.swift in Sources */,
@@ -313,6 +364,7 @@
 			files = (
 				FCFFC55CC9C7D2ACE7549B8E /* CertificatePinner.swift in Sources */,
 				01806CC685453BAE31599053 /* ClientVersion.swift in Sources */,
+				C6087370CECDBBC2F2DAED7A /* IPPacket.swift in Sources */,
 				BD64D3CCB51545FC33FE1736 /* KeychainService.swift in Sources */,
 				0CDBF095DF3B549EDAF9050B /* NTMClientApp.swift in Sources */,
 				8557A261EA5EC38EC3ABFA00 /* PasskeyService.swift in Sources */,
@@ -335,6 +387,11 @@
 			isa = PBXTargetDependency;
 			target = 4D65E78D06C1A57E3260FB17 /* NTMClientPacketTunnel */;
 			targetProxy = 8529488994C4A6F4BA774008 /* PBXContainerItemProxy */;
+		};
+		CFF9FB59435F7CF3872F3BEB /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 417AE96BB65344506062B1C4 /* NTMClient */;
+			targetProxy = FA4FF573557B9F6A0E9B732D /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -555,9 +612,60 @@
 			};
 			name = Debug;
 		};
+		F80D1EF14F640EE650D90B00 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				DEVELOPMENT_TEAM = W65LG3MSG6;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.ntm.NTMClientTests;
+				SDKROOT = iphoneos;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/NTMClient.app/NTMClient";
+			};
+			name = Release;
+		};
+		FFF9489F759E4A5B0E6D9FD5 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				DEVELOPMENT_TEAM = W65LG3MSG6;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.ntm.NTMClientTests;
+				SDKROOT = iphoneos;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/NTMClient.app/NTMClient";
+			};
+			name = Debug;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		20464F6A0BF66D1DA0167DE1 /* Build configuration list for PBXNativeTarget "NTMClientTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FFF9489F759E4A5B0E6D9FD5 /* Debug */,
+				F80D1EF14F640EE650D90B00 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
 		28A4D951800EDB0F9172703F /* Build configuration list for PBXProject "NTMClient" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
