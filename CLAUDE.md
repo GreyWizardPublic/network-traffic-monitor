@@ -287,10 +287,19 @@ cmake --build build-linux -j$(nproc)
 
 **Every build** (from repo root in PowerShell):
 ```powershell
-.\scripts\build-windows.ps1          # Release
-.\scripts\build-windows.ps1 -Clean   # wipe build-windows/ first
-.\scripts\build-windows.ps1 -Debug   # Debug build
-# output: build-windows/ntm-client-windows-amd64-<version>.exe
+.\scripts\build-windows.ps1                   # Release
+.\scripts\build-windows.ps1 -Clean            # wipe build-windows/ first
+.\scripts\build-windows.ps1 -Debug            # Debug build
+.\scripts\build-windows.ps1 -RunTests         # build + run unit tests
+.\scripts\build-windows.ps1 -Clean -RunTests  # clean build + tests
+# outputs: build-windows/ntm-client-windows-amd64-<version>.exe
+#          build-windows/ntm-tests-windows.exe
+```
+
+**Run tests directly:**
+```powershell
+build-windows\ntm-tests-windows.exe
+ctest --test-dir build-windows --output-on-failure
 ```
 
 Or manually with cmake:

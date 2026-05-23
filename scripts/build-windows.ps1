@@ -3,15 +3,18 @@
 # Native Windows build of ntm-client using MinGW-w64 (MSYS2 mingw64).
 #
 # Usage:
-#   .\scripts\build-windows.ps1              # Release build (default)
-#   .\scripts\build-windows.ps1 -Clean       # Wipe build-windows/ first
-#   .\scripts\build-windows.ps1 -Debug       # Debug build
+#   .\scripts\build-windows.ps1                    # Release build (default)
+#   .\scripts\build-windows.ps1 -Clean             # Wipe build-windows/ first
+#   .\scripts\build-windows.ps1 -Debug             # Debug build
+#   .\scripts\build-windows.ps1 -RunTests          # Build + run unit tests
+#   .\scripts\build-windows.ps1 -Clean -RunTests   # Clean build + run tests
 #
 # Prerequisites: run scripts\setup-toolchain-windows.ps1 once first.
 
 param(
     [switch]$Clean,
-    [switch]$Debug
+    [switch]$Debug,
+    [switch]$RunTests
 )
 
 Set-StrictMode -Version Latest
@@ -76,6 +79,23 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
+# ── Run tests ─────────────────────────────────────────────────────────────────
+if ($RunTests) {
+    Write-Host ""
+    Write-Host "[test] Running ntm-tests-windows..." -ForegroundColor Yellow
+    $testExe = Join-Path $BuildDir "ntm-tests-windows.exe"
+    if (-not (Test-Path $testExe)) {
+        Write-Host "ERROR: test binary not found at $testExe" -ForegroundColor Red
+        exit 1
+    }
+    & $testExe
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ERROR: tests failed (exit $LASTEXITCODE)" -ForegroundColor Red
+        exit $LASTEXITCODE
+    }
+    Write-Host "[test] All tests passed." -ForegroundColor Green
+}
+
 # ── Report output ─────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "=== Build successful ===" -ForegroundColor Green
@@ -87,5 +107,8 @@ if ($exes) {
     }
 } else {
     Write-Host "  Output: $BuildDir\ntm-client-windows-amd64-*.exe" -ForegroundColor Green
+}
+if ($RunTests) {
+    Write-Host "  Tests:  $BuildDir\ntm-tests-windows.exe  (all passed)" -ForegroundColor Green
 }
 Write-Host ""
