@@ -15,10 +15,10 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "417AE96BB65344506062B1C4"
-               BuildableName = "NTMClient.app"
-               BlueprintName = "NTMClient"
-               ReferencedContainer = "container:NTMClient.xcodeproj">
+               BlueprintIdentifier = "0E137D6916E3DB5CF5308AF0"
+               BuildableName = "NTMDashboard.app"
+               BlueprintName = "NTMDashboard"
+               ReferencedContainer = "container:NTMDashboard.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -32,10 +32,10 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "417AE96BB65344506062B1C4"
-            BuildableName = "NTMClient.app"
-            BlueprintName = "NTMClient"
-            ReferencedContainer = "container:NTMClient.xcodeproj">
+            BlueprintIdentifier = "0E137D6916E3DB5CF5308AF0"
+            BuildableName = "NTMDashboard.app"
+            BlueprintName = "NTMDashboard"
+            ReferencedContainer = "container:NTMDashboard.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
       <Testables>
@@ -44,10 +44,10 @@
             parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "924521635722B3B7576DE48E"
-               BuildableName = "NTMClientTests.xctest"
-               BlueprintName = "NTMClientTests"
-               ReferencedContainer = "container:NTMClient.xcodeproj">
+               BlueprintIdentifier = "218BE0BEB77AD622A4DE82EC"
+               BuildableName = "NTMDashboardTests.xctest"
+               BlueprintName = "NTMDashboardTests"
+               ReferencedContainer = "container:NTMDashboard.xcodeproj">
             </BuildableReference>
          </TestableReference>
       </Testables>
@@ -68,10 +68,10 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "417AE96BB65344506062B1C4"
-            BuildableName = "NTMClient.app"
-            BlueprintName = "NTMClient"
-            ReferencedContainer = "container:NTMClient.xcodeproj">
+            BlueprintIdentifier = "0E137D6916E3DB5CF5308AF0"
+            BuildableName = "NTMDashboard.app"
+            BlueprintName = "NTMDashboard"
+            ReferencedContainer = "container:NTMDashboard.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
       <CommandLineArguments>
@@ -87,10 +87,10 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "417AE96BB65344506062B1C4"
-            BuildableName = "NTMClient.app"
-            BlueprintName = "NTMClient"
-            ReferencedContainer = "container:NTMClient.xcodeproj">
+            BlueprintIdentifier = "0E137D6916E3DB5CF5308AF0"
+            BuildableName = "NTMDashboard.app"
+            BlueprintName = "NTMDashboard"
+            ReferencedContainer = "container:NTMDashboard.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
       <CommandLineArguments>

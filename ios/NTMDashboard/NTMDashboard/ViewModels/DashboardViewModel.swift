@@ -11,12 +11,17 @@ final class DashboardViewModel {
     var isLoading = false
     var lastUpdated: Date?
 
-    private var client: NTMClient
+    private var client: any SummaryFetching
     private var pollingTask: Task<Void, Never>?
 
+    /// Production init — uses a real NTMClient backed by live ServerConfig.
     init() {
-        let cfg = ServerConfig.load()
-        client = NTMClient(config: cfg)
+        client = NTMClient(config: ServerConfig.load())
+    }
+
+    /// Testability init — inject a mock fetcher.
+    init(fetcher: any SummaryFetching) {
+        client = fetcher
     }
 
     func startPolling() async {

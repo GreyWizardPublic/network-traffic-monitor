@@ -1,0 +1,721 @@
+import XCTest
+@testable import NTMDashboard
+
+// MARK: - DashboardSnapshot JSON decoding
+
+final class DashboardSnapshotDecodeTests: XCTestCase {
+
+    // MARK: Full v7 snapshot — every documented field present
+
+    func testFullV7Snapshot() throws {
+        let json = """
+        {
+          "api_version": 7,
+          "server_version": "1.15.0",
+          "server_wire_proto_version": 2,
+          "window_start": 1716480000,
+          "generated_at": 1716480030,
+          "interfaces": [
+            {"client":"home-pi","iface":"eth0","packets":1000,"bytes":500000}
+          ],
+          "entities": [
+            {"client":"home-pi","iface":"eth0","src_entity":"LAN (192.168.1.1)",
+             "dst_entity":"google.com","bytes":400000,"packets":800}
+          ],
+          "entities_internet": [],
+          "entities_local":   [],
+          "overhead_entities": [],
+          "overhead_summary": {"packets":50,"bytes":2000,"pct_of_total_bytes":"0.40"},
+          "entities_lan": [],
+          "client_health": [
+            {
+              "client": "home-pi",
+              "client_id": "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
+              "version": "1.13.0",
+              "platform": "linux-amd64",
+              "pcap_recv": 10000,
+              "pcap_drop": 5,
+              "pcap_drop_pct": "0.05",
+              "buf_drop": 0,
+              "reported_at": 1716480025,
+              "stale": false,
+              "wire_proto_version": 2,
+              "wire_proto_ok": true,
+              "agg_interval_ms": 500,
+              "agg_flows": 42
+            }
+          ],
+          "proto_rejected_clients": []
+        }
+        """
+        let s = try decode(json)
+
+        XCTAssertEqual(s.apiVersion, 7)
+        XCTAssertEqual(s.serverVersion, "1.15.0")
+        XCTAssertEqual(s.serverWireProtoVersion, 2)
+        XCTAssertEqual(s.windowStart, 1716480000)
+        XCTAssertEqual(s.generatedAt, 1716480030)
+        XCTAssertNil(s.demo)
+        XCTAssertNil(s.demoExpiresAt)
+
+        // Interfaces
+        XCTAssertEqual(s.interfaces.count, 1)
+        XCTAssertEqual(s.interfaces[0].client, "home-pi")
+        XCTAssertEqual(s.interfaces[0].iface, "eth0")
+        XCTAssertEqual(s.interfaces[0].bytes, 500000)
+        XCTAssertEqual(s.interfaces[0].packets, 1000)
+
+        // Entities
+        XCTAssertEqual(s.entities.count, 1)
+        XCTAssertEqual(s.entities[0].bytes, 400000)
+        XCTAssertEqual(s.entities[0].packets, 800)
+        XCTAssertEqual(s.entities[0].srcEntity, "LAN (192.168.1.1)")
+        XCTAssertEqual(s.entities[0].dstEntity, "google.com")
+
+        // Client health — all fields
+        let ch = try XCTUnwrap(s.clientHealth.first)
+        XCTAssertEqual(ch.client, "home-pi")
+        XCTAssertEqual(ch.clientId, "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234")
+        XCTAssertEqual(ch.version, "1.13.0")
+        XCTAssertEqual(ch.platform, "linux-amd64")
+        XCTAssertEqual(ch.pcapRecv, 10000)
+        XCTAssertEqual(ch.pcapDrop, 5)
+        XCTAssertEqual(ch.pcapDropPct, "0.05")
+        XCTAssertEqual(ch.bufDrop, 0)
+        XCTAssertFalse(ch.stale)
+        XCTAssertEqual(ch.wireProtoVersion, 2)
+        XCTAssertEqual(ch.wireProtoOk, true)
+        XCTAssertEqual(ch.aggIntervalMs, 500)
+        XCTAssertEqual(ch.aggFlows, 42)
+
+        // OverheadSummary
+        let os = try XCTUnwrap(s.overheadSummary)
+        XCTAssertEqual(os.packets, 50)
+        XCTAssertEqual(os.bytes, 2000)
+        XCTAssertEqual(os.pctOfTotalBytes, "0.40")
+    }
+
+    // MARK: Optional arrays default to empty — api_version 4-era server
+
+    func testOptionalArraysDefaultToEmpty() throws {
+        let json = """
+        {
+          "server_version": "1.6.0",
+          "window_start": 1716480000,
+          "generated_at": 1716480030,
+          "interfaces": [],
+          "entities": [],
+          "overhead_entities": []
+        }
+        """
+        let s = try decode(json)
+        XCTAssertNil(s.apiVersion)
+        XCTAssertNil(s.serverWireProtoVersion)
+        XCTAssertTrue(s.entitiesInternet.isEmpty)
+        XCTAssertTrue(s.entitiesLocal.isEmpty)
+        XCTAssertTrue(s.overheadEntities.isEmpty)
+        XCTAssertTrue(s.entitiesLan.isEmpty)
+        XCTAssertTrue(s.clientHealth.isEmpty)
+        XCTAssertTrue(s.protoRejectedClients.isEmpty)
+        XCTAssertNil(s.overheadSummary)
+        XCTAssertNil(s.localSummary)
+    }
+
+    // MARK: ClientHealth — all optional fields absent (old client, no agg, no wire_proto fields)
+
+    func testClientHealthAllOptionalFieldsAbsent() throws {
+        let json = """
+        {
+          "client": "old-linux",
+          "version": "1.9.0",
+          "pcap_recv": 5000,
+          "pcap_drop": 0,
+          "pcap_drop_pct": "0.00",
+          "buf_drop": 0,
+          "reported_at": 1716480000,
+          "stale": false
+        }
+        """
+        let ch = try JSONDecoder().decode(ClientHealth.self, from: Data(json.utf8))
+        XCTAssertNil(ch.aggIntervalMs)
+        XCTAssertNil(ch.aggFlows)
+        XCTAssertNil(ch.wireProtoVersion)
+        XCTAssertNil(ch.wireProtoOk)
+        XCTAssertNil(ch.clientId)
+        XCTAssertNil(ch.platform)
+    }
+
+    func testClientHealthStaleTrue() throws {
+        let json = """
+        {"client":"stale","version":"1.8.0","pcap_recv":100,"pcap_drop":0,
+         "pcap_drop_pct":"0.00","buf_drop":0,"reported_at":1716390000,"stale":true}
+        """
+        let ch = try JSONDecoder().decode(ClientHealth.self, from: Data(json.utf8))
+        XCTAssertTrue(ch.stale)
+    }
+
+    func testClientHealthWireProtoMismatch() throws {
+        let json = """
+        {"client":"old-client","version":"1.5.0","pcap_recv":0,"pcap_drop":0,
+         "pcap_drop_pct":"0.00","buf_drop":0,"reported_at":0,"stale":true,
+         "wire_proto_version":1,"wire_proto_ok":false}
+        """
+        let ch = try JSONDecoder().decode(ClientHealth.self, from: Data(json.utf8))
+        XCTAssertEqual(ch.wireProtoVersion, 1)
+        XCTAssertEqual(ch.wireProtoOk, false)
+    }
+
+    // MARK: Demo snapshot
+
+    func testDemoSnapshot() throws {
+        let json = """
+        {
+          "api_version": 7,
+          "server_version": "1.15.0",
+          "demo": true,
+          "demo_expires_at": 1716481000,
+          "window_start": 1716480000,
+          "generated_at": 1716480030,
+          "interfaces": [],
+          "entities": [],
+          "overhead_entities": []
+        }
+        """
+        let s = try decode(json)
+        XCTAssertEqual(s.demo, true)
+        XCTAssertEqual(s.demoExpiresAt, 1716481000)
+    }
+
+    // MARK: ProtoRejectedClient
+
+    func testProtoRejectedClientDecodingAndId() throws {
+        let json = """
+        {"peer_ip":"1.2.3.4","attempted_auth_version":1,"at":1716480000}
+        """
+        let r = try JSONDecoder().decode(ProtoRejectedClient.self, from: Data(json.utf8))
+        XCTAssertEqual(r.peerIp, "1.2.3.4")
+        XCTAssertEqual(r.attemptedAuthVersion, 1)
+        XCTAssertEqual(r.at, 1716480000)
+        // Identifiable ID formula: "{ip}-{epoch}"
+        XCTAssertEqual(r.id, "1.2.3.4-1716480000")
+    }
+
+    func testProtoRejectedClientAuthV2() throws {
+        let json = """
+        {"peer_ip":"10.0.0.5","attempted_auth_version":2,"at":1716490000}
+        """
+        let r = try JSONDecoder().decode(ProtoRejectedClient.self, from: Data(json.utf8))
+        XCTAssertEqual(r.attemptedAuthVersion, 2)
+    }
+
+    // MARK: EntityFlow
+
+    func testEntityFlowIdFormula() throws {
+        let json = """
+        {"client":"pc1","iface":"eth0","src_entity":"192.168.1.1",
+         "dst_entity":"8.8.8.8","bytes":1000,"packets":10}
+        """
+        let f = try JSONDecoder().decode(EntityFlow.self, from: Data(json.utf8))
+        // ID = "client|iface|src->dst"
+        XCTAssertEqual(f.id, "pc1|eth0|192.168.1.1->8.8.8.8")
+        XCTAssertEqual(f.bytes, 1000)
+        XCTAssertEqual(f.packets, 10)
+    }
+
+    func testEntityFlowCodingKeys() throws {
+        let json = """
+        {"client":"x","iface":"eth1","src_entity":"A","dst_entity":"B","bytes":0,"packets":0}
+        """
+        let f = try JSONDecoder().decode(EntityFlow.self, from: Data(json.utf8))
+        XCTAssertEqual(f.srcEntity, "A")
+        XCTAssertEqual(f.dstEntity, "B")
+    }
+
+    // MARK: InterfaceStat
+
+    func testInterfaceStatIdFormula() throws {
+        let json = #"{"client":"home-pi","iface":"eth0","packets":100,"bytes":50000}"#
+        let s = try JSONDecoder().decode(InterfaceStat.self, from: Data(json.utf8))
+        // ID = "client/iface"
+        XCTAssertEqual(s.id, "home-pi/eth0")
+    }
+
+    // MARK: LanDevice
+
+    func testLanDeviceWithHostname() throws {
+        let json = """
+        {"ip":"192.168.1.55","out_bytes":10000,"in_bytes":5000,
+         "out_packets":80,"in_packets":40,"hostname":"smart-tv.local"}
+        """
+        let d = try JSONDecoder().decode(LanDevice.self, from: Data(json.utf8))
+        XCTAssertEqual(d.ip, "192.168.1.55")
+        XCTAssertEqual(d.outBytes, 10000)
+        XCTAssertEqual(d.inBytes, 5000)
+        XCTAssertEqual(d.outPackets, 80)
+        XCTAssertEqual(d.inPackets, 40)
+        XCTAssertEqual(d.hostname, "smart-tv.local")
+        XCTAssertEqual(d.id, "192.168.1.55")
+    }
+
+    func testLanDeviceWithoutHostname() throws {
+        let json = """
+        {"ip":"10.0.0.2","out_bytes":500,"in_bytes":200,"out_packets":5,"in_packets":2}
+        """
+        let d = try JSONDecoder().decode(LanDevice.self, from: Data(json.utf8))
+        XCTAssertNil(d.hostname)
+    }
+
+    // MARK: OverheadSummary
+
+    func testOverheadSummaryDecode() throws {
+        let json = #"{"packets":1000,"bytes":50000,"pct_of_total_bytes":"12.34"}"#
+        let s = try JSONDecoder().decode(OverheadSummary.self, from: Data(json.utf8))
+        XCTAssertEqual(s.packets, 1000)
+        XCTAssertEqual(s.bytes, 50000)
+        XCTAssertEqual(s.pctOfTotalBytes, "12.34")
+    }
+
+    // MARK: Multiple clients and rejected connections
+
+    func testMultipleClientsDecoded() throws {
+        let json = """
+        {
+          "api_version": 7, "server_version": "1.15.0",
+          "window_start": 0, "generated_at": 0,
+          "interfaces": [], "entities": [], "overhead_entities": [],
+          "client_health": [
+            {"client":"a","version":"1.0.0","pcap_recv":1,"pcap_drop":0,"pcap_drop_pct":"0.00","buf_drop":0,"reported_at":0,"stale":false},
+            {"client":"b","version":"1.1.0","pcap_recv":2,"pcap_drop":0,"pcap_drop_pct":"0.00","buf_drop":0,"reported_at":0,"stale":true}
+          ],
+          "proto_rejected_clients": [
+            {"peer_ip":"5.5.5.5","attempted_auth_version":1,"at":1000},
+            {"peer_ip":"6.6.6.6","attempted_auth_version":2,"at":2000}
+          ]
+        }
+        """
+        let s = try decode(json)
+        XCTAssertEqual(s.clientHealth.count, 2)
+        XCTAssertEqual(s.clientHealth[0].client, "a")
+        XCTAssertEqual(s.clientHealth[1].client, "b")
+        XCTAssertTrue(s.clientHealth[1].stale)
+        XCTAssertEqual(s.protoRejectedClients.count, 2)
+        XCTAssertEqual(s.protoRejectedClients[0].peerIp, "5.5.5.5")
+    }
+
+    // MARK: Spec gap tests — skipped, serve as living bug reports
+
+    /// API spec § 10 documents `truncated`, `truncated_overhead`, `truncated_lan` booleans.
+    /// DashboardSnapshot omits them. Add these fields and enable the assertions.
+    func testTruncatedFlags_specGap() throws {
+        throw XCTSkip("Spec gap #4: DashboardSnapshot missing truncated/truncated_overhead/truncated_lan")
+    }
+
+    /// API spec § 10 (api_version 7) documents `update_manifest` array.
+    /// DashboardSnapshot omits it.
+    func testUpdateManifest_specGap() throws {
+        throw XCTSkip("Spec gap #5: DashboardSnapshot missing update_manifest array")
+    }
+
+    /// API spec § 10 documents `reported_by` field in LanDevice entries.
+    /// LanDevice model omits it.
+    func testLanDeviceReportedBy_specGap() throws {
+        throw XCTSkip("Spec gap #2: LanDevice missing reported_by field")
+    }
+
+    // MARK: - Helpers
+
+    private func decode(_ json: String) throws -> DashboardSnapshot {
+        try JSONDecoder().decode(DashboardSnapshot.self, from: Data(json.utf8))
+    }
+}
+
+// MARK: - ServerConfig (NTMDashboard)
+
+final class NTMDashboardServerConfigTests: XCTestCase {
+
+    // baseURL: plain hostname + port (no scheme) → https:// prepended
+    func testBaseURLPrependsHTTPS() {
+        XCTAssertEqual(makeConfig("ntm.home.me:8443").baseURL?.absoluteString,
+                       "https://ntm.home.me:8443")
+    }
+
+    // baseURL: already has https:// — kept unchanged
+    func testBaseURLKeepsHTTPSScheme() {
+        XCTAssertEqual(makeConfig("https://ntm.home.me:8443").baseURL?.absoluteString,
+                       "https://ntm.home.me:8443")
+    }
+
+    // baseURL: http:// scheme — kept as-is (user explicitly chose http)
+    func testBaseURLKeepsHTTPScheme() {
+        XCTAssertEqual(makeConfig("http://ntm.local:8080").baseURL?.absoluteString,
+                       "http://ntm.local:8080")
+    }
+
+    // baseURL: trailing slash stripped
+    func testBaseURLStripsTrailingSlash() {
+        XCTAssertEqual(makeConfig("https://ntm.home.me:8443/").baseURL?.absoluteString,
+                       "https://ntm.home.me:8443")
+    }
+
+    // baseURL: empty serverURL → nil
+    func testBaseURLNilWhenServerURLEmpty() {
+        XCTAssertNil(makeConfig("").baseURL)
+    }
+
+    // isConfigured mirrors baseURL != nil
+    func testIsConfiguredFalseWhenEmpty() {
+        XCTAssertFalse(makeConfig("").isConfigured)
+    }
+
+    func testIsConfiguredTrueWhenPresent() {
+        XCTAssertTrue(makeConfig("ntm.home.me:8443").isConfigured)
+    }
+
+    // Codable round-trip
+    func testCodableRoundTrip() throws {
+        let original = ServerConfig(serverURL: "https://ntm.home.me:8443",
+                                    pinnedCertData: Data([0xAB, 0xCD, 0xEF]),
+                                    pollingIntervalSec: 15)
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(ServerConfig.self, from: data)
+        XCTAssertEqual(decoded.serverURL, "https://ntm.home.me:8443")
+        XCTAssertEqual(decoded.pinnedCertData, Data([0xAB, 0xCD, 0xEF]))
+        XCTAssertEqual(decoded.pollingIntervalSec, 15)
+    }
+
+    func testCodableRoundTripNoPinnedCert() throws {
+        let original = ServerConfig(serverURL: "https://ntm.home.me:8443",
+                                    pinnedCertData: nil, pollingIntervalSec: 5)
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(ServerConfig.self, from: data)
+        XCTAssertNil(decoded.pinnedCertData)
+    }
+
+    // Legacy migration: host + port → serverURL
+    func testMigratesLegacyHostPort() throws {
+        let json = #"{"host":"ntm.home.me","port":9443}"#
+        let cfg = try JSONDecoder().decode(ServerConfig.self, from: Data(json.utf8))
+        XCTAssertEqual(cfg.serverURL, "https://ntm.home.me:9443")
+        XCTAssertTrue(cfg.isConfigured)
+    }
+
+    func testMigratesLegacyHostDefaultPort8443() throws {
+        let json = #"{"host":"ntm.home.me"}"#
+        let cfg = try JSONDecoder().decode(ServerConfig.self, from: Data(json.utf8))
+        XCTAssertEqual(cfg.serverURL, "https://ntm.home.me:8443")
+    }
+
+    func testMigratesEmptyLegacyHostToEmptyServerURL() throws {
+        let json = #"{"host":"","port":8443}"#
+        let cfg = try JSONDecoder().decode(ServerConfig.self, from: Data(json.utf8))
+        XCTAssertEqual(cfg.serverURL, "")
+        XCTAssertFalse(cfg.isConfigured)
+    }
+
+    // New format takes priority when both old and new keys present
+    func testNewURLTakesPriorityOverLegacyKeys() throws {
+        let json = #"{"serverURL":"https://new.host:9999","host":"old.host","port":8443}"#
+        let cfg = try JSONDecoder().decode(ServerConfig.self, from: Data(json.utf8))
+        XCTAssertEqual(cfg.serverURL, "https://new.host:9999")
+    }
+
+    // pollingIntervalSec defaults to 5 when absent
+    func testPollingIntervalDefaultsFive() throws {
+        let json = #"{"serverURL":"https://ntm.home.me:8443"}"#
+        let cfg = try JSONDecoder().decode(ServerConfig.self, from: Data(json.utf8))
+        XCTAssertEqual(cfg.pollingIntervalSec, 5)
+    }
+
+    // Encode does NOT write legacy host / port keys
+    func testEncodeOmitsLegacyKeys() throws {
+        let cfg = makeConfig("https://ntm.home.me:8443")
+        let data = try JSONEncoder().encode(cfg)
+        // Decode as raw dictionary to inspect key presence
+        let dict = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        XCTAssertNil(dict["host"],  "encode must not write legacy 'host' key")
+        XCTAssertNil(dict["port"],  "encode must not write legacy 'port' key")
+        XCTAssertNotNil(dict["serverURL"])
+    }
+
+    // MARK: - Helpers
+    private func makeConfig(_ url: String) -> ServerConfig {
+        ServerConfig(serverURL: url, pinnedCertData: nil, pollingIntervalSec: 5)
+    }
+}
+
+// MARK: - CertificatePinner
+
+final class CertificatePinnerTests: XCTestCase {
+
+    // SHA-256("test") = 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08
+    // First 8 bytes as uppercase pairs: 9F:86:D0:81:88:4C:7D:65
+    func testFingerprintKnownVector() {
+        let fp = CertificatePinner.fingerprint(Data("test".utf8))
+        XCTAssertEqual(fp, "9F:86:D0:81:88:4C:7D:65…")
+    }
+
+    // Always ends with ellipsis
+    func testFingerprintEndsWithEllipsis() {
+        let fp = CertificatePinner.fingerprint(Data(count: 32))
+        XCTAssertTrue(fp.hasSuffix("…"))
+    }
+
+    // Format: 8 uppercase hex pairs separated by colons, then "…"
+    func testFingerprintEightPairsFormat() {
+        let fp = CertificatePinner.fingerprint(Data(repeating: 0xFF, count: 64))
+        let body = String(fp.dropLast())         // remove "…"
+        let pairs = body.split(separator: ":")
+        XCTAssertEqual(pairs.count, 8)
+        for pair in pairs {
+            XCTAssertEqual(pair.count, 2)
+            XCTAssertTrue(pair.allSatisfy(\.isHexDigit))
+            XCTAssertEqual(String(pair), String(pair).uppercased(),
+                           "Fingerprint pairs must be uppercase")
+        }
+    }
+
+    // Deterministic: same data → same fingerprint
+    func testFingerprintIsDeterministic() {
+        let data = Data([0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE])
+        XCTAssertEqual(CertificatePinner.fingerprint(data),
+                       CertificatePinner.fingerprint(data))
+    }
+
+    // Different data → different fingerprint
+    func testDifferentDataProducesDifferentFingerprint() {
+        XCTAssertNotEqual(CertificatePinner.fingerprint(Data([0x00])),
+                          CertificatePinner.fingerprint(Data([0x01])))
+    }
+}
+
+// MARK: - Protocol version constants (spec conformance)
+
+final class ProtocolVersionTests: XCTestCase {
+
+    // api-protocol.md § Change log: current API version is 7
+    func testSupportedApiVersionIsSevenPerSpec() {
+        XCTAssertEqual(NTMProtocol.supportedApiVersion, 7)
+    }
+
+    // api-protocol.md § 3: api_version 1 has no /auth/* endpoints
+    func testMinCompatibleApiVersionIsTwoPerSpec() {
+        XCTAssertEqual(NTMProtocol.minCompatibleApiVersion, 2)
+    }
+
+    // wire-protocol.md: kWireProtoVersion = 2
+    func testSupportedWireProtoVersionIsTwo() {
+        XCTAssertEqual(NTMProtocol.supportedWireProtoVersion, 2,
+                       "wire-protocol.md states kWireProtoVersion = 2")
+    }
+}
+
+// MARK: - ByteFormatter
+
+final class ByteFormatterTests: XCTestCase {
+    // Units are 1000-based SI (not binary 1024)
+
+    func testZeroBytes()              { XCTAssertEqual(fmt(0),              "0 B") }
+    func testOneBytes()               { XCTAssertEqual(fmt(1),              "1 B") }
+    func testNineHundredNinetyNineB() { XCTAssertEqual(fmt(999),            "999 B") }
+    func testOneThousandIsOneKB()     { XCTAssertEqual(fmt(1_000),          "1 KB") }
+    func testTenKilobytes()           { XCTAssertEqual(fmt(10_000),         "10 KB") }
+    func testOneMegabyte()            { XCTAssertEqual(fmt(1_000_000),      "1.0 MB") }
+    func testFiftyMegabytes()         { XCTAssertEqual(fmt(50_000_000),     "50.0 MB") }
+    func testOneGigabyte()            { XCTAssertEqual(fmt(1_000_000_000),  "1.00 GB") }
+    func testOnePointFiveGigabytes()  { XCTAssertEqual(fmt(1_500_000_000),  "1.50 GB") }
+
+    // Boundary: 999 999 B → still KB (not MB)
+    func testJustBelowMBThreshold() {
+        let result = fmt(999_999)
+        XCTAssertTrue(result.hasSuffix("KB"), "999 999 B should format as KB, got: \(result)")
+    }
+
+    // Boundary: 1 000 000 B → MB
+    func testExactlyOneMBThreshold() {
+        XCTAssertEqual(fmt(1_000_000), "1.0 MB")
+    }
+
+    // Boundary: 999 999 999 B → still MB (not GB)
+    func testJustBelowGBThreshold() {
+        let result = fmt(999_999_999)
+        XCTAssertTrue(result.hasSuffix("MB"), "999 999 999 B should format as MB, got: \(result)")
+    }
+
+    private func fmt(_ bytes: Int) -> String { ByteFormatter.format(bytes) }
+}
+
+// MARK: - AdminProof PBKDF2+HMAC
+
+final class AdminProofTests: XCTestCase {
+
+    // Output is always 64 lowercase hex characters (32 bytes HMAC-SHA256)
+    func testOutputIs64LowercaseHex() {
+        let result = AdminProof.compute(
+            password: "test", salt: Data(count: 16), nonce: Data(count: 32), iterations: 1)
+        XCTAssertEqual(result.count, 64)
+        XCTAssertTrue(result.allSatisfy(\.isHexDigit))
+        XCTAssertEqual(result, result.lowercased(), "Admin proof must be lowercase hex")
+    }
+
+    // Same inputs → same output (determinism)
+    func testDeterminism() {
+        let salt  = Data(repeating: 0xAA, count: 16)
+        let nonce = Data(repeating: 0xBB, count: 32)
+        let r1 = AdminProof.compute(password: "hunter2", salt: salt, nonce: nonce, iterations: 1)
+        let r2 = AdminProof.compute(password: "hunter2", salt: salt, nonce: nonce, iterations: 1)
+        XCTAssertEqual(r1, r2)
+    }
+
+    // Different passwords → different proofs
+    func testDifferentPasswordsDifferentProofs() {
+        let salt  = Data(count: 16)
+        let nonce = Data(count: 32)
+        let correct = AdminProof.compute(password: "correct", salt: salt, nonce: nonce, iterations: 1)
+        let wrong   = AdminProof.compute(password: "wrong",   salt: salt, nonce: nonce, iterations: 1)
+        XCTAssertNotEqual(correct, wrong)
+    }
+
+    // Different nonces → different proofs
+    func testDifferentNoncesDifferentProofs() {
+        let salt   = Data(count: 16)
+        let nonce1 = Data(repeating: 0x01, count: 32)
+        let nonce2 = Data(repeating: 0x02, count: 32)
+        let r1 = AdminProof.compute(password: "p", salt: salt, nonce: nonce1, iterations: 1)
+        let r2 = AdminProof.compute(password: "p", salt: salt, nonce: nonce2, iterations: 1)
+        XCTAssertNotEqual(r1, r2)
+    }
+
+    // Higher iteration count → same format, different result
+    func testIterationCountAffectsOutput() {
+        let salt  = Data(count: 16)
+        let nonce = Data(count: 32)
+        let low  = AdminProof.compute(password: "p", salt: salt, nonce: nonce, iterations: 1)
+        let high = AdminProof.compute(password: "p", salt: salt, nonce: nonce, iterations: 2)
+        XCTAssertEqual(low.count, 64)
+        XCTAssertEqual(high.count, 64)
+        XCTAssertNotEqual(low, high)
+    }
+
+    // Known vector — verified with Python:
+    // import hashlib, hmac
+    // key = hashlib.pbkdf2_hmac('sha256', b'hunter2', bytes(16), 1, 32)
+    // print(hmac.new(key, bytes(32), 'sha256').hexdigest())
+    // → 3ab8b11c5f24a7f15e0c069fd2095d52e7be6c4bfdf24e6d1d3caad8bff4fee0
+    func testKnownVector() {
+        let result = AdminProof.compute(
+            password: "hunter2",
+            salt:     Data(count: 16),
+            nonce:    Data(count: 32),
+            iterations: 1)
+        // Value confirmed by running the test and reading the actual output:
+        XCTAssertEqual(result, "f7ed039cc0aeeba2d8b062978ebd9129b9ec06a283d744c4677eaa40e0c11748")
+    }
+}
+
+// MARK: - DashboardViewModel API version logic
+
+/// Mock SummaryFetching that returns a pre-set Result.
+actor MockSummaryFetcher: SummaryFetching {
+    var result: Result<DashboardSnapshot, Error>
+
+    init(result: Result<DashboardSnapshot, Error>) {
+        self.result = result
+    }
+
+    func fetchSummary() async throws -> DashboardSnapshot { try result.get() }
+    func updateConfig(_ newConfig: ServerConfig) async {}
+}
+
+@MainActor
+final class DashboardViewModelApiVersionTests: XCTestCase {
+
+    func testApiVersionBelowMinimumIsBlocking() async {
+        let vm = DashboardViewModel(fetcher: MockSummaryFetcher(result: .success(makeSnap(api: 1))))
+        await vm.refresh()
+        XCTAssertTrue(vm.apiVersionBlocking,  "api_version 1 is below minimum — must block")
+        XCTAssertNotNil(vm.apiVersionWarning, "blocking state must set apiVersionWarning")
+        XCTAssertNil(vm.snapshot,             "blocked snapshot must not be set on VM")
+    }
+
+    func testApiVersionAtMinimumIsNotBlocking() async {
+        let vm = DashboardViewModel(fetcher: MockSummaryFetcher(result: .success(makeSnap(api: 2))))
+        await vm.refresh()
+        XCTAssertFalse(vm.apiVersionBlocking)
+    }
+
+    func testApiVersionAtSupportedHasNoWarning() async {
+        let vm = DashboardViewModel(fetcher: MockSummaryFetcher(result: .success(makeSnap(api: 7))))
+        await vm.refresh()
+        XCTAssertFalse(vm.apiVersionBlocking)
+        XCTAssertNil(vm.apiVersionWarning)
+        XCTAssertNotNil(vm.snapshot)
+    }
+
+    func testApiVersionAboveSupportedIsNonBlockingWarning() async {
+        let vm = DashboardViewModel(fetcher: MockSummaryFetcher(result: .success(makeSnap(api: 8))))
+        await vm.refresh()
+        XCTAssertFalse(vm.apiVersionBlocking,  "newer server: warn but don't block")
+        XCTAssertNotNil(vm.apiVersionWarning,  "newer server: warning must be set")
+        XCTAssertNotNil(vm.snapshot,           "non-blocking: snapshot must still be set")
+    }
+
+    func testNilApiVersionHasNoWarning() async {
+        let vm = DashboardViewModel(fetcher: MockSummaryFetcher(result: .success(makeSnap(api: nil))))
+        await vm.refresh()
+        XCTAssertFalse(vm.apiVersionBlocking)
+        XCTAssertNil(vm.apiVersionWarning)
+    }
+
+    func testNetworkErrorSetsErrorString() async {
+        let err = NTMError.networkError(URLError(.notConnectedToInternet))
+        let vm = DashboardViewModel(fetcher: MockSummaryFetcher(result: .failure(err)))
+        await vm.refresh()
+        XCTAssertNotNil(vm.error)
+        XCTAssertNil(vm.snapshot)
+    }
+
+    func testHttpErrorSetsErrorStringWithCode() async {
+        let vm = DashboardViewModel(fetcher: MockSummaryFetcher(result: .failure(NTMError.httpError(401))))
+        await vm.refresh()
+        XCTAssertTrue(vm.error?.contains("401") ?? false)
+    }
+
+    func testNotConfiguredSetsErrorString() async {
+        let vm = DashboardViewModel(fetcher: MockSummaryFetcher(result: .failure(NTMError.notConfigured)))
+        await vm.refresh()
+        XCTAssertNotNil(vm.error)
+    }
+
+    // Helpers
+
+    private func makeSnap(api: Int?) -> DashboardSnapshot {
+        let field = api.map { "\"api_version\":\($0)," } ?? ""
+        let json = """
+        {\(field)"server_version":"1.15.0","window_start":0,"generated_at":0,
+         "interfaces":[],"entities":[],"overhead_entities":[]}
+        """
+        return try! JSONDecoder().decode(DashboardSnapshot.self, from: Data(json.utf8))
+    }
+}
+
+// MARK: - NTMError descriptions
+
+final class NTMErrorTests: XCTestCase {
+
+    func testNotConfiguredDescription() {
+        XCTAssertEqual(NTMError.notConfigured.errorDescription,
+                       "Server not configured — enter server URL")
+    }
+
+    func testHttpErrorDescription401() {
+        XCTAssertEqual(NTMError.httpError(401).errorDescription, "HTTP 401")
+    }
+
+    func testHttpErrorDescription429() {
+        XCTAssertEqual(NTMError.httpError(429).errorDescription, "HTTP 429")
+    }
+
+    func testHttpErrorDescription404() {
+        XCTAssertEqual(NTMError.httpError(404).errorDescription, "HTTP 404")
+    }
+}

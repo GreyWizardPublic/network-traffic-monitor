@@ -1,4 +1,3 @@
-import CommonCrypto
 import CryptoKit
 import Foundation
 import Observation
@@ -98,7 +97,7 @@ final class AuthViewModel {
                 throw AuthError.invalidServerResponse("bad registration parameters")
             }
 
-            let proofHex = computeAdminProof(
+            let proofHex = AdminProof.compute(
                 password: adminPassword,
                 salt: salt,
                 nonce: nonce,
@@ -212,29 +211,6 @@ final class AuthViewModel {
             isDemoSession = false
         }
         isAuthenticated = false
-    }
-
-    // MARK: - PBKDF2 + HMAC
-
-    private func computeAdminProof(password: String, salt: Data, nonce: Data, iterations: Int) -> String {
-        var derivedKey = Data(count: 32)
-        derivedKey.withUnsafeMutableBytes { derivedBytes in
-            password.withCString { passwordPtr in
-                salt.withUnsafeBytes { saltBytes in
-                    _ = CCKeyDerivationPBKDF(
-                        CCPBKDFAlgorithm(kCCPBKDF2),
-                        passwordPtr, strlen(passwordPtr),
-                        saltBytes.baseAddress, salt.count,
-                        CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA256),
-                        UInt32(iterations),
-                        derivedBytes.baseAddress, 32
-                    )
-                }
-            }
-        }
-        let key = SymmetricKey(data: derivedKey)
-        let mac = HMAC<SHA256>.authenticationCode(for: nonce, using: key)
-        return Data(mac).map { String(format: "%02x", $0) }.joined()
     }
 
     // MARK: - HTTP helpers
