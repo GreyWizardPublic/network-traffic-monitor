@@ -13,6 +13,9 @@ struct ClientHealth: Codable, Identifiable, Sendable {
     let wireProtoOk: Bool?
     let clientId: String?
     let platform: String?
+    // Added in ntm-client 1.10.0 / ntm-server 1.13.0 — absent on older clients
+    let aggIntervalMs: Int?
+    let aggFlows: Int?
 
     var id: String { client }
 
@@ -29,5 +32,7 @@ struct ClientHealth: Codable, Identifiable, Sendable {
         case wireProtoOk     = "wire_proto_ok"
         case clientId        = "client_id"
         case platform
+        case aggIntervalMs   = "agg_interval_ms"
+        case aggFlows        = "agg_flows"
     }
 }

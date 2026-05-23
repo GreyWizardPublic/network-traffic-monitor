@@ -30,7 +30,7 @@ struct ClientHealthSection: View {
                         .font(.subheadline)
                 } else {
                     ForEach(clients) { client in
-                        HStack {
+                        HStack(alignment: .top) {
                             VStack(alignment: .leading, spacing: 4) {
                                 HStack(spacing: 6) {
                                     Circle()
@@ -42,6 +42,7 @@ struct ClientHealthSection: View {
                                 }
                                 Text("v\(client.version) · \(lastSeenLabel(client.reportedAt))")
                                     .font(.caption).foregroundStyle(.secondary)
+                                aggLabel(for: client)
                             }
                             Spacer()
                             StatBadge(
@@ -94,6 +95,17 @@ struct ClientHealthSection: View {
                     .foregroundStyle(Color.ntmRed)
                     .clipShape(Capsule())
             }
+        }
+    }
+
+    @ViewBuilder
+    private func aggLabel(for client: ClientHealth) -> some View {
+        if let ms = client.aggIntervalMs, let flows = client.aggFlows {
+            Text("agg \(ms)ms · \(flows) flows")
+                .font(.caption2).foregroundStyle(.secondary)
+        } else {
+            Text("agg —")
+                .font(.caption2).foregroundStyle(Color.secondary.opacity(0.5))
         }
     }
 
