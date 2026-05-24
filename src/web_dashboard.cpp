@@ -3,6 +3,7 @@
 // The only dependency on server internals is TrafficStats::snapshot() via ntm_types.hpp.
 
 #include "web_dashboard.hpp"
+#include "web_auth.hpp"
 #include "proto_client_server.hpp"
 #include "version.hpp"
 
@@ -65,7 +66,7 @@ static std::string generateDemoToken()
 // Returns true if token is a valid, unexpired demo token. Lazily prunes expired entries.
 static bool checkDemoToken(const std::string &token)
 {
-    if (token.size() < 5 || token.substr(0, 5) != "demo_") return false;
+    if (!hasDemoTokenPrefix(token)) return false;
     const auto now = std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
     std::lock_guard<std::mutex> lk(g_demoTokensMtx);
@@ -97,7 +98,7 @@ static std::string generateAdminProofToken()
 
 static bool checkAdminProofToken(const std::string &token)
 {
-    if (token.size() < 7 || token.substr(0, 7) != "ntm_ap_") return false;
+    if (!hasAdminProofPrefix(token)) return false;
     const auto now = std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
     std::lock_guard<std::mutex> lk(g_adminProofMtx);
@@ -567,49 +568,26 @@ static std::string jsonGetString(const std::string &json, const std::string &key
 // (e.g. cloudflared on 127.0.0.1), the real IP is read from CF-Connecting-IP first,
 // then the first entry of X-Forwarded-For. Only exact-match proxy IPs are trusted,
 // which prevents header injection from direct (non-proxied) connections.
+// Thin httplib::Request wrappers around the pure-logic helpers in web_auth.hpp.
+// The helpers are unit-tested directly; these wrappers are exercised by integration.
+
 static std::string effectiveClientIP(const httplib::Request &req, const WebConfig &config)
 {
-    if (config.trusted_proxy.empty() || req.remote_addr != config.trusted_proxy)
-        return req.remote_addr;
-    auto cfIP = req.get_header_value("CF-Connecting-IP");
-    if (!cfIP.empty()) return cfIP;
-    auto xff = req.get_header_value("X-Forwarded-For");
-    if (!xff.empty())
-    {
-        auto comma = xff.find(',');
-        return comma == std::string::npos ? xff : xff.substr(0, comma);
-    }
-    return req.remote_addr;
+    return effectiveClientIPFromHeaders(req.remote_addr,
+                                        config.trusted_proxy,
+                                        req.get_header_value("CF-Connecting-IP"),
+                                        req.get_header_value("X-Forwarded-For"));
 }
 
-// Extract a named cookie value from the Cookie header.
 static std::string cookieFromRequest(const httplib::Request &req, const std::string &name)
 {
-    auto cookie = req.get_header_value("Cookie");
-    const std::string prefix = name + "=";
-    auto pos = cookie.find(prefix);
-    if (pos == std::string::npos) return {};
-    auto start = pos + prefix.size();
-    auto end   = cookie.find(';', start);
-    return cookie.substr(start, end == std::string::npos ? std::string::npos : end - start);
+    return cookieFromHeader(req.get_header_value("Cookie"), name);
 }
 
-// Extract session token from Authorization: Bearer header or ntm_session cookie.
 static std::string sessionFromRequest(const httplib::Request &req)
 {
-    auto auth = req.get_header_value("Authorization");
-    if (auth.size() > 7 && auth.substr(0, 7) == "Bearer ")
-        return auth.substr(7);
-    auto cookie = req.get_header_value("Cookie");
-    const std::string prefix = "ntm_session=";
-    auto pos = cookie.find(prefix);
-    if (pos != std::string::npos)
-    {
-        auto start = pos + prefix.size();
-        auto end   = cookie.find(';', start);
-        return cookie.substr(start, end == std::string::npos ? std::string::npos : end - start);
-    }
-    return {};
+    return sessionFromHeaders(req.get_header_value("Authorization"),
+                              req.get_header_value("Cookie"));
 }
 
 // ---------------------------------------------------------------------------
@@ -2005,14 +1983,8 @@ void registerWebHandlers(NtmHttpServer &svr,
             }
 
             // WebAuthn passkey session required for all paths except auth endpoints.
-            bool isAuthPath = (path == "/login") ||
-                              (path.size() >= 6 && path.substr(0, 6) == "/auth/") ||
-                              (path == "/.well-known/apple-app-site-association") ||
-                              (path == "/api/demo/begin") ||
-                              // Update endpoints authenticate via pubkey query param.
-                              (path == "/api/update/check") ||
-                              (path == "/api/update/download");
-            if (!isAuthPath)
+            // isAuthExemptPath() is the canonical list — keep web_auth.hpp in sync.
+            if (!isAuthExemptPath(path))
             {
                 const std::string token = sessionFromRequest(req);
 
@@ -2020,7 +1992,7 @@ void registerWebHandlers(NtmHttpServer &svr,
                 if (checkDemoToken(token))
                 {
                     // Block admin paths for demo tokens.
-                    if (path.size() >= 11 && path.substr(0, 11) == "/api/admin/")
+                    if (isAdminApiPath(path))
                     {
                         res.status = 403;
                         res.set_content("{\"error\":\"admin access not available in demo mode\"}\n",
@@ -2053,9 +2025,7 @@ void registerWebHandlers(NtmHttpServer &svr,
                 // Admin API paths additionally require the short-lived ntm_admin cookie
                 // issued by POST /api/admin/auth (password re-verification).
                 // /api/admin/auth itself is exempt — it is the issuance endpoint.
-                const bool isAdminApiPath = path.size() >= 11 &&
-                                            path.substr(0, 11) == "/api/admin/";
-                if (isAdminApiPath && path != "/api/admin/auth")
+                if (isAdminApiPath(path) && path != "/api/admin/auth")
                 {
                     if (!checkAdminProofToken(cookieFromRequest(req, "ntm_admin")))
                     {
