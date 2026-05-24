@@ -22,7 +22,46 @@ if(NOT WIN32)
     )
     target_compile_definitions(ntm-server PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
     target_link_libraries(ntm-server
-        PRIVATE OpenSSL::SSL CURL::libcurl ZLIB::ZLIB Threads::Threads)
+        PRIVATE OpenSSL::SSL OpenSSL::Crypto CURL::libcurl ZLIB::ZLIB Threads::Threads)
+
+    # ---------------------------------------------------------------------------
+    # ntm-server output name — ntm-server-linux-amd64-{version}
+    # Mirrors the ntm-client naming convention so the binary can be dropped
+    # directly into the deployment directory without renaming.
+    # Version is read from src/server_version.hpp at configure time.
+    # ---------------------------------------------------------------------------
+    file(STRINGS "src/server_version.hpp" _sver_line
+         REGEX "kServerVersion\\[\\]")
+    string(REGEX MATCH "\"([0-9]+\\.[0-9]+\\.[0-9]+)\"" _ "${_sver_line}")
+    set(NTM_SERVER_VERSION "${CMAKE_MATCH_1}")
+    if(NOT NTM_SERVER_VERSION)
+        message(FATAL_ERROR "Could not parse kServerVersion from src/server_version.hpp")
+    endif()
+
+    set_target_properties(ntm-server PROPERTIES
+        OUTPUT_NAME "ntm-server-linux-amd64-${NTM_SERVER_VERSION}"
+    )
+
+    # ---------------------------------------------------------------------------
+    # POST_BUILD: sign the server binary with ML-DSA-65.
+    # Requires the private key at ~/.ntm/privatebuildkey.secret.
+    # If the key is absent, the build FAILS with a clear error message.
+    # Unsigned server binaries are never produced — this step is mandatory.
+    # ---------------------------------------------------------------------------
+    if(NOT EXISTS "$ENV{HOME}/.ntm/privatebuildkey.secret")
+        message(WARNING
+            "\n*** ntm-server signing key NOT FOUND at ~/.ntm/privatebuildkey.secret ***\n"
+            "    The build will FAIL at the signing step.\n"
+            "    Run:  ./scripts/manage-build-keys.sh\n"
+            "    Then re-run cmake --build.\n")
+    endif()
+
+    add_custom_command(TARGET ntm-server POST_BUILD
+        COMMAND "${CMAKE_SOURCE_DIR}/scripts/sign-server.sh"
+                "$<TARGET_FILE:ntm-server>"
+        COMMENT "Signing ntm-server with ML-DSA-65 (scripts/sign-server.sh)"
+        VERBATIM
+    )
 endif()
 
 # ---------------------------------------------------------------------------
@@ -191,11 +230,13 @@ if(NOT WIN32)
         tests/test_client_http_util.cpp
         tests/test_client_websocket.cpp
         tests/test_client_config.cpp
+        tests/test_server_signing.cpp
     )
     target_include_directories(ntm-tests PRIVATE src tests)
     # ntm_types.hpp uses POSIX socket headers for isLanIP(); no extra libs needed.
     # test_zlib_stream.cpp uses zlib_stream.hpp which needs ZLIB::ZLIB.
-    target_link_libraries(ntm-tests PRIVATE ZLIB::ZLIB)
+    # test_server_signing.cpp uses OpenSSL EVP for ML-DSA-65 key generation + verification.
+    target_link_libraries(ntm-tests PRIVATE ZLIB::ZLIB OpenSSL::SSL OpenSSL::Crypto)
     target_compile_options(ntm-tests PRIVATE -Wall -Wextra -Wpedantic)
     set_target_properties(ntm-tests PROPERTIES OUTPUT_NAME "ntm-tests")
 
