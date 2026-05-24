@@ -80,38 +80,53 @@ bool writeExact(SSL *ssl, SockFd fd, const void *buf, std::size_t n)
 
 SockFd connectToServer(const std::string &host, std::uint16_t port, std::string &errOut)
 {
-    SOCKET fd = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    // Use getaddrinfo (AF_UNSPEC) so that both hostnames and IP literals work,
+    // and both IPv4 and IPv6 are supported. The old inet_pton path only accepted
+    // IPv4 literals, silently failing on any hostname with "invalid server host".
+    const std::string portStr = std::to_string(port);
+    struct addrinfo hints{};
+    hints.ai_family   = AF_UNSPEC;    // accept IPv4 and IPv6
+    hints.ai_socktype = SOCK_STREAM;
+    struct addrinfo *res = nullptr;
+    const int gaiErr = ::getaddrinfo(host.c_str(), portStr.c_str(), &hints, &res);
+    if (gaiErr != 0 || !res)
+    {
+        // gai_strerrorA returns const char* on both ANSI and Unicode builds.
+        errOut = "cannot resolve '" + host + "': " +
+                 std::string{::gai_strerrorA(gaiErr)};
+        return INVALID_SOCKET;
+    }
+
+    SOCKET fd = INVALID_SOCKET;
+    for (struct addrinfo *rp = res; rp; rp = rp->ai_next)
+    {
+        fd = ::socket(rp->ai_family, SOCK_STREAM, IPPROTO_TCP);
+        if (fd == INVALID_SOCKET) continue;
+
+        // Bound the TLS handshake and Ed25519 auth reads so a server that accepts
+        // the connection but then stalls cannot hang the client thread (which would
+        // also block connectionMutex_). On Windows SO_RCVTIMEO/SO_SNDTIMEO take a
+        // DWORD of milliseconds; connect() itself uses the OS TCP connect timeout.
+        {
+            DWORD to = 30000;
+            ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO,
+                         reinterpret_cast<const char *>(&to), sizeof(to));
+            ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO,
+                         reinterpret_cast<const char *>(&to), sizeof(to));
+        }
+
+        if (::connect(fd, rp->ai_addr, static_cast<int>(rp->ai_addrlen)) == 0)
+            break;    // connected — stop trying further addresses
+
+        ::closesocket(fd);
+        fd = INVALID_SOCKET;
+    }
+    ::freeaddrinfo(res);
+
     if (fd == INVALID_SOCKET)
     {
-        errOut = "socket() failed (WSA " + std::to_string(WSAGetLastError()) + ")";
-        return INVALID_SOCKET;
-    }
-
-    // Bound the TLS handshake and Ed25519 auth reads so a server that accepts
-    // the connection but then stalls cannot hang the client thread (which would
-    // also block connectionMutex_). On Windows SO_RCVTIMEO/SO_SNDTIMEO take a
-    // DWORD of milliseconds; connect() itself uses the OS TCP connect timeout.
-    {
-        DWORD to = 30000;
-        ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO,
-                     reinterpret_cast<const char *>(&to), sizeof(to));
-        ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO,
-                     reinterpret_cast<const char *>(&to), sizeof(to));
-    }
-
-    struct sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_port   = htons(port);
-    if (::inet_pton(AF_INET, host.c_str(), &addr.sin_addr) != 1)
-    {
-        errOut = "invalid server host: " + host;
-        ::closesocket(fd);
-        return INVALID_SOCKET;
-    }
-    if (::connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) == SOCKET_ERROR)
-    {
-        errOut = "connect() failed (WSA " + std::to_string(WSAGetLastError()) + ")";
-        ::closesocket(fd);
+        errOut = "connect to " + host + ":" + portStr +
+                 " failed (WSA " + std::to_string(WSAGetLastError()) + ")";
         return INVALID_SOCKET;
     }
     return fd;
