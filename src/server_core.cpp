@@ -20,7 +20,10 @@
 #include <openssl/evp.h>
 #include <openssl/err.h>
 #include <openssl/rand.h>
+#include <openssl/sha.h>
 #include <openssl/ssl.h>
+
+#include "client_websocket.hpp"  // ws::kWsGuid, ws::kWsPath, ws::FrameReader
 
 #include <algorithm>
 #include <atomic>
@@ -409,13 +412,268 @@ static bool writeExact(SSL *ssl, int fd, const void *buf, std::size_t n)
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// I/O callback types — used by verifyClientAuth and runWireDataLoop so the same
+// auth/data logic works over raw TLS (connectionThread) and WebSocket frames
+// (wsConnectionThread) without any code duplication.
+//
+// RecvFn return values:  >0 = bytes read;  0 = timeout/retry;  -1 = disconnect
+// IoReadFn / IoWriteFn:  return true on success, false on any failure
+// ---------------------------------------------------------------------------
+using RecvFn   = std::function<int(char *, int)>;
+using IoReadFn = std::function<bool(void *, std::size_t)>;
+using IoWriteFn= std::function<bool(const void *, std::size_t)>;
+
+// ---------------------------------------------------------------------------
+// Server-side WebSocket stream  (RFC 6455)
+//
+// Wraps a pre-accepted SSL* and translates between raw WebSocket frames
+// (client→server, masked) and plain byte streams used by verifyClientAuth and
+// runWireDataLoop.  All writes to the client are sent as unmasked frames.
+// ---------------------------------------------------------------------------
+class WsServerStream
+{
+public:
+    WsServerStream(SSL *ssl, int fd) : ssl_(ssl), fd_(fd) {}
+
+    // Read exactly n bytes of WebSocket payload.  Returns false on error.
+    bool readExact(void *dst, std::size_t n)
+    {
+        auto *out = static_cast<std::uint8_t *>(dst);
+        while (n > 0)
+        {
+            if (bufPos_ >= buf_.size())
+            {
+                if (!fillBuf()) return false;
+            }
+            std::size_t avail = buf_.size() - bufPos_;
+            std::size_t take  = std::min(avail, n);
+            std::memcpy(out, buf_.data() + bufPos_, take);
+            out     += take;
+            bufPos_ += take;
+            n       -= take;
+        }
+        return true;
+    }
+
+    // Write src as a single unmasked binary WebSocket frame.
+    bool writeFrame(const void *src, std::size_t n)
+    {
+        std::uint8_t hdr[10];
+        std::size_t  hdrLen = 0;
+        hdr[hdrLen++] = 0x82u;  // FIN=1, opcode=binary
+        if (n < 126)
+            hdr[hdrLen++] = static_cast<std::uint8_t>(n);
+        else if (n <= 0xFFFF)
+        {
+            hdr[hdrLen++] = 126u;
+            hdr[hdrLen++] = static_cast<std::uint8_t>((n >> 8) & 0xFF);
+            hdr[hdrLen++] = static_cast<std::uint8_t>( n       & 0xFF);
+        }
+        else
+        {
+            hdr[hdrLen++] = 127u;
+            for (int i = 7; i >= 0; --i)
+                hdr[hdrLen++] = static_cast<std::uint8_t>((n >> (8 * i)) & 0xFF);
+        }
+        return sslWrite(hdr, hdrLen) && (n == 0 || sslWrite(src, n));
+    }
+
+    // Read up to maxLen bytes of WebSocket payload into buf.
+    // Returns: >0 bytes read; 0 timeout (retry, check g_running); -1 error/close.
+    int recv(char *buf, int maxLen)
+    {
+        if (maxLen <= 0) return 0;
+        if (bufPos_ >= buf_.size())
+        {
+            if (!fillBuf()) return timedOut_ ? 0 : -1;
+        }
+        std::size_t avail = buf_.size() - bufPos_;
+        std::size_t take  = std::min(static_cast<std::size_t>(maxLen), avail);
+        std::memcpy(buf, buf_.data() + bufPos_, take);
+        bufPos_ += take;
+        return static_cast<int>(take);
+    }
+
+private:
+    SSL  *ssl_;
+    int   fd_;
+    std::vector<std::uint8_t> buf_;
+    std::size_t               bufPos_{0};
+    bool                      timedOut_{false};
+
+    bool sslWrite(const void *src, std::size_t n)
+    {
+        const auto *p = static_cast<const std::uint8_t *>(src);
+        while (n > 0)
+        {
+            int r = SSL_write(ssl_, p, static_cast<int>(n));
+            if (r <= 0) return false;
+            p += r; n -= static_cast<std::size_t>(r);
+        }
+        return true;
+    }
+
+    // Read one masked WebSocket frame from the TLS stream, unmask its payload,
+    // and append it to buf_.  On SO_RCVTIMEO firing at the very start of a frame
+    // (first byte) timedOut_=true is set and false is returned so the outer loop
+    // can re-check g_running / idle time without losing frame sync.
+    bool fillBuf()
+    {
+        timedOut_ = false;
+        // Compact buffer.
+        if (bufPos_ > 0)
+        {
+            buf_.erase(buf_.begin(),
+                       buf_.begin() + static_cast<std::ptrdiff_t>(bufPos_));
+            bufPos_ = 0;
+        }
+
+        // Byte 0 — read non-blockingly so SO_RCVTIMEO can fire cleanly.
+        std::uint8_t b0 = 0;
+        {
+            int r = SSL_read(ssl_, &b0, 1);
+            if (r <= 0)
+            {
+                int err = SSL_get_error(ssl_, r);
+                ERR_clear_error();
+                timedOut_ = (err == SSL_ERROR_WANT_READ ||
+                             err == SSL_ERROR_WANT_WRITE ||
+                             (err == SSL_ERROR_SYSCALL &&
+                              (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)));
+                return false;
+            }
+        }
+
+        // Byte 1 — we are mid-frame now; block until received.
+        std::uint8_t b1 = 0;
+        if (!sslReadBlock(&b1, 1)) return false;
+
+        const std::uint8_t opcode  = b0 & 0x0Fu;
+        const bool          masked = (b1 & 0x80u) != 0;
+        std::uint64_t       payLen = b1 & 0x7Fu;
+
+        if (payLen == 126)
+        {
+            std::uint8_t ext[2];
+            if (!sslReadBlock(ext, 2)) return false;
+            payLen = (static_cast<std::uint64_t>(ext[0]) << 8) | ext[1];
+        }
+        else if (payLen == 127)
+        {
+            std::uint8_t ext[8];
+            if (!sslReadBlock(ext, 8)) return false;
+            payLen = 0;
+            for (int i = 0; i < 8; ++i) payLen = (payLen << 8) | ext[i];
+        }
+
+        std::uint8_t maskKey[4] = {};
+        if (masked && !sslReadBlock(maskKey, 4)) return false;
+        if (payLen > 2 * 1024 * 1024) return false;  // sanity limit
+
+        // Read and unmask payload.
+        const std::size_t startPos = buf_.size();
+        buf_.resize(startPos + static_cast<std::size_t>(payLen));
+        if (payLen > 0 && !sslReadBlock(buf_.data() + startPos, payLen)) return false;
+        if (masked)
+        {
+            for (std::size_t i = 0; i < static_cast<std::size_t>(payLen); ++i)
+                buf_[startPos + i] ^= maskKey[i & 3];
+        }
+
+        // Control frames: close → disconnect, ping/pong → discard and retry.
+        if (opcode == ws::kOpcodeClose) return false;
+        if (opcode == ws::kOpcodePing || opcode == ws::kOpcodePong)
+        {
+            buf_.resize(startPos);   // discard
+            return fillBuf();        // tail-recurse for next frame
+        }
+        return buf_.size() > bufPos_;
+    }
+
+    // Blocking SSL read that retries on WANT_READ (non-blocking TLS record boundary).
+    bool sslReadBlock(void *dst, std::size_t n)
+    {
+        auto *p = static_cast<std::uint8_t *>(dst);
+        while (n > 0)
+        {
+            int r = SSL_read(ssl_, p, static_cast<int>(n));
+            if (r > 0) { p += r; n -= static_cast<std::size_t>(r); continue; }
+            int err = SSL_get_error(ssl_, r);
+            ERR_clear_error();
+            if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) continue;
+            return false;
+        }
+        return true;
+    }
+};
+
+// ---------------------------------------------------------------------------
+// HTTP WebSocket upgrade helpers (server-side)
+// ---------------------------------------------------------------------------
+
+// Read one HTTP request up to and including the terminal CRLFCRLF.
+// Returns the request string or empty on error/timeout.
+static std::string wsReadHttpRequest(SSL *ssl)
+{
+    std::string req;
+    req.reserve(1024);
+    while (req.size() < 16384)
+    {
+        char c = 0;
+        int  r = SSL_read(ssl, &c, 1);
+        if (r <= 0) return {};
+        req.push_back(c);
+        if (req.size() >= 4 && req.compare(req.size() - 4, 4, "\r\n\r\n") == 0)
+            break;
+    }
+    return req;
+}
+
+// Compute Sec-WebSocket-Accept for the given Sec-WebSocket-Key (RFC 6455 §1.3).
+static std::string wsComputeAccept(const std::string &key)
+{
+    const std::string input = key + ws::kWsGuid;
+    unsigned char sha1[SHA_DIGEST_LENGTH];
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+    SHA1(reinterpret_cast<const unsigned char *>(input.data()), input.size(), sha1);
+#pragma GCC diagnostic pop
+    int outLen = ((SHA_DIGEST_LENGTH + 2) / 3) * 4;
+    std::vector<unsigned char> b64(static_cast<std::size_t>(outLen) + 1, 0);
+    EVP_EncodeBlock(b64.data(), sha1, SHA_DIGEST_LENGTH);
+    return std::string(reinterpret_cast<const char *>(b64.data()),
+                       static_cast<std::size_t>(outLen));
+}
+
+// Extract Sec-WebSocket-Key header value from an HTTP request string.
+static std::string wsExtractKey(const std::string &request)
+{
+    const std::string needle = "Sec-WebSocket-Key: ";
+    auto pos = request.find(needle);
+    if (pos == std::string::npos) return {};
+    pos += needle.size();
+    auto end = request.find('\r', pos);
+    if (end == std::string::npos) end = request.find('\n', pos);
+    if (end == std::string::npos) return {};
+    std::string key = request.substr(pos, end - pos);
+    while (!key.empty() && (key.back() == ' ' || key.back() == '\r'))
+        key.pop_back();
+    return key;
+}
+
+// ---------------------------------------------------------------------------
 // Verify auth message and return clientId (hex of pubkey) or empty on failure.
 // attemptedVersionOut: if non-null and auth fails due to unrecognised version byte
 // (not wrong key/signature), set to the version byte the client sent.
 // negotiatedCapsOut:   if non-null and auth succeeds via v3, set to the negotiated
 //                      capability flags (subset of client's offered caps).
 // isV3Out:             if non-null, set to true when the client used auth v3.
-static std::string verifyClientAuth(SSL *ssl, int clientFd, const AllowedClientsStore &store,
+// ---------------------------------------------------------------------------
+// I/O-callback-based implementation — used by both the raw-TLS and WebSocket paths.
+static std::string verifyClientAuth(const IoReadFn  &readFn,
+                                    const IoWriteFn &writeFn,
+                                    const AllowedClientsStore &store,
                                     std::uint8_t *attemptedVersionOut = nullptr,
                                     std::uint8_t *negotiatedCapsOut = nullptr,
                                     bool *isV3Out = nullptr)
@@ -425,7 +683,7 @@ static std::string verifyClientAuth(SSL *ssl, int clientFd, const AllowedClients
         return {};
 
     std::uint8_t version = 0;
-    if (!readExact(ssl, clientFd, &version, 1))
+    if (!readFn(&version, 1))
         return {};
 
     auto pubkeyToIdHex = [](const std::string &pubkeyRaw) -> std::string
@@ -441,57 +699,18 @@ static std::string verifyClientAuth(SSL *ssl, int clientFd, const AllowedClients
         return clientId;
     };
 
-    // Shared verify logic for both v2 and v3 (same nonce + Ed25519 scheme).
-    auto verifyNonceAndSig = [&](const std::uint8_t *resp, std::size_t respLen) -> std::string
-    {
-        if (respLen < kAuthPubkeyLen + kAuthSignatureLen)
-            return {};
-        std::string pubkeyRaw(reinterpret_cast<const char *>(resp), kAuthPubkeyLen);
-        // M5: constant-time membership check (avoids std::set::find timing leak).
-        if (!allowedKeysContains(store.keys, pubkeyRaw))
-            return {};
-
-        std::uint8_t nonce[kAuthNonceLen];
-        if (RAND_bytes(nonce, sizeof(nonce)) != 1)
-            return {};
-        if (!writeExact(ssl, clientFd, nonce, sizeof(nonce)))
-            return {};
-
-        // Read the full response now (the nonce was already written above — this lambda
-        // is called with the response pre-read into `resp`; see callers).
-        std::string toVerify(reinterpret_cast<const char *>(kAuthSignPrefixV2), kAuthSignPrefixV2Len);
-        toVerify.append(reinterpret_cast<const char *>(nonce), sizeof(nonce));
-
-        const unsigned char *sig = reinterpret_cast<const unsigned char *>(resp + kAuthPubkeyLen);
-        EVP_PKEY *pkey = EVP_PKEY_new_raw_public_key(EVP_PKEY_ED25519, nullptr,
-                                                     reinterpret_cast<const unsigned char *>(pubkeyRaw.data()),
-                                                     pubkeyRaw.size());
-        if (!pkey) return {};
-        EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-        int ok = ctx && EVP_DigestVerifyInit(ctx, nullptr, nullptr, nullptr, pkey) == 1
-                 && EVP_DigestVerify(ctx, sig, kAuthSignatureLen,
-                                    reinterpret_cast<const unsigned char *>(toVerify.data()),
-                                    toVerify.size()) == 1;
-        EVP_MD_CTX_free(ctx);
-        EVP_PKEY_free(pkey);
-        if (!ok) return {};
-        return pubkeyToIdHex(pubkeyRaw);
-    };
-    // suppress unused-warning on non-lambda path
-    (void)verifyNonceAndSig;
-
     if (version == kAuthVersionV2)
     {
         // Server challenge nonce
         std::uint8_t nonce[kAuthNonceLen];
         if (RAND_bytes(nonce, sizeof(nonce)) != 1)
             return {};
-        if (!writeExact(ssl, clientFd, nonce, sizeof(nonce)))
+        if (!writeFn(nonce, sizeof(nonce)))
             return {};
 
         // Client response: pubkey + signature over prefix+nonce
         std::uint8_t resp[kAuthPubkeyLen + kAuthSignatureLen];
-        if (!readExact(ssl, clientFd, resp, sizeof(resp)))
+        if (!readFn(resp, sizeof(resp)))
             return {};
 
         std::string pubkeyRaw(reinterpret_cast<const char *>(resp), kAuthPubkeyLen);
@@ -526,12 +745,12 @@ static std::string verifyClientAuth(SSL *ssl, int clientFd, const AllowedClients
         std::uint8_t nonce[kAuthNonceLen];
         if (RAND_bytes(nonce, sizeof(nonce)) != 1)
             return {};
-        if (!writeExact(ssl, clientFd, nonce, sizeof(nonce)))
+        if (!writeFn(nonce, sizeof(nonce)))
             return {};
 
         // Client response: pubkey (32B) + signature (64B) + capability byte (1B)
         std::uint8_t resp[kAuthPubkeyLen + kAuthSignatureLen + 1];
-        if (!readExact(ssl, clientFd, resp, sizeof(resp)))
+        if (!readFn(resp, sizeof(resp)))
             return {};
 
         std::string pubkeyRaw(reinterpret_cast<const char *>(resp), kAuthPubkeyLen);
@@ -567,6 +786,20 @@ static std::string verifyClientAuth(SSL *ssl, int clientFd, const AllowedClients
     if (attemptedVersionOut)
         *attemptedVersionOut = version;
     return {};
+}
+
+// Thin shim for existing callers that pass raw ssl+fd.
+static std::string verifyClientAuth(SSL *ssl, int clientFd, const AllowedClientsStore &store,
+                                    std::uint8_t *attemptedVersionOut = nullptr,
+                                    std::uint8_t *negotiatedCapsOut = nullptr,
+                                    bool *isV3Out = nullptr)
+{
+    auto readFn  = [ssl, clientFd](void *b, std::size_t n)
+                   { return readExact(ssl, clientFd, b, n); };
+    auto writeFn = [ssl, clientFd](const void *b, std::size_t n)
+                   { return writeExact(ssl, clientFd, b, n); };
+    return verifyClientAuth(readFn, writeFn, store,
+                            attemptedVersionOut, negotiatedCapsOut, isV3Out);
 }
 
 // NEW-N8: known config keys. Used to warn on typos and to detect "config opened
@@ -916,6 +1149,236 @@ std::string formatBytes(std::uint64_t bytes)
     return oss.str();
 }
 
+// ---------------------------------------------------------------------------
+// runWireDataLoop — shared data-ingestion loop for both TCP+TLS and WebSocket
+// paths.  The caller sets up auth, inflater, and socket timeout, then passes
+// a RecvFn to abstract the underlying transport.
+//
+// RecvFn contract:  >0 = bytes read;  0 = transient timeout (retry);  -1 = disconnect.
+// ---------------------------------------------------------------------------
+static void runWireDataLoop(
+    RecvFn                                           recvFn,
+    const std::string                               &clientId,
+    const std::string                               &clientIp,
+    const std::chrono::steady_clock::time_point     &sessionStart,
+    std::shared_ptr<ClientRegistry>                  registry,
+    TrafficStats                                    &stats,
+    IPDataUpdater                                   &ipDataUpdater,
+    std::unique_ptr<ZlibInflater>                   &inflater,
+    std::vector<std::uint8_t>                       &inflatedBuf,
+    const ServerConfig                              &config)
+{
+    std::string buffer;
+    buffer.reserve(4096);
+
+    std::size_t announcedCount = 0;
+    std::string localExternalIp = kExtIPNull;
+    std::int64_t lastXLineSec = -1;
+
+    std::unordered_map<std::string, std::string> localRegSnap;
+    auto lastRegRefresh = std::chrono::steady_clock::now();
+    if (registry)
+    {
+        std::lock_guard<std::mutex> lk(registry->mtx);
+        localRegSnap = registry->ipToClientId;
+    }
+
+    auto lastActivity = std::chrono::steady_clock::now();
+    std::int64_t lastDLineSecond = -1;
+    std::size_t  dLineCountThisSecond = 0;
+    std::uint64_t ifaceRejectedInThisSession = 0;
+
+    char recvBuf[4096];
+    while (g_running.load())
+    {
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+            now - sessionStart).count();
+        if (elapsed < 0) elapsed = 0;
+        if (static_cast<std::uint64_t>(elapsed) >= kMaxSessionSeconds)
+            break;
+        auto idleSec = std::chrono::duration_cast<std::chrono::seconds>(
+            now - lastActivity).count();
+        if (idleSec >= static_cast<std::chrono::seconds::rep>(config.idle_timeout_seconds))
+            break;
+
+        // Refresh local registry snapshot every 5 seconds.
+        if (registry &&
+            std::chrono::duration_cast<std::chrono::seconds>(now - lastRegRefresh).count() >= 5)
+        {
+            std::lock_guard<std::mutex> lk(registry->mtx);
+            localRegSnap = registry->ipToClientId;
+            auto eit = registry->clientToExternalIp.find(clientId);
+            if (eit != registry->clientToExternalIp.end())
+                localExternalIp = eit->second;
+            lastRegRefresh = now;
+        }
+
+        int n = recvFn(recvBuf, static_cast<int>(sizeof(recvBuf)));
+        if (n == 0) continue;   // timeout — re-check idle / g_running
+        if (n < 0) break;       // disconnect or real error
+        lastActivity = now;
+
+        if (inflater)
+        {
+            inflatedBuf.clear();
+            if (!inflater->feed(recvBuf, static_cast<std::size_t>(n), inflatedBuf))
+            {
+                serverLog(LogLevel::Warn,
+                          "ntm-server: zlib inflate error from client %s — disconnecting",
+                          clientId.c_str());
+                break;
+            }
+            buffer.append(reinterpret_cast<const char *>(inflatedBuf.data()),
+                          inflatedBuf.size());
+        }
+        else
+        {
+            buffer.append(recvBuf, recvBuf + static_cast<std::size_t>(n));
+        }
+        if (buffer.size() > config.max_recv_buffer_bytes)
+            break;
+        std::size_t pos = 0;
+        while (true)
+        {
+            std::size_t nl = buffer.find('\n', pos);
+            if (nl == std::string::npos)
+                break;
+            std::string line = buffer.substr(pos, nl - pos);
+            pos = nl + 1;
+
+            if (line.rfind(kExtIPLinePrefix, 0) == 0)
+            {
+                auto nowSecX = std::chrono::duration_cast<std::chrono::seconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count();
+                if (nowSecX - lastXLineSec >= static_cast<std::int64_t>(kAnnounceRateLimitSec))
+                {
+                    std::string extIp = line.substr(2);
+                    while (!extIp.empty() && (extIp.back() == '\r' || extIp.back() == ' '))
+                        extIp.pop_back();
+                    bool valid = (extIp == kExtIPNull);
+                    if (!valid)
+                    {
+                        struct in_addr a4{};
+                        struct in6_addr a6{};
+                        valid = (::inet_pton(AF_INET,  extIp.c_str(), &a4) == 1 ||
+                                 ::inet_pton(AF_INET6, extIp.c_str(), &a6) == 1);
+                    }
+                    if (valid && registry)
+                    {
+                        lastXLineSec = nowSecX;
+                        {
+                            std::lock_guard<std::mutex> lk(registry->mtx);
+                            for (auto it = registry->ipToClientId.begin();
+                                 it != registry->ipToClientId.end(); )
+                                it = (it->second == clientId)
+                                     ? registry->ipToClientId.erase(it)
+                                     : std::next(it);
+                            registry->clientToExternalIp.erase(clientId);
+                            if (!clientIp.empty())
+                                registry->ipToClientId[clientIp] = clientId;
+                            registry->clientToExternalIp[clientId] = extIp;
+                        }
+                        announcedCount = 0;
+                        {
+                            std::lock_guard<std::mutex> lk(registry->mtx);
+                            localRegSnap = registry->ipToClientId;
+                        }
+                        localExternalIp = extIp;
+                        lastRegRefresh = std::chrono::steady_clock::now();
+                        serverLog(LogLevel::Info,
+                                  "ntm-server: client %s external IP: %s",
+                                  clientId.c_str(), extIp.c_str());
+                    }
+                }
+            }
+            else if (line.rfind(kAddrLinePrefix, 0) == 0)
+            {
+                if (announcedCount < kMaxAnnounceAddressesPerSession && registry)
+                {
+                    std::string ip = line.substr(2);
+                    while (!ip.empty() && (ip.back() == '\r' || ip.back() == ' '))
+                        ip.pop_back();
+                    if (!ip.empty() && ip.size() <= config.max_ip_len && isLanIP(ip))
+                    {
+                        {
+                            std::lock_guard<std::mutex> lk(registry->mtx);
+                            registry->ipToClientId[ip] = clientId;
+                        }
+                        localRegSnap[ip] = clientId;
+                        ++announcedCount;
+                        serverLog(LogLevel::Info,
+                                  "ntm-server: client %s announced address %s",
+                                  clientId.c_str(), ip.c_str());
+                    }
+                }
+            }
+            else if (line.rfind(kDataLinePrefix, 0) == 0)
+            {
+                PacketMeta meta;
+                if (parseDataLine(line.substr(2), meta, config.max_iface_len, config.max_ip_len))
+                {
+                    auto nowSec = std::chrono::duration_cast<std::chrono::seconds>(
+                        std::chrono::steady_clock::now().time_since_epoch()).count();
+                    if (nowSec != lastDLineSecond)
+                    {
+                        lastDLineSecond = nowSec;
+                        dLineCountThisSecond = 0;
+                    }
+                    dLineCountThisSecond++;
+                    if (dLineCountThisSecond > config.max_d_lines_per_second_per_connection)
+                        continue;
+                    auto resolver = ipDataUpdater.get();
+                    std::string srcCountry = resolver ? resolver->countryFor(meta.srcIp)
+                                                      : std::string(IPRangeResolver::kUnknownCountry);
+                    std::string dstCountry = resolver ? resolver->countryFor(meta.dstIp)
+                                                      : std::string(IPRangeResolver::kUnknownCountry);
+                    auto entityForIp = [&resolver, &localRegSnap, &localExternalIp](const std::string &ip) -> std::string {
+                        if (isLanIP(ip)) {
+                            auto it = localRegSnap.find(ip);
+                            if (it != localRegSnap.end()) return it->second;
+                            return "@[" + localExternalIp + "]:" + ip;
+                        }
+                        return resolver ? resolver->entityFor(ip)
+                                       : std::string(IPRangeResolver::kUnknownEntity);
+                    };
+                    std::string srcEntity = entityForIp(meta.srcIp);
+                    std::string dstEntity = entityForIp(meta.dstIp);
+                    auto addRes = stats.addPacket(clientId, meta.iface, meta.srcIp, meta.dstIp,
+                                                  srcCountry, dstCountry, srcEntity, dstEntity, meta.bytes);
+                    if (addRes == TrafficStats::AddResult::IfaceCapExceeded)
+                    {
+                        ++ifaceRejectedInThisSession;
+                        if ((ifaceRejectedInThisSession & (ifaceRejectedInThisSession - 1)) == 0)
+                        {
+                            serverLog(LogLevel::Warn,
+                                      "ntm-server: client %s exceeded max_ifaces_per_client (%zu) "
+                                      "with iface='%s'; %llu lines dropped this session",
+                                      clientId.c_str(),
+                                      config.max_ifaces_per_client,
+                                      meta.iface.c_str(),
+                                      static_cast<unsigned long long>(ifaceRejectedInThisSession));
+                        }
+                    }
+                }
+            }
+            else if (line.rfind(kHealthLinePrefix, 0) == 0)
+            {
+                if (registry)
+                {
+                    ClientHealthStats hs = parseHealthLine(line.substr(2));
+                    hs.reportedAtSec = std::chrono::duration_cast<std::chrono::seconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count();
+                    std::lock_guard<std::mutex> lk(registry->mtx);
+                    registry->clientHealth[clientId] = hs;
+                }
+            }
+        }
+        if (pos > 0)
+            buffer.erase(0, pos);
+    }
+}
+
 void connectionThread(int clientFd,
                       std::string peerAddr,
                       std::string clientIp,
@@ -1083,263 +1546,26 @@ void connectionThread(int clientFd,
         }
     }
 
-    std::string buffer;
-    buffer.reserve(4096);
-
-    std::size_t announcedCount = 0;  // number of A-line addresses registered this announce round
-
-    // External IP scope for unknown LAN devices: set when the client sends an X line.
-    // Until then defaults to "null" (shows as "LAN (no internet)" in dashboard).
-    std::string localExternalIp = kExtIPNull;
-    std::int64_t lastXLineSec = -1;  // epoch-seconds of last accepted X line (rate-limit)
-
-    // Local snapshot of the shared IP→clientId registry. Refreshed every 5 seconds
-    // so we can resolve LAN IPs to stable hex client IDs in the hot data path without
-    // locking per-packet. The initial snapshot is taken immediately after auth so that
-    // the client's own IP (and any peers that connected before us) are available at once.
-    std::unordered_map<std::string, std::string> localRegSnap;
-    auto lastRegRefresh = std::chrono::steady_clock::now();
-    if (registry)
-    {
-        std::lock_guard<std::mutex> lk(registry->mtx);
-        localRegSnap = registry->ipToClientId;
-    }
-
-    auto lastActivity = std::chrono::steady_clock::now();
-    std::int64_t lastDLineSecond = -1;
-    std::size_t dLineCountThisSecond = 0;
-    // UB-1: per-connection counter of D-lines dropped because the client has
-    // exceeded its iface cap. Logged only on power-of-two crossings.
-    std::uint64_t ifaceRejectedInThisSession = 0;
-
-    char recvBuf[4096];
-    while (g_running.load())
-    {
-        auto now = std::chrono::steady_clock::now();
-        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - sessionStart).count();
-        if (elapsed < 0)
-            elapsed = 0;
-        if (static_cast<std::uint64_t>(elapsed) >= kMaxSessionSeconds)
-            break;
-        auto idleSec = std::chrono::duration_cast<std::chrono::seconds>(now - lastActivity).count();
-        if (idleSec >= static_cast<std::chrono::seconds::rep>(config.idle_timeout_seconds))
-            break;  // idle timeout
-
-        // Refresh local registry snapshot every 5 seconds so newly authenticated
-        // clients are quickly picked up for ingest-time entity resolution.
-        if (registry &&
-            std::chrono::duration_cast<std::chrono::seconds>(now - lastRegRefresh).count() >= 5)
-        {
-            std::lock_guard<std::mutex> lk(registry->mtx);
-            localRegSnap = registry->ipToClientId;
-            auto eit = registry->clientToExternalIp.find(clientId);
-            if (eit != registry->clientToExternalIp.end())
-                localExternalIp = eit->second;
-            lastRegRefresh = now;
-        }
-
-        int n;
+    // Build a RecvFn that wraps SSL_read (with timeout/retry handling).
+    RecvFn tcpRecvFn = [ssl, clientFd](char *buf, int maxLen) -> int {
+        int r = ssl ? SSL_read(ssl, buf, maxLen)
+                    : static_cast<int>(::recv(clientFd, buf, static_cast<std::size_t>(maxLen), 0));
+        if (r > 0) return r;
+        if (!ssl && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))
+            return 0;
         if (ssl)
-            n = SSL_read(ssl, recvBuf, sizeof(recvBuf));
-        else
-            n = static_cast<int>(::recv(clientFd, recvBuf, sizeof(recvBuf), 0));
-        if (n <= 0)
         {
-            // Distinguish recv timeout (re-check idle / g_running) from real error/close.
-            if (n < 0)
-            {
-                if (!ssl && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))
-                    continue;
-                if (ssl)
-                {
-                    int err = SSL_get_error(ssl, n);
-                    if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE)
-                    {
-                        ERR_clear_error();
-                        continue;
-                    }
-                    ERR_clear_error();
-                }
-            }
-            break;
+            int err = SSL_get_error(ssl, r);
+            ERR_clear_error();
+            if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE)
+                return 0;
         }
-        lastActivity = now;
-        if (inflater)
-        {
-            inflatedBuf.clear();
-            if (!inflater->feed(recvBuf, static_cast<std::size_t>(n), inflatedBuf))
-            {
-                serverLog(LogLevel::Warn,
-                          "ntm-server: zlib inflate error from client %s — disconnecting",
-                          clientId.c_str());
-                break;
-            }
-            buffer.append(reinterpret_cast<const char *>(inflatedBuf.data()),
-                          inflatedBuf.size());
-        }
-        else
-        {
-            buffer.append(recvBuf, recvBuf + static_cast<std::size_t>(n));
-        }
-        if (buffer.size() > config.max_recv_buffer_bytes)
-            break;  // disconnect: client sent too much without newline
-        std::size_t pos = 0;
-        while (true)
-        {
-            std::size_t nl = buffer.find('\n', pos);
-            if (nl == std::string::npos)
-                break;
-            std::string line = buffer.substr(pos, nl - pos);
-            pos = nl + 1;
+        return -1;
+    };
 
-            if (line.rfind(kExtIPLinePrefix, 0) == 0)
-            {
-                // External IP announce: "X {ip|null}" — must arrive before A lines.
-                // Rate-limited to one accepted X per 30 s to resist replay / flood.
-                auto nowSecX = std::chrono::duration_cast<std::chrono::seconds>(
-                    std::chrono::steady_clock::now().time_since_epoch()).count();
-                if (nowSecX - lastXLineSec >= static_cast<std::int64_t>(kAnnounceRateLimitSec))
-                {
-                    std::string extIp = line.substr(2);
-                    while (!extIp.empty() && (extIp.back() == '\r' || extIp.back() == ' '))
-                        extIp.pop_back();
-                    bool valid = (extIp == kExtIPNull);
-                    if (!valid)
-                    {
-                        struct in_addr a4{};
-                        struct in6_addr a6{};
-                        valid = (::inet_pton(AF_INET,  extIp.c_str(), &a4) == 1 ||
-                                 ::inet_pton(AF_INET6, extIp.c_str(), &a6) == 1);
-                    }
-                    if (valid && registry)
-                    {
-                        lastXLineSec = nowSecX;
-                        // Atomically reset client state: remove all stale IP mappings,
-                        // then re-register the TCP connection IP and new external IP scope.
-                        {
-                            std::lock_guard<std::mutex> lk(registry->mtx);
-                            for (auto it = registry->ipToClientId.begin();
-                                 it != registry->ipToClientId.end(); )
-                                it = (it->second == clientId)
-                                     ? registry->ipToClientId.erase(it)
-                                     : std::next(it);
-                            registry->clientToExternalIp.erase(clientId);
-                            if (!clientIp.empty())
-                                registry->ipToClientId[clientIp] = clientId;
-                            registry->clientToExternalIp[clientId] = extIp;
-                        }
-                        announcedCount = 0;
-                        {
-                            std::lock_guard<std::mutex> lk(registry->mtx);
-                            localRegSnap = registry->ipToClientId;
-                        }
-                        localExternalIp = extIp;
-                        lastRegRefresh = std::chrono::steady_clock::now();
-                        serverLog(LogLevel::Info,
-                                  "ntm-server: client %s external IP: %s",
-                                  clientId.c_str(), extIp.c_str());
-                    }
-                }
-            }
-            else if (line.rfind(kAddrLinePrefix, 0) == 0)
-            {
-                // Address announce: "A ip_address" — register this LAN IP → clientId.
-                // The client sends one line per interface address right after auth.
-                // Silently drop if: over per-session cap, not a LAN IP, or too long.
-                if (announcedCount < kMaxAnnounceAddressesPerSession && registry)
-                {
-                    std::string ip = line.substr(2);
-                    while (!ip.empty() && (ip.back() == '\r' || ip.back() == ' '))
-                        ip.pop_back();
-                    if (!ip.empty() && ip.size() <= config.max_ip_len && isLanIP(ip))
-                    {
-                        {
-                            std::lock_guard<std::mutex> lk(registry->mtx);
-                            registry->ipToClientId[ip] = clientId;
-                        }
-                        localRegSnap[ip] = clientId;
-                        ++announcedCount;
-                        serverLog(LogLevel::Info,
-                                  "ntm-server: client %s announced address %s",
-                                  clientId.c_str(), ip.c_str());
-                    }
-                }
-            }
-            else if (line.rfind(kDataLinePrefix, 0) == 0)
-            {
-                PacketMeta meta;
-                if (parseDataLine(line.substr(2), meta, config.max_iface_len, config.max_ip_len))
-                {
-                    auto nowSec = std::chrono::duration_cast<std::chrono::seconds>(
-                        std::chrono::steady_clock::now().time_since_epoch()).count();
-                    if (nowSec != lastDLineSecond)
-                    {
-                        lastDLineSecond = nowSec;
-                        dLineCountThisSecond = 0;
-                    }
-                    dLineCountThisSecond++;
-                    if (dLineCountThisSecond > config.max_d_lines_per_second_per_connection)
-                        continue;  // rate limit: drop this line
-                    // Grab a fresh snapshot of the resolver per D-line. The
-                    // shared_ptr load is mutex-protected but cheap; this gives
-                    // long-lived connections the benefit of background DB updates.
-                    auto resolver = ipDataUpdater.get();
-                    std::string srcCountry = resolver ? resolver->countryFor(meta.srcIp)
-                                                      : std::string(IPRangeResolver::kUnknownCountry);
-                    std::string dstCountry = resolver ? resolver->countryFor(meta.dstIp)
-                                                      : std::string(IPRangeResolver::kUnknownCountry);
-                    // Entity resolution: for LAN IPs, look up the local registry snapshot
-                    // to get the stable hex client ID. Unknown LAN IPs are stored as
-                    // "@{reporterClientId}:{ip}" so that the same RFC 1918 address appearing
-                    // on two different physical LANs is never conflated in TrafficStats.
-                    // External IPs use the ASN entity resolver.
-                    auto entityForIp = [&resolver, &localRegSnap, &localExternalIp](const std::string &ip) -> std::string {
-                        if (isLanIP(ip)) {
-                            auto it = localRegSnap.find(ip);
-                            if (it != localRegSnap.end()) return it->second;
-                            return "@[" + localExternalIp + "]:" + ip;
-                        }
-                        return resolver ? resolver->entityFor(ip)
-                                       : std::string(IPRangeResolver::kUnknownEntity);
-                    };
-                    std::string srcEntity = entityForIp(meta.srcIp);
-                    std::string dstEntity = entityForIp(meta.dstIp);
-                    auto addRes = stats.addPacket(clientId, meta.iface, meta.srcIp, meta.dstIp,
-                                                  srcCountry, dstCountry, srcEntity, dstEntity, meta.bytes);
-                    // UB-1: log on power-of-two crossings so a misbehaving client
-                    // surfaces but cannot spam syslog.
-                    if (addRes == TrafficStats::AddResult::IfaceCapExceeded)
-                    {
-                        ++ifaceRejectedInThisSession;
-                        if ((ifaceRejectedInThisSession & (ifaceRejectedInThisSession - 1)) == 0)
-                        {
-                            serverLog(LogLevel::Warn,
-                                      "ntm-server: client %s exceeded max_ifaces_per_client (%zu) "
-                                      "with iface='%s'; %llu lines dropped this session",
-                                      clientId.c_str(),
-                                      config.max_ifaces_per_client,
-                                      meta.iface.c_str(),
-                                      static_cast<unsigned long long>(ifaceRejectedInThisSession));
-                        }
-                    }
-                }
-            }
-            else if (line.rfind(kHealthLinePrefix, 0) == 0)
-            {
-                // Health report: parse via shared parseHealthLine() in ntm_types.hpp.
-                if (registry)
-                {
-                    ClientHealthStats hs = parseHealthLine(line.substr(2));
-                    hs.reportedAtSec = std::chrono::duration_cast<std::chrono::seconds>(
-                        std::chrono::system_clock::now().time_since_epoch()).count();
-                    std::lock_guard<std::mutex> lk(registry->mtx);
-                    registry->clientHealth[clientId] = hs;
-                }
-            }
-        }
-        if (pos > 0)
-            buffer.erase(0, pos);
-    }
+    runWireDataLoop(tcpRecvFn, clientId, clientIp, sessionStart,
+                    registry, stats, ipDataUpdater,
+                    inflater, inflatedBuf, config);
 
     // Normal exit: ConnCloser destructor handles close(connFd) + SSL_free(ssl).
 
@@ -1353,6 +1579,220 @@ void connectionThread(int clientFd,
         serverLog(LogLevel::Err, "ntm-server: connection thread caught unknown exception");
     }
     // ConnCloser/PerIPGuard/Guard/DoneGuard run here on every path.
+}
+
+// ---------------------------------------------------------------------------
+// wsConnectionThread — WebSocket-framed ntm-wire session.
+//
+// Handles connections where the ntm-client uses WebSocketTransport:
+//   • Direct (ALPN "ntm-wire"): client sends "GET /ntm-ws" over the TLS socket
+//     before any auth bytes — detected via SSL_peek in the accept loop.
+//   • Via Cloudflare (ALPN "http/1.1"): Cloudflare proxies the WS upgrade to
+//     the origin; the accept loop detects "GET /ntm-ws" and routes here.
+//
+// Flow: HTTP upgrade → WS auth (ntm-wire protocol via WS frames) → data loop.
+// ---------------------------------------------------------------------------
+static void wsConnectionThread(
+    int                                        clientFd,
+    std::string                                peerAddr,
+    std::string                                clientIp,
+    std::shared_ptr<AllowedClientsStore>       clientsStore,
+    std::shared_ptr<ClientRegistry>            registry,
+    TrafficStats                              &stats,
+    IPDataUpdater                             &ipDataUpdater,
+    std::atomic<std::size_t>                  &activeConnections,
+    PerIPConnectionLimiter                    &perIPLimiter,
+    const ServerConfig                        &config,
+    SSL                                       *preAcceptedSsl,
+    std::shared_ptr<std::atomic<bool>>         doneFlag)
+{
+    struct DoneGuard {
+        std::shared_ptr<std::atomic<bool>> flag;
+        ~DoneGuard() { if (flag) flag->store(true, std::memory_order_release); }
+    } doneGuard{doneFlag};
+
+    struct Guard {
+        std::atomic<std::size_t> &n;
+        explicit Guard(std::atomic<std::size_t> &n_) : n(n_) {}
+        ~Guard() { n--; }
+    } guard(activeConnections);
+
+    struct PerIPGuard {
+        PerIPConnectionLimiter &limiter; std::string ip;
+        PerIPGuard(PerIPConnectionLimiter &l, std::string i) : limiter(l), ip(std::move(i)) {}
+        ~PerIPGuard() { limiter.release(ip); }
+    } perIPGuard(perIPLimiter, clientIp);
+
+    SSL *ssl    = nullptr;
+    int  connFd = clientFd;
+    struct ConnCloser {
+        SSL *&ssl; int &fd;
+        ~ConnCloser() {
+            if (ssl) { SSL_shutdown(ssl); SSL_free(ssl); ssl = nullptr; }
+            if (fd >= 0) { ::close(fd); fd = -1; }
+        }
+    } connCloser{ssl, connFd};
+
+    try {
+
+    if (!preAcceptedSsl) return;
+    ssl = preAcceptedSsl;
+
+    // ── 1. HTTP WebSocket upgrade handshake ──────────────────────────────────
+    {
+        struct timeval tv { 10, 0 };
+        ::setsockopt(clientFd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        ::setsockopt(clientFd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    }
+
+    const std::string httpReq = wsReadHttpRequest(ssl);
+    if (httpReq.empty())
+    {
+        serverLog(LogLevel::Warn, "ntm-server: [ws] no HTTP request from %s",
+                  peerAddr.c_str());
+        return;
+    }
+
+    // Validate path
+    if (httpReq.find(std::string("GET ") + ws::kWsPath) == std::string::npos)
+    {
+        serverLog(LogLevel::Warn,
+                  "ntm-server: [ws] unexpected request from %s (not GET %s)",
+                  peerAddr.c_str(), ws::kWsPath);
+        const std::string resp404 =
+            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        writeExact(ssl, clientFd, resp404.data(), resp404.size());
+        return;
+    }
+
+    const std::string key = wsExtractKey(httpReq);
+    if (key.empty())
+    {
+        serverLog(LogLevel::Warn,
+                  "ntm-server: [ws] missing Sec-WebSocket-Key from %s", peerAddr.c_str());
+        return;
+    }
+
+    const std::string accept = wsComputeAccept(key);
+    const std::string resp101 =
+        "HTTP/1.1 101 Switching Protocols\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Accept: " + accept + "\r\n\r\n";
+    if (!writeExact(ssl, clientFd, resp101.data(), resp101.size()))
+    {
+        serverLog(LogLevel::Warn, "ntm-server: [ws] 101 write failed to %s",
+                  peerAddr.c_str());
+        return;
+    }
+    serverLog(LogLevel::Info, "ntm-server: [ws] WebSocket upgrade complete for %s",
+              peerAddr.c_str());
+
+    // ── 2. Auth via WebSocket frames ─────────────────────────────────────────
+    auto setSocketTimeout = [](int fd, unsigned secs) -> bool {
+        struct timeval tv;
+        tv.tv_sec  = static_cast<time_t>(secs);
+        tv.tv_usec = 0;
+        return ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) == 0 &&
+               ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) == 0;
+    };
+    if (!setSocketTimeout(clientFd, 10))
+    {
+        serverLog(LogLevel::Err,
+                  "ntm-server: [ws] cannot set auth timeout: %s", std::strerror(errno));
+        return;
+    }
+
+    const auto sessionStart = std::chrono::steady_clock::now();
+
+    WsServerStream stream(ssl, clientFd);
+
+    auto wsReadFn  = [&stream](void *buf, std::size_t n)
+                     { return stream.readExact(buf, n); };
+    auto wsWriteFn = [&stream](const void *buf, std::size_t n)
+                     { return stream.writeFrame(buf, n); };
+
+    std::uint8_t attemptedAuthVersion = 0;
+    std::uint8_t negotiatedCaps       = kCapNone;
+    bool         isV3                 = false;
+    std::string  clientId = verifyClientAuth(wsReadFn, wsWriteFn, *clientsStore,
+                                             &attemptedAuthVersion, &negotiatedCaps, &isV3);
+
+    if (clientId.empty())
+    {
+        wsWriteFn(&kAuthResultReject, 1);
+        if (attemptedAuthVersion != 0 && registry)
+        {
+            const auto atSec = std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+            ProtoRejectionRecord rec{clientIp, attemptedAuthVersion, static_cast<std::int64_t>(atSec)};
+            std::lock_guard<std::mutex> lk(registry->mtx);
+            registry->protoRejections.push_back(std::move(rec));
+            if (registry->protoRejections.size() > 20)
+                registry->protoRejections.pop_front();
+        }
+        return;
+    }
+    if (!wsWriteFn(&kAuthResultOk, 1)) return;
+    if (isV3 && !wsWriteFn(&negotiatedCaps, 1)) return;
+
+    // ── 3. Inflater setup ────────────────────────────────────────────────────
+    std::unique_ptr<ZlibInflater> inflater;
+    std::vector<std::uint8_t>     inflatedBuf;
+    if (negotiatedCaps & kCapZlib)
+    {
+        inflater = std::make_unique<ZlibInflater>();
+        inflatedBuf.reserve(65536);
+        serverLog(LogLevel::Info,
+                  "ntm-server: [ws] zlib compression active for client %s", clientId.c_str());
+    }
+
+    // ── 4. Registry ──────────────────────────────────────────────────────────
+    struct RegistryCleanup {
+        std::shared_ptr<ClientRegistry> reg; std::string id;
+        ~RegistryCleanup() { if (reg) reg->removeClient(id); }
+    } regCleanup{registry, clientId};
+
+    if (registry && !clientIp.empty())
+    {
+        std::lock_guard<std::mutex> lk(registry->mtx);
+        registry->ipToClientId[clientIp] = clientId;
+    }
+
+    // ── 5. Data-phase timeout + data loop ────────────────────────────────────
+    {
+        unsigned pollSecs = config.idle_timeout_seconds;
+        if (pollSecs == 0 || pollSecs > 30) pollSecs = 30;
+        if (!setSocketTimeout(clientFd, pollSecs))
+        {
+            serverLog(LogLevel::Err,
+                      "ntm-server: [ws] cannot set read-loop timeout: %s",
+                      std::strerror(errno));
+            return;
+        }
+    }
+
+    serverLog(LogLevel::Info,
+              "ntm-server: [ws] client %s authenticated from %s",
+              clientId.c_str(), peerAddr.c_str());
+
+    RecvFn wsRecvFn = [&stream](char *buf, int maxLen) -> int {
+        return stream.recv(buf, maxLen);
+    };
+
+    runWireDataLoop(wsRecvFn, clientId, clientIp, sessionStart,
+                    registry, stats, ipDataUpdater,
+                    inflater, inflatedBuf, config);
+
+    } // end try
+    catch (const std::exception &e)
+    {
+        serverLog(LogLevel::Err, "ntm-server: [ws] thread exception: %s", e.what());
+    }
+    catch (...)
+    {
+        serverLog(LogLevel::Err, "ntm-server: [ws] thread caught unknown exception");
+    }
 }
 
 void statsPrinterThread(TrafficStats &stats, std::size_t maxSnapshotEntriesForPrint,
@@ -2295,12 +2735,30 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
             continue;
         }
 
-        // ALPN negotiation result — determines which handler handles this connection.
+        // ALPN negotiation result — primary routing signal.
         const unsigned char *alpnData = nullptr;
         unsigned int         alpnLen  = 0;
         SSL_get0_alpn_selected(ssl, &alpnData, &alpnLen);
         const bool isWireClient = (alpnLen == 8 &&
                                    std::memcmp(alpnData, "ntm-wire", 8) == 0);
+
+        // WebSocket detection via SSL_peek — works for both paths:
+        //   • Direct (ALPN "ntm-wire"):  ntm-client with WebSocketTransport sends
+        //     "GET /ntm-ws HTTP/1.1\r\n..." before any auth bytes.
+        //   • Via Cloudflare (ALPN "http/1.1"): Cloudflare forwards the client's
+        //     WebSocket upgrade request; still starts with "GET /ntm-ws".
+        // SSL_peek does NOT consume bytes — wsConnectionThread re-reads the full
+        // HTTP request.
+        bool isWebSocket = false;
+        {
+            static_assert(sizeof(ws::kWsPath) > 1, "kWsPath must be non-empty");
+            const std::string wsPrefix = std::string("GET ") + ws::kWsPath;
+            char peekBuf[32] = {};
+            int  peeked = SSL_peek(ssl, peekBuf, static_cast<int>(wsPrefix.size()));
+            if (peeked == static_cast<int>(wsPrefix.size()) &&
+                std::memcmp(peekBuf, wsPrefix.data(), wsPrefix.size()) == 0)
+                isWebSocket = true;
+        }
 
         const int remotePort = static_cast<int>(ntohs(clientAddr.sin_port));
 
@@ -2319,7 +2777,24 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
             workers.emplace_back();
             try
             {
-                if (isWireClient)
+                if (isWebSocket)
+                {
+                    // ntm-client using WebSocketTransport (direct or via Cloudflare).
+                    workers.back().t = std::thread(wsConnectionThread,
+                              clientFd,
+                              peerAddr,
+                              clientIpStr,
+                              clientsStore,
+                              clientRegistry,
+                              std::ref(stats),
+                              std::ref(ipDataUpdater),
+                              std::ref(activeConnections),
+                              std::ref(perIPLimiter),
+                              std::cref(config),
+                              ssl,
+                              doneFlag);
+                }
+                else if (isWireClient)
                 {
                     // ntm-client data-ingestion connection (ALPN "ntm-wire").
                     workers.back().t = std::thread(connectionThread,

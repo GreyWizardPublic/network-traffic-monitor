@@ -1,6 +1,7 @@
 #include "client_core.hpp"
 #include "client_platform.hpp"
 #include "client.hpp"
+#include "client_config_parse.hpp"  // parseConfigLine + loadClientConfig (inline)
 
 #include <openssl/evp.h>
 #include <openssl/pem.h>
@@ -237,12 +238,13 @@ bool verifyServerIdentityAndPin(SSL *ssl, const std::string &host,
 // Ed25519 client authentication
 // ---------------------------------------------------------------------------
 
-bool performClientAuth(void *sslVoid, std::uintptr_t rawFd,
+bool performClientAuth(ITransport       &transport,
                        const std::string &identityPath,
-                       bool isDaemon, bool verbose,
-                       std::string *errOut,
-                       bool requestCompression,
-                       std::uint8_t *negotiatedCapsOut)
+                       bool               isDaemon,
+                       bool               verbose,
+                       std::string       *errOut,
+                       bool               requestCompression,
+                       std::uint8_t      *negotiatedCapsOut)
 {
     auto setErr  = [&](const char *msg) { if (errOut) *errOut = msg; };
     auto logInfo = [&](const std::string &msg) {
@@ -259,9 +261,6 @@ bool performClientAuth(void *sslVoid, std::uintptr_t rawFd,
     }
 
     logInfo("ntm-client: [auth] identity file: " + identityPath);
-
-    SSL *ssl = static_cast<SSL *>(sslVoid);
-    platform::SockFd fd = static_cast<platform::SockFd>(rawFd);
 
     platform::checkIdentityFilePermissions(identityPath, isDaemon, verbose);
 
@@ -322,7 +321,7 @@ bool performClientAuth(void *sslVoid, std::uintptr_t rawFd,
     std::uint8_t version = static_cast<std::uint8_t>(kAuthVersionV3);
     logInfo("ntm-client: [auth] step 1/5 — sending auth version "
             + std::to_string(kAuthVersionV3));
-    if (!platform::writeExact(ssl, fd, &version, 1))
+    if (!transport.writeExact(&version, 1))
     {
         setErr("failed to send auth version");
         logErr("ntm-client: [auth] step 1/5 FAILED — could not write version byte "
@@ -334,7 +333,7 @@ bool performClientAuth(void *sslVoid, std::uintptr_t rawFd,
     // ── Step 2: read 32-byte nonce from server ───────────────────────────────
     logInfo("ntm-client: [auth] step 2/5 — reading 32-byte nonce from server...");
     std::uint8_t nonce[kAuthNonceLen];
-    if (!platform::readExact(ssl, fd, nonce, sizeof(nonce)))
+    if (!transport.readExact(nonce, sizeof(nonce)))
     {
         setErr("failed to read auth nonce");
         logErr("ntm-client: [auth] step 2/5 FAILED — server did not send a nonce "
@@ -393,7 +392,7 @@ bool performClientAuth(void *sslVoid, std::uintptr_t rawFd,
     std::memcpy(msg + kAuthPubkeyLen, sig, kAuthSignatureLen);
     msg[kAuthPubkeyLen + kAuthSignatureLen] = clientCaps;
 
-    if (!platform::writeExact(ssl, fd, msg, sizeof(msg)))
+    if (!transport.writeExact(msg, sizeof(msg)))
     {
         setErr("failed to send auth message");
         logErr("ntm-client: [auth] step 4/5 FAILED — could not write auth message");
@@ -403,7 +402,7 @@ bool performClientAuth(void *sslVoid, std::uintptr_t rawFd,
     // ── Step 5: read result byte ─────────────────────────────────────────────
     logInfo("ntm-client: [auth] step 5/5 — reading auth result from server...");
     std::uint8_t result = 0xff;
-    if (!platform::readExact(ssl, fd, &result, 1))
+    if (!transport.readExact(&result, 1))
     {
         setErr("failed to read auth result");
         logErr("ntm-client: [auth] step 5/5 FAILED — server closed connection "
@@ -425,7 +424,7 @@ bool performClientAuth(void *sslVoid, std::uintptr_t rawFd,
     // ── v3: read negotiated capability byte ──────────────────────────────────
     logInfo("ntm-client: [auth] reading negotiated capability byte from server...");
     std::uint8_t negotiatedCaps = kCapNone;
-    if (!platform::readExact(ssl, fd, &negotiatedCaps, 1))
+    if (!transport.readExact(&negotiatedCaps, 1))
     {
         setErr("failed to read negotiated capabilities from server");
         logErr("ntm-client: [auth] could not read negotiated caps byte "
@@ -446,157 +445,7 @@ bool performClientAuth(void *sslVoid, std::uintptr_t rawFd,
 // Config loader
 // ---------------------------------------------------------------------------
 
-static bool parseConfigLine(const std::string &key, const std::string &val,
-                            ClientConfig &out)
-{
-    std::string v = val.size() <= kMaxConfigValueLen ? val : val.substr(0, kMaxConfigValueLen);
-    if (key == "server")       { out.server = v; return true; }
-    if (key == "port")
-    {
-        try {
-            unsigned long p = std::stoul(v);
-            if (p != 0 && p <= 65535) out.port = static_cast<std::uint16_t>(p);
-        } catch (const std::exception &) {}
-        return true;
-    }
-    if (key == "identity")     { out.identityPath = v; return true; }
-    if (key == "ca")           { out.tlsCaPath = v; return true; }
-    if (key == "server_cert")  { out.tlsServerCertPath = v; return true; }
-    if (key == "send_buffer_bytes")
-    {
-        try {
-            unsigned long n = std::stoul(v);
-            if (n < kSendBufferMinBytes) n = kSendBufferMinBytes;
-            if (n > kMaxIOBytes)         n = kMaxIOBytes;
-            out.sendBufferBytes = static_cast<std::size_t>(n);
-        } catch (const std::exception &) {}
-        return true;
-    }
-    if (key == "verbose")
-    {
-        std::string lower = v;
-        std::transform(lower.begin(), lower.end(), lower.begin(),
-                       [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-        out.verbose = (lower == "1" || lower == "true" || lower == "yes");
-        return true;
-    }
-    if (key == "external_ip_url")
-    {
-        if (!v.empty()) out.externalIpUrl = v;
-        return true;
-    }
-    if (key == "external_ip_timeout_ms")
-    {
-        try {
-            unsigned long n = std::stoul(v);
-            if (n >= 500 && n <= 30000)
-                out.externalIpTimeoutMs = static_cast<unsigned>(n);
-        } catch (const std::exception &) {}
-        return true;
-    }
-    if (key == "reconnect_attempts")
-    {
-        try {
-            unsigned long n = std::stoul(v);
-            if (n >= 1 && n <= 1000) out.reconnectMaxAttempts = static_cast<unsigned>(n);
-        } catch (const std::exception &) {}
-        return true;
-    }
-    if (key == "reconnect_interval_sec")
-    {
-        try {
-            unsigned long n = std::stoul(v);
-            if (n >= 1 && n <= 3600) out.reconnectIntervalSec = static_cast<unsigned>(n);
-        } catch (const std::exception &) {}
-        return true;
-    }
-    if (key == "auto_update")
-    {
-        std::string lower = v;
-        std::transform(lower.begin(), lower.end(), lower.begin(),
-                       [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-        out.auto_update = (lower == "1" || lower == "true" || lower == "yes");
-        return true;
-    }
-    if (key == "web_port")
-    {
-        // Deprecated since server v1.15.0: the server uses one unified port
-        // (port=) for both data-ingestion and the HTTPS dashboard API.
-        // The key is still accepted so existing config files don't error, but
-        // the value is ignored — the auto-updater uses config.port instead.
-        std::cerr << "ntm-client: config: 'web_port' is deprecated since server "
-                     "v1.15.0 (unified port); the value is ignored. "
-                     "Remove it from your config file.\n";
-        return true;
-    }
-    if (key == "agg_target_lines_per_sec")
-    {
-        try {
-            unsigned long n = std::stoul(v);
-            out.aggTargetLinesPerSec = static_cast<std::uint32_t>(std::min(n, 1000000ul));
-        } catch (const std::exception &) {}
-        return true;
-    }
-    if (key == "agg_min_interval_ms")
-    {
-        try {
-            unsigned long n = std::stoul(v);
-            out.aggMinIntervalMs = static_cast<std::uint32_t>(std::clamp(n, 50ul, 5000ul));
-        } catch (const std::exception &) {}
-        return true;
-    }
-    if (key == "agg_max_interval_ms")
-    {
-        try {
-            unsigned long n = std::stoul(v);
-            out.aggMaxIntervalMs = static_cast<std::uint32_t>(std::clamp(n, 100ul, 60000ul));
-        } catch (const std::exception &) {}
-        return true;
-    }
-    if (key == "agg_max_flows")
-    {
-        try {
-            unsigned long n = std::stoul(v);
-            out.aggMaxFlows = static_cast<std::uint32_t>(std::clamp(n, 100ul, 1000000ul));
-        } catch (const std::exception &) {}
-        return true;
-    }
-    if (key == "compress")
-    {
-        std::string lower = v;
-        std::transform(lower.begin(), lower.end(), lower.begin(),
-                       [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-        out.useCompression = !(lower == "0" || lower == "false" || lower == "no");
-        return true;
-    }
-    return false;
-}
-
-bool loadClientConfig(const std::string &configPath, ClientConfig &out)
-{
-    std::ifstream f(configPath);
-    if (!f) return false;
-    std::string line;
-    while (std::getline(f, line))
-    {
-        if (line.size() > kMaxConfigLineLen)
-            line.resize(kMaxConfigLineLen);
-        if (!line.empty() && line.back() == '\r')
-            line.pop_back();
-        std::size_t start = line.find_first_not_of(" \t");
-        if (start == std::string::npos || line[start] == '#') continue;
-        std::size_t eq = line.find('=', start);
-        if (eq == std::string::npos) continue;
-        std::string key = line.substr(start, eq - start);
-        std::size_t keyEnd = key.find_last_not_of(" \t");
-        if (keyEnd != std::string::npos && keyEnd < key.size())
-            key.resize(keyEnd + 1);
-        std::string val = line.substr(eq + 1);
-        std::size_t valStart = val.find_first_not_of(" \t");
-        if (valStart != std::string::npos) val = val.substr(valStart);
-        parseConfigLine(key, val, out);
-    }
-    return true;
-}
+// parseConfigLine and loadClientConfig are defined inline in
+// client_config_parse.hpp (included above).  No further definitions needed here.
 
 } // namespace ntm

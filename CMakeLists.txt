@@ -33,6 +33,8 @@ set(NTM_CLIENT_COMMON_SOURCES
     src/client_main.cpp
     src/client_core.cpp
     src/client_impl.cpp
+    src/client_transport_tcptls.cpp
+    src/client_transport_websocket.cpp
     src/updater.cpp
 )
 
@@ -183,6 +185,9 @@ if(NOT WIN32)
         tests/test_parse_data_line.cpp
         tests/test_proto_constants.cpp
         tests/test_web_auth.cpp
+        tests/test_client_http_util.cpp
+        tests/test_client_websocket.cpp
+        tests/test_client_config.cpp
     )
     target_include_directories(ntm-tests PRIVATE src tests)
     # ntm_types.hpp uses POSIX socket headers for isLanIP(); no extra libs needed.
