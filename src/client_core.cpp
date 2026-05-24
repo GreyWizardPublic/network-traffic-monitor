@@ -27,6 +27,7 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <string>
 
 namespace ntm
@@ -104,23 +105,69 @@ bool sha256Fingerprint(const X509 *cert, unsigned char out[32])
     return cert && X509_digest(cert, EVP_sha256(), out, &n) == 1 && n == 32;
 }
 
+// Format a 32-byte buffer as lowercase hex (64 chars + NUL).
+static std::string hexDump32(const unsigned char b[32])
+{
+    static const char kHex[] = "0123456789abcdef";
+    std::string out;
+    out.reserve(64);
+    for (int i = 0; i < 32; ++i)
+    {
+        out.push_back(kHex[(b[i] >> 4) & 0xf]);
+        out.push_back(kHex[b[i] & 0xf]);
+    }
+    return out;
+}
+
 bool verifyServerIdentityAndPin(SSL *ssl, const std::string &host,
                                 const std::string &pinnedServerCertPath,
                                 bool verbose, bool isDaemon)
 {
     if (!ssl) return false;
 
+    // ── ALPN ────────────────────────────────────────────────────────────────
+    // Log the ALPN the server actually selected. If this is "http/1.1" instead
+    // of "ntm-wire", the connection went through an HTTP proxy (e.g. Cloudflare)
+    // that does not forward the ntm-wire protocol — the auth handshake will fail.
+    if (verbose)
+    {
+        const unsigned char *alpnData = nullptr;
+        unsigned int alpnLen = 0;
+        SSL_get0_alpn_selected(ssl, &alpnData, &alpnLen);
+        std::string alpn = alpnLen ? std::string(reinterpret_cast<const char *>(alpnData), alpnLen)
+                                   : "(none negotiated)";
+        const bool alpnOk = (alpn == "ntm-wire");
+        platform::ntmLog(alpnOk ? platform::LogLevel::Info : platform::LogLevel::Warn,
+                         isDaemon,
+                         "ntm-client: [tls] ALPN negotiated: '" + alpn + "'"
+                         + (alpnOk ? "" : " — expected 'ntm-wire'; connection may be going through an HTTP proxy"));
+    }
+
     X509 *peer = SSL_get_peer_certificate(ssl);
     if (!peer)
     {
-        if (verbose)
-            platform::ntmLog(platform::LogLevel::Err, isDaemon,
-                             "ntm-client: no peer certificate presented by server");
+        platform::ntmLog(platform::LogLevel::Err, isDaemon,
+                         "ntm-client: [tls] server presented no certificate");
         return false;
+    }
+
+    // ── Cert subject & fingerprint ───────────────────────────────────────────
+    if (verbose)
+    {
+        char subj[256] = {};
+        X509_NAME_oneline(X509_get_subject_name(peer), subj, sizeof(subj));
+        platform::ntmLog(platform::LogLevel::Info, isDaemon,
+                         std::string("ntm-client: [tls] server cert subject: ") + subj);
+
+        unsigned char fp[32]{};
+        if (sha256Fingerprint(peer, fp))
+            platform::ntmLog(platform::LogLevel::Info, isDaemon,
+                             "ntm-client: [tls] server cert SHA-256: " + hexDump32(fp));
     }
 
     bool ok = true;
 
+    // ── Hostname / IP check ──────────────────────────────────────────────────
     if (!host.empty())
     {
         unsigned char buf[16];
@@ -130,31 +177,59 @@ bool verifyServerIdentityAndPin(SSL *ssl, const std::string &host,
         else
             ok = (X509_check_host(peer, host.c_str(), 0, 0, nullptr) == 1);
 
-        if (verbose && !ok)
+        if (verbose)
+            platform::ntmLog(ok ? platform::LogLevel::Info : platform::LogLevel::Err, isDaemon,
+                             "ntm-client: [tls] hostname check for '" + host + "': "
+                             + (ok ? "passed" : "FAILED"));
+        else if (!ok)
             platform::ntmLog(platform::LogLevel::Err, isDaemon,
-                             "ntm-client: server certificate hostname/IP check failed for host=" + host);
+                             "ntm-client: server certificate hostname check failed for host=" + host);
     }
 
+    // ── Certificate pinning ──────────────────────────────────────────────────
     if (ok && !pinnedServerCertPath.empty())
     {
+        if (verbose)
+            platform::ntmLog(platform::LogLevel::Info, isDaemon,
+                             "ntm-client: [tls] checking cert pin against: " + pinnedServerCertPath);
         X509 *pinned = loadPemCert(pinnedServerCertPath);
         if (!pinned)
         {
+            platform::ntmLog(platform::LogLevel::Err, isDaemon,
+                             "ntm-client: [tls] cannot load pinned cert from: " + pinnedServerCertPath);
             ok = false;
         }
         else
         {
             unsigned char a[32]{}, b[32]{};
-            ok = sha256Fingerprint(peer, a) && sha256Fingerprint(pinned, b) &&
-                 std::memcmp(a, b, 32) == 0;
+            const bool fpMatch = sha256Fingerprint(peer, a) && sha256Fingerprint(pinned, b) &&
+                                 std::memcmp(a, b, 32) == 0;
             X509_free(pinned);
-            if (verbose && !ok)
+            if (verbose && !fpMatch)
+            {
+                platform::ntmLog(platform::LogLevel::Err, isDaemon,
+                                 "ntm-client: [tls] cert pin mismatch");
+                platform::ntmLog(platform::LogLevel::Err, isDaemon,
+                                 "ntm-client: [tls]   server cert  SHA-256: " + hexDump32(a));
+                platform::ntmLog(platform::LogLevel::Err, isDaemon,
+                                 "ntm-client: [tls]   pinned cert  SHA-256: " + hexDump32(b));
+            }
+            else if (!fpMatch)
                 platform::ntmLog(platform::LogLevel::Err, isDaemon,
                                  "ntm-client: server certificate fingerprint mismatch (pinning failed)");
+            ok = fpMatch;
         }
+    }
+    else if (verbose && pinnedServerCertPath.empty())
+    {
+        platform::ntmLog(platform::LogLevel::Info, isDaemon,
+                         "ntm-client: [tls] cert pinning: disabled (no --server-cert)");
     }
 
     X509_free(peer);
+    if (verbose)
+        platform::ntmLog(ok ? platform::LogLevel::Info : platform::LogLevel::Err, isDaemon,
+                         std::string("ntm-client: [tls] identity verification: ") + (ok ? "passed" : "FAILED"));
     return ok;
 }
 
@@ -169,8 +244,21 @@ bool performClientAuth(void *sslVoid, std::uintptr_t rawFd,
                        bool requestCompression,
                        std::uint8_t *negotiatedCapsOut)
 {
-    auto setErr = [&](const char *msg) { if (errOut) *errOut = msg; };
-    if (identityPath.empty()) return true;
+    auto setErr  = [&](const char *msg) { if (errOut) *errOut = msg; };
+    auto logInfo = [&](const std::string &msg) {
+        if (verbose) platform::ntmLog(platform::LogLevel::Info, isDaemon, msg);
+    };
+    auto logErr  = [&](const std::string &msg) {
+        platform::ntmLog(platform::LogLevel::Err, isDaemon, msg);
+    };
+
+    if (identityPath.empty())
+    {
+        logInfo("ntm-client: [auth] no identity file configured — skipping auth");
+        return true;
+    }
+
+    logInfo("ntm-client: [auth] identity file: " + identityPath);
 
     SSL *ssl = static_cast<SSL *>(sslVoid);
     platform::SockFd fd = static_cast<platform::SockFd>(rawFd);
@@ -181,7 +269,7 @@ bool performClientAuth(void *sslVoid, std::uintptr_t rawFd,
     if (!fp)
     {
         setErr("cannot open identity file");
-        std::cerr << "ntm-client: cannot open identity file: " << identityPath << "\n";
+        logErr("ntm-client: [auth] cannot open identity file: " + identityPath);
         return false;
     }
 
@@ -190,14 +278,16 @@ bool performClientAuth(void *sslVoid, std::uintptr_t rawFd,
     if (!pkey)
     {
         setErr("failed to read Ed25519 private key");
-        std::cerr << "ntm-client: failed to read Ed25519 private key from " << identityPath << "\n";
+        logErr("ntm-client: [auth] failed to read private key from: " + identityPath);
+        ERR_print_errors_fp(stderr);
         return false;
     }
 
     if (EVP_PKEY_id(pkey) != EVP_PKEY_ED25519)
     {
         setErr("identity key must be Ed25519");
-        std::cerr << "ntm-client: identity key must be Ed25519\n";
+        logErr("ntm-client: [auth] key type is not Ed25519 (got type id="
+               + std::to_string(EVP_PKEY_id(pkey)) + ")");
         EVP_PKEY_free(pkey);
         return false;
     }
@@ -207,29 +297,65 @@ bool performClientAuth(void *sslVoid, std::uintptr_t rawFd,
     if (EVP_PKEY_get_raw_public_key(pkey, pubkey, &pubLen) != 1 || pubLen != kAuthPubkeyLen)
     {
         setErr("failed to get public key");
+        logErr("ntm-client: [auth] failed to extract Ed25519 public key");
         EVP_PKEY_free(pkey);
         return false;
     }
 
-    // Auth v3: send version, receive nonce, send pubkey+sig+caps, receive result+neg_caps.
-    // Old servers that only know v2 will reject this; for a mixed fleet the operator must
-    // update the server first (it accepts both v2 and v3 after this upgrade).
+    if (verbose)
+    {
+        // Log the first 8 bytes of pubkey so the operator can match it against
+        // the server's allowed-keys file without exposing the full key.
+        static const char kHex[] = "0123456789abcdef";
+        std::string prefix;
+        for (int i = 0; i < 8; ++i)
+        {
+            prefix.push_back(kHex[(pubkey[i] >> 4) & 0xf]);
+            prefix.push_back(kHex[pubkey[i] & 0xf]);
+        }
+        logInfo("ntm-client: [auth] public key prefix (first 8B): " + prefix + "...");
+    }
+
+    // ── Step 1: send auth version ────────────────────────────────────────────
+    // Auth v3: send version byte, receive 32-byte nonce, send pubkey+sig+caps,
+    // receive result byte + negotiated caps byte.
     std::uint8_t version = static_cast<std::uint8_t>(kAuthVersionV3);
+    logInfo("ntm-client: [auth] step 1/5 — sending auth version "
+            + std::to_string(kAuthVersionV3));
     if (!platform::writeExact(ssl, fd, &version, 1))
     {
         setErr("failed to send auth version");
+        logErr("ntm-client: [auth] step 1/5 FAILED — could not write version byte "
+               "(server closed connection immediately after TLS?)");
         EVP_PKEY_free(pkey);
         return false;
     }
 
+    // ── Step 2: read 32-byte nonce from server ───────────────────────────────
+    logInfo("ntm-client: [auth] step 2/5 — reading 32-byte nonce from server...");
     std::uint8_t nonce[kAuthNonceLen];
     if (!platform::readExact(ssl, fd, nonce, sizeof(nonce)))
     {
         setErr("failed to read auth nonce");
+        logErr("ntm-client: [auth] step 2/5 FAILED — server did not send a nonce "
+               "(wrong port? HTTP proxy in the path? server not in wire mode?)");
         EVP_PKEY_free(pkey);
         return false;
     }
+    if (verbose)
+    {
+        static const char kHex[] = "0123456789abcdef";
+        std::string nonceHex;
+        for (std::size_t i = 0; i < kAuthNonceLen; ++i)
+        {
+            nonceHex.push_back(kHex[(nonce[i] >> 4) & 0xf]);
+            nonceHex.push_back(kHex[nonce[i] & 0xf]);
+        }
+        logInfo("ntm-client: [auth] step 2/5 ok — nonce: " + nonceHex);
+    }
 
+    // ── Step 3: sign nonce ───────────────────────────────────────────────────
+    logInfo("ntm-client: [auth] step 3/5 — signing nonce with Ed25519 key...");
     std::string toSign(reinterpret_cast<const char *>(kAuthSignPrefixV2), kAuthSignPrefixV2Len);
     toSign.append(reinterpret_cast<const char *>(nonce), sizeof(nonce));
 
@@ -248,13 +374,20 @@ bool performClientAuth(void *sslVoid, std::uintptr_t rawFd,
     if (!ok)
     {
         setErr("Ed25519 sign failed");
-        std::cerr << "ntm-client: Ed25519 sign failed\n";
+        logErr("ntm-client: [auth] step 3/5 FAILED — Ed25519 signing error");
+        ERR_print_errors_fp(stderr);
         return false;
     }
+    logInfo("ntm-client: [auth] step 3/5 ok — signature produced");
 
-    // Build auth message: pubkey (32B) + sig (64B) + capability byte (1B).
-    // kCapZlib requests zlib compression on the data phase.
+    // ── Step 4: send pubkey + signature + capability byte ────────────────────
     const std::uint8_t clientCaps = requestCompression ? kCapZlib : kCapNone;
+    char capsBuf[32];
+    std::snprintf(capsBuf, sizeof(capsBuf), "0x%02x%s", clientCaps,
+                  (clientCaps & kCapZlib) ? " (zlib requested)" : "");
+    logInfo(std::string("ntm-client: [auth] step 4/5 — sending pubkey(32B) + sig(64B) + caps(")
+            + capsBuf + ")...");
+
     std::uint8_t msg[kAuthPubkeyLen + kAuthSignatureLen + 1];
     std::memcpy(msg, pubkey, kAuthPubkeyLen);
     std::memcpy(msg + kAuthPubkeyLen, sig, kAuthSignatureLen);
@@ -263,25 +396,48 @@ bool performClientAuth(void *sslVoid, std::uintptr_t rawFd,
     if (!platform::writeExact(ssl, fd, msg, sizeof(msg)))
     {
         setErr("failed to send auth message");
+        logErr("ntm-client: [auth] step 4/5 FAILED — could not write auth message");
         return false;
     }
 
-    // Read auth result.
+    // ── Step 5: read result byte ─────────────────────────────────────────────
+    logInfo("ntm-client: [auth] step 5/5 — reading auth result from server...");
     std::uint8_t result = 0xff;
-    if (!platform::readExact(ssl, fd, &result, 1) || result != kAuthResultOk)
+    if (!platform::readExact(ssl, fd, &result, 1))
+    {
+        setErr("failed to read auth result");
+        logErr("ntm-client: [auth] step 5/5 FAILED — server closed connection "
+               "without sending result (key not registered on server?)");
+        return false;
+    }
+    char resultBuf[64];
+    std::snprintf(resultBuf, sizeof(resultBuf), "0x%02x (%s)",
+                  result, result == kAuthResultOk ? "accepted" : "REJECTED");
+    logInfo(std::string("ntm-client: [auth] step 5/5 — server result: ") + resultBuf);
+    if (result != kAuthResultOk)
     {
         setErr("server rejected authentication (key not in server allowed list?)");
-        std::cerr << "ntm-client: server rejected authentication\n";
+        logErr("ntm-client: [auth] authentication rejected — is this client's public key "
+               "in the server's allowed_keys file?");
         return false;
     }
 
-    // v3: read the server's negotiated capability byte.
+    // ── v3: read negotiated capability byte ──────────────────────────────────
+    logInfo("ntm-client: [auth] reading negotiated capability byte from server...");
     std::uint8_t negotiatedCaps = kCapNone;
     if (!platform::readExact(ssl, fd, &negotiatedCaps, 1))
     {
         setErr("failed to read negotiated capabilities from server");
+        logErr("ntm-client: [auth] could not read negotiated caps byte "
+               "(server may be too old — pre-v3 auth?)");
         return false;
     }
+    char negCapsBuf[64];
+    std::snprintf(negCapsBuf, sizeof(negCapsBuf), "0x%02x%s", negotiatedCaps,
+                  (negotiatedCaps & kCapZlib) ? " (zlib enabled)" : " (no compression)");
+    logInfo(std::string("ntm-client: [auth] negotiated caps: ") + negCapsBuf);
+    logInfo("ntm-client: [auth] authentication complete — all steps passed");
+
     if (negotiatedCapsOut) *negotiatedCapsOut = negotiatedCaps;
     return true;
 }

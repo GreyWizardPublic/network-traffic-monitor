@@ -11,6 +11,7 @@
 #include <openssl/evp.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
+#include <openssl/x509.h>
 
 #include <pcap/pcap.h>
 
@@ -405,8 +406,23 @@ private:
     {
         if (platform::sockValid(fd_)) return true;
 
+        auto logInfo = [&](const std::string &msg) {
+            if (verbose_) platform::ntmLog(platform::LogLevel::Info, isDaemon_, msg);
+        };
+        auto logErr = [&](const std::string &msg) {
+            platform::ntmLog(platform::LogLevel::Err, isDaemon_, msg);
+        };
+
+        logInfo("ntm-client: [connect] attempting TCP connect to "
+                + host_ + ":" + std::to_string(port_));
+
         SockFd fd = platform::connectToServer(host_, port_, lastError_);
-        if (!platform::sockValid(fd)) return false;
+        if (!platform::sockValid(fd))
+        {
+            logErr("ntm-client: [connect] TCP connect failed: " + lastError_);
+            return false;
+        }
+        logInfo("ntm-client: [connect] TCP connection established");
 
         platform::setSendBufferSize(fd, 4 * 1024 * 1024);
 
@@ -425,29 +441,79 @@ private:
                 unsigned char ipBuf[16];
                 const bool isIp = (::inet_pton(AF_INET,  host_.c_str(), ipBuf) == 1) ||
                                   (::inet_pton(AF_INET6, host_.c_str(), ipBuf) == 1);
-                if (!isIp) SSL_set_tlsext_host_name(ssl, host_.c_str());
+                if (!isIp)
+                {
+                    SSL_set_tlsext_host_name(ssl, host_.c_str());
+                    logInfo("ntm-client: [connect] TLS SNI set to: " + host_);
+                }
+                else
+                    logInfo("ntm-client: [connect] TLS SNI skipped (IP literal)");
             }
 #ifdef _WIN32
             SSL_set_fd(ssl, static_cast<int>(fd));
 #else
             SSL_set_fd(ssl, fd);
 #endif
+            logInfo("ntm-client: [connect] starting TLS handshake (ALPN offered: ntm-wire)...");
             if (SSL_connect(ssl) != 1)
             {
+                // Collect the full OpenSSL error chain — this is the most useful
+                // information for diagnosing cert/CA/handshake failures.
+                char errBuf[256];
+                unsigned long opensslErr;
+                std::string errChain;
+                while ((opensslErr = ERR_get_error()) != 0)
+                {
+                    ERR_error_string_n(opensslErr, errBuf, sizeof(errBuf));
+                    if (!errChain.empty()) errChain += "; ";
+                    errChain += errBuf;
+                }
                 lastError_ = "TLS handshake failed";
-                ERR_print_errors_fp(stderr);
+                logErr("ntm-client: [connect] TLS handshake FAILED"
+                       + (errChain.empty() ? "" : ": " + errChain));
                 SSL_free(ssl);
                 platform::closeSocket(fd);
                 return false;
             }
+
+            // Log negotiated TLS details — protocol version, cipher, and the ALPN
+            // the server selected. If ALPN is "http/1.1" instead of "ntm-wire",
+            // the connection went through an HTTP proxy (Cloudflare etc.) and the
+            // binary auth handshake will fail immediately after this point.
+            if (verbose_)
+            {
+                const char *tlsVer = SSL_get_version(ssl);
+                const char *cipher  = SSL_get_cipher(ssl);
+                const unsigned char *alpnData = nullptr;
+                unsigned int alpnLen = 0;
+                SSL_get0_alpn_selected(ssl, &alpnData, &alpnLen);
+                std::string alpn = alpnLen
+                    ? std::string(reinterpret_cast<const char *>(alpnData), alpnLen)
+                    : "(none)";
+                logInfo(std::string("ntm-client: [connect] TLS handshake ok: ")
+                        + (tlsVer ? tlsVer : "?") + " / " + (cipher ? cipher : "?")
+                        + " / ALPN=" + alpn);
+                if (alpn != "ntm-wire")
+                    platform::ntmLog(platform::LogLevel::Warn, isDaemon_,
+                        "ntm-client: [connect] WARNING — server selected ALPN='" + alpn
+                        + "' not 'ntm-wire'. The connection is likely going through an HTTP "
+                        "proxy (e.g. Cloudflare). The binary auth handshake will fail.");
+            }
+
+            logInfo("ntm-client: [connect] verifying server identity...");
             if (!verifyServerIdentityAndPin(ssl, host_, tlsServerCertPath_,
                                             verbose_, isDaemon_))
             {
                 lastError_ = "server identity verification failed";
+                logErr("ntm-client: [connect] server identity verification FAILED");
                 SSL_free(ssl);
                 platform::closeSocket(fd);
                 return false;
             }
+        }
+        else
+        {
+            logInfo("ntm-client: [connect] WARNING — no TLS context; connecting in plaintext");
         }
 
         std::uint8_t negotiatedCaps = kCapNone;
@@ -470,19 +536,22 @@ private:
             deflater_.reset();
         }
 
+        logInfo("ntm-client: [connect] sending address announce (X/A lines)...");
         if (!sendAnnounce(ssl, fd))
         {
             if (ssl) { SSL_shutdown(ssl); SSL_free(ssl); }
             platform::closeSocket(fd);
             lastError_ = "failed to send address announce";
+            logErr("ntm-client: [connect] address announce FAILED");
             return false;
         }
 
         fd_ = fd;
         ssl_ = ssl;
         sessionStart_ = std::chrono::steady_clock::now();
-        std::cerr << "ntm-client: connected to " << host_ << ":" << port_
-                  << (ssl ? " (TLS, session max 6h)" : " (plain)") << "\n";
+        platform::ntmLog(platform::LogLevel::Info, isDaemon_,
+                         "ntm-client: connected to " + host_ + ":" + std::to_string(port_)
+                         + (ssl ? " (TLS, session max 6h)" : " (plain)"));
         return true;
     }
 };
