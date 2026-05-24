@@ -5,7 +5,7 @@
 #include "web_dashboard.hpp"
 #include "web_auth.hpp"
 #include "proto_client_server.hpp"
-#include "version.hpp"
+#include "server_version.hpp"
 
 #include <algorithm>
 #include <array>

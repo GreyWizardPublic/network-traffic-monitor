@@ -4,7 +4,8 @@
 
 #include "proto_client_server.hpp"
 #include "ntm_types.hpp"
-#include "version.hpp"
+#include "server_version.hpp"
+#include "server_signing.hpp"    // ML-DSA-65 binary signature verification
 #include "web_dashboard.hpp"     // transitively includes webauthn.hpp
 // httplib.h comes transitively via web_dashboard.hpp
 
@@ -30,6 +31,7 @@
 #include <cctype>
 #include <cerrno>
 #include <chrono>
+#include <climits>
 #include <csignal>
 #include <cstdarg>
 #include <cstdint>
@@ -2935,6 +2937,53 @@ static bool parsePortArg(const char *flag, const char *valStr, std::uint16_t &ou
 
 int main(int argc, char *argv[])
 {
+    // -------------------------------------------------------------------------
+    // Step 0: ML-DSA-65 binary signature verification.
+    // This runs before any other initialisation so a tampered or unsigned binary
+    // is rejected immediately.  The signature file path defaults to the binary
+    // path + ".sig"; override with --signature-file on the command line.
+    // -------------------------------------------------------------------------
+    {
+        // Resolve the running binary path via /proc/self/exe (Linux).
+        char resolvedBin[PATH_MAX] = {};
+        ssize_t rlen = readlink("/proc/self/exe", resolvedBin, sizeof(resolvedBin) - 1);
+        if (rlen <= 0)
+        {
+            // Fallback: use argv[0] (may be relative; best-effort)
+            std::strncpy(resolvedBin, argv[0], sizeof(resolvedBin) - 1);
+        }
+        const std::string binaryPath(resolvedBin);
+
+        // Check if caller specified --signature-file
+        std::string sigPath;
+        for (int i = 1; i < argc; ++i)
+        {
+            if (std::string(argv[i]) == "--signature-file" && i + 1 < argc)
+            {
+                sigPath = argv[++i];
+                break;
+            }
+        }
+        if (sigPath.empty())
+            sigPath = binaryPath + ".sig";
+
+        std::string sigErr;
+        if (!ntm::signing::verifyServerSignature(binaryPath, sigPath, sigErr))
+        {
+            std::fprintf(stderr,
+                "ntm-server: FATAL — binary signature verification failed.\n"
+                "  Error:     %s\n"
+                "  Binary:    %s\n"
+                "  Signature: %s\n"
+                "  The binary may be tampered, unsigned, or the .sig file is missing.\n"
+                "  Deploy both the binary and its matching .sig file.\n"
+                "  Refusing to start.\n",
+                sigErr.c_str(), binaryPath.c_str(), sigPath.c_str());
+            return 1;
+        }
+        std::fprintf(stderr, "ntm-server: binary signature verified OK (ML-DSA-65)\n");
+    }
+
     bool daemonMode = false;
     bool verbose = false;
     std::string configPath;
@@ -2952,6 +3001,7 @@ int main(int argc, char *argv[])
             std::cout <<
                 "Usage: ntm-server [--config FILE] [--daemon] [--verbose] [--port N]\n"
                 "                  [--allowed-keys FILE] [--cert PEM] [--key PEM]\n"
+                "                  [--signature-file SIG]\n"
                 "  --daemon              run as background daemon\n"
                 "  --verbose             enable detailed connection and request logging\n"
                 "  --port N              unified listen port for ntm-client data and HTTPS dashboard\n"
@@ -2960,6 +3010,7 @@ int main(int argc, char *argv[])
                 "  --cert PEM            TLS certificate chain file (leaf + intermediates)\n"
                 "  --key  PEM            TLS private key file\n"
                 "  --config FILE         load settings from key=value config file\n"
+                "  --signature-file SIG  path to ML-DSA-65 .sig file (default: <binary>.sig)\n"
                 "\n"
                 "  TLS (--cert/--key) and client authentication (--allowed-keys) are mandatory.\n"
                 "  All options can also be set in the config file; CLI overrides config.\n"
@@ -3020,6 +3071,8 @@ int main(int argc, char *argv[])
         }
         else if (arg == "--config" && i + 1 < argc)
             ++i;
+        else if (arg == "--signature-file" && i + 1 < argc)
+            ++i;  // already consumed in Step 0; skip here
         else if (arg == "--help" || arg == "-h")
             ;
         else
