@@ -33,14 +33,22 @@ int main(int argc, char *argv[])
         }
         if (arg == "--help" || arg == "-h")
         {
-            std::cout << "Usage: ntm-client [--config FILE] [--daemon] [--server HOST] [--port N]\n"
-                         "             [--identity PEM_PATH] [--ca CA_FILE] [--server-cert SERVER_PEM]\n"
-                         "             [--reconnect-attempts N] [--reconnect-interval SECS]\n"
-                         "             [--no-compress]\n"
+            std::cout << "Usage: ntm-client [--config FILE] [--daemon] [--verbose]\n"
+                         "                  [--server HOST] [--port N]\n"
+                         "                  [--identity PEM_PATH] [--ca CA_FILE] [--server-cert SERVER_PEM]\n"
+                         "                  [--reconnect-attempts N] [--reconnect-interval SECS]\n"
+                         "                  [--no-compress]\n"
+                         "  --daemon                  run as background daemon\n"
+                         "  --verbose                 print detailed connection and authentication diagnostics\n"
+                         "  --server HOST             server hostname or IP (default: 127.0.0.1)\n"
+                         "  --port N                  server port (default: 5555)\n"
+                         "  --identity PEM_PATH       Ed25519 private key for client authentication\n"
+                         "  --ca CA_FILE              CA certificate bundle for TLS server verification\n"
+                         "  --server-cert SERVER_PEM  pin server to a specific certificate (SHA-256 check)\n"
                          "  --reconnect-attempts N    max consecutive reconnect failures before exit (default 10)\n"
                          "  --reconnect-interval SECS seconds between reconnect attempts (default 60)\n"
                          "  --no-compress             disable zlib compression on the data phase\n"
-                         "  All options can be set in the single config file (key=value); CLI overrides.\n";
+                         "  All options can also be set in a config file (key=value); CLI overrides config.\n";
             return 0;
         }
     }
@@ -81,8 +89,6 @@ int main(int argc, char *argv[])
             identityPath = argv[++i];
         else if (arg == "--ca" && i + 1 < argc)
             tlsCaPath = argv[++i];
-        else if (arg == "--server-cert" && i + 1 < argc)
-            tlsServerCertPath = argv[++i];
         else if (arg == "--server-cert" && i + 1 < argc)
             tlsServerCertPath = argv[++i];
         else if (arg == "--verbose")

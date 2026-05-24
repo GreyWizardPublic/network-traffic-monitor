@@ -2460,12 +2460,21 @@ int main(int argc, char *argv[])
         if (arg == "--help" || arg == "-h")
         {
             std::cout <<
-                "Usage: ntm-server [--daemon] [--verbose] [--port N]\n"
+                "Usage: ntm-server [--config FILE] [--daemon] [--verbose] [--port N]\n"
                 "                  [--allowed-keys FILE] [--cert PEM] [--key PEM]\n"
-                "                  [--web-port N] [--web-bind IP]\n"
-                "                  [--config FILE]\n"
+                "  --daemon              run as background daemon\n"
+                "  --verbose             enable detailed connection and request logging\n"
+                "  --port N              unified listen port for ntm-client data and HTTPS dashboard\n"
+                "                        (default: 5555; TLS ALPN routes wire vs HTTP traffic)\n"
+                "  --allowed-keys FILE   path to Ed25519 public keys file (one per line)\n"
+                "  --cert PEM            TLS certificate chain file (leaf + intermediates)\n"
+                "  --key  PEM            TLS private key file\n"
+                "  --config FILE         load settings from key=value config file\n"
+                "\n"
                 "  TLS (--cert/--key) and client authentication (--allowed-keys) are mandatory.\n"
-                "  Options can be set in config file (key=value); command-line overrides config.\n";
+                "  All options can also be set in the config file; CLI overrides config.\n"
+                "  Config-only options (not available on CLI): webauthn_*, admin_password_file,\n"
+                "    trusted_proxy, update_dir, rate limits, aggregation tuning, IP-geo DB.\n";
             return 0;
         }
     }
@@ -2510,13 +2519,15 @@ int main(int argc, char *argv[])
             certPath = argv[++i];
         else if (arg == "--key" && i + 1 < argc)
             keyPath = argv[++i];
-        else if (arg == "--web-port" && i + 1 < argc)
+        else if ((arg == "--web-port" || arg == "--web-bind") && i + 1 < argc)
         {
-            if (!parsePortArg("--web-port", argv[++i], config.web_port))
-                return 1;
+            // --web-port and --web-bind were removed when the server switched to
+            // a unified port (ALPN multiplexing, v1.15.0). They are silently
+            // ignored to avoid breaking existing startup scripts; use --port instead.
+            ++i; // consume the argument value
+            std::cerr << "ntm-server: WARNING: " << arg
+                      << " is deprecated and has no effect (use --port for the unified port)\n";
         }
-        else if (arg == "--web-bind" && i + 1 < argc)
-            config.web_bind = argv[++i];
         else if (arg == "--config" && i + 1 < argc)
             ++i;
         else if (arg == "--help" || arg == "-h")
