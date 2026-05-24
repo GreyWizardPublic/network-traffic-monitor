@@ -83,34 +83,53 @@ bool writeExact(SSL *ssl, SockFd fd, const void *buf, std::size_t n)
 
 SockFd connectToServer(const std::string &host, std::uint16_t port, std::string &errOut)
 {
-    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) { errOut = "socket() failed"; std::perror("socket"); return kInvalidSock; }
+    // Use getaddrinfo so the caller can specify either a hostname ("my.server.com")
+    // or a bare IPv4/IPv6 literal — the previous inet_pton-only path rejected any
+    // hostname, making DNS-based server addresses (e.g. via Cloudflare or any other
+    // domain) silently fail with "invalid server host".
+    // AF_UNSPEC lets getaddrinfo return both IPv4 and IPv6 results; we try each in
+    // order and use the first that connects successfully.
+    const std::string portStr = std::to_string(port);
+    struct addrinfo hints{};
+    hints.ai_family   = AF_UNSPEC;    // accept IPv4 or IPv6
+    hints.ai_socktype = SOCK_STREAM;
 
-    // Bound connect(), the TLS handshake and the Ed25519 auth exchange so a
-    // dead or malicious server that accepts TCP but never replies cannot hang
-    // the client thread indefinitely (which would also block connectionMutex_).
-    // On Linux SO_SNDTIMEO bounds a blocking connect(); SO_RCVTIMEO bounds the
-    // subsequent handshake/auth reads.
+    struct addrinfo *res = nullptr;
+    const int gaiErr = ::getaddrinfo(host.c_str(), portStr.c_str(), &hints, &res);
+    if (gaiErr != 0 || !res)
     {
-        struct timeval tv{ 30, 0 };
-        ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-        ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-    }
-
-    sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_port   = htons(port);
-    if (::inet_pton(AF_INET, host.c_str(), &addr.sin_addr) != 1)
-    {
-        errOut = "invalid server host: " + host;
-        ::close(fd);
+        errOut = "cannot resolve '" + host + "': " + ::gai_strerror(gaiErr);
         return kInvalidSock;
     }
-    if (::connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0)
+
+    SockFd fd = kInvalidSock;
+    for (const struct addrinfo *rp = res; rp; rp = rp->ai_next)
     {
-        errOut = "connect() failed";
-        std::perror("connect");
+        fd = ::socket(rp->ai_family, SOCK_STREAM, 0);
+        if (fd < 0) continue;
+
+        // Bound connect(), the TLS handshake and the Ed25519 auth exchange so a
+        // dead or malicious server that accepts TCP but never replies cannot hang
+        // the client thread indefinitely (which would also block connectionMutex_).
+        // On Linux SO_SNDTIMEO bounds a blocking connect(); SO_RCVTIMEO bounds
+        // the subsequent handshake/auth reads.
+        {
+            struct timeval tv{ 30, 0 };
+            ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+            ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+        }
+
+        if (::connect(fd, rp->ai_addr, rp->ai_addrlen) == 0)
+            break;        // connected on this address — stop trying
+
         ::close(fd);
+        fd = kInvalidSock;
+    }
+    ::freeaddrinfo(res);
+
+    if (fd < 0)
+    {
+        errOut = "connect to " + host + ":" + portStr + " failed: " + std::strerror(errno);
         return kInvalidSock;
     }
     return fd;
