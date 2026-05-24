@@ -6,6 +6,7 @@
 #include "ntm_types.hpp"
 #include "server_version.hpp"
 #include "server_signing.hpp"    // ML-DSA-65 binary signature verification
+#include "server_upgrade.hpp"    // auto-upgrade nonce store + helpers
 #include "web_dashboard.hpp"     // transitively includes webauthn.hpp
 // httplib.h comes transitively via web_dashboard.hpp
 
@@ -2539,6 +2540,39 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
             webCfg.dashboard_ips    = dashboardIpSet;
             webCfg.update_dir       = config.update_dir;
             webCfg.trusted_proxy    = config.trusted_proxy;
+
+            // ── Auto-upgrade endpoint ────────────────────────────────────────
+            // Enabled only when WebAuthn is configured (upgrade endpoint is
+            // admin-authenticated; no WebAuthn = no upgrade endpoint).
+            if (!config.webauthn_rp_id.empty())
+            {
+                // Resolve running binary path via /proc/self/exe.
+                char upgBinBuf[PATH_MAX] = {};
+                ssize_t upgRlen = ::readlink("/proc/self/exe", upgBinBuf, sizeof(upgBinBuf) - 1);
+                if (upgRlen > 0)
+                {
+                    webCfg.upgrade_binary_path = std::string(upgBinBuf);
+                    auto ns = std::make_shared<ntm::upgrade::NonceStore>();
+                    webCfg.upgrade_nonce_store    = ns; // stored as shared_ptr<void>
+                    webCfg.upgrade_server_version = kServerVersion;
+                    webCfg.upgrade_shutdown_cb    = []() {
+                        serverLog(LogLevel::Warn,
+                                  "ntm-server: upgrade applied — draining connections "
+                                  "for 30 s then exiting for systemd restart");
+                        std::this_thread::sleep_for(std::chrono::seconds(30));
+                        ::exit(0);
+                    };
+                    serverLog(LogLevel::Warn,
+                              "ntm-server: auto-upgrade endpoint enabled "
+                              "(binary: %s)", webCfg.upgrade_binary_path.c_str());
+                }
+                else
+                {
+                    serverLog(LogLevel::Warn,
+                              "ntm-server: readlink(/proc/self/exe) failed — "
+                              "auto-upgrade endpoint disabled");
+                }
+            }
 
             if (!webAuthnRP || !webAuthnRP->enabled())
             {
