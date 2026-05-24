@@ -101,8 +101,11 @@ if(WIN32)
         tests/test_main.cpp
         tests/test_flow_aggregator.cpp
         tests/test_windows_client.cpp
-        tests/test_parse_data_line.cpp   # pure logic, no POSIX deps — shared with Linux suite
-        tests/test_proto_constants.cpp   # pure logic, no POSIX deps — shared with Linux suite
+        tests/test_parse_data_line.cpp      # pure logic, no POSIX deps — shared with Linux suite
+        tests/test_proto_constants.cpp      # pure logic, no POSIX deps — shared with Linux suite
+        tests/test_client_http_util.cpp     # pure logic, no POSIX deps — shared with Linux suite
+        tests/test_client_websocket.cpp     # pure logic, no POSIX deps — shared with Linux suite
+        tests/test_client_config.cpp        # pure logic, no POSIX deps — shared with Linux suite
         src/client_core.cpp
         src/client_windows.cpp
     )

@@ -18,8 +18,13 @@
 // Returns false if the file could not be written.
 static bool writeAndLoad(const std::string &contents, ntm::ClientConfig &out)
 {
-    // Use a fixed path under /tmp — the test binary is single-threaded.
+    // Use a platform-appropriate temp path.  On Windows /tmp does not exist;
+    // write to the current directory instead (the test binary is single-threaded).
+#ifdef _WIN32
+    const std::string path = "ntm_test_config_tmp.conf";
+#else
     const std::string path = "/tmp/ntm_test_config.conf";
+#endif
     {
         std::ofstream f(path, std::ios::trunc);
         if (!f) return false;
@@ -37,7 +42,8 @@ static bool writeAndLoad(const std::string &contents, ntm::ClientConfig &out)
 TEST_CASE("loadClientConfig: missing file returns false")
 {
     ntm::ClientConfig cfg;
-    REQUIRE(!ntm::loadClientConfig("/tmp/ntm_no_such_file_39271.conf", cfg));
+    // Use a path that does not exist on any platform.
+    REQUIRE(!ntm::loadClientConfig("ntm_no_such_file_39271.conf", cfg));
 }
 
 TEST_CASE("loadClientConfig: empty config file returns true with default values")
