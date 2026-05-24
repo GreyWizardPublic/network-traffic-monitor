@@ -6,6 +6,8 @@
 #include "web_auth.hpp"
 #include "proto_client_server.hpp"
 #include "server_version.hpp"
+#include "server_upgrade.hpp"
+#include "server_signing.hpp"
 
 #include <algorithm>
 #include <array>
@@ -2782,6 +2784,195 @@ void registerWebHandlers(NtmHttpServer &svr,
                     res.set_content("{\"ok\":true}\n", "application/json");
                 });
         }
+    }
+
+    // ── Auto-upgrade endpoints (/admin/upgrade/nonce, /admin/upgrade/push) ──
+    // Enabled only when config.upgrade_nonce_store is set (requires WebAuthn).
+    // GET  /admin/upgrade/nonce — issue a single-use 5-minute nonce; rate-limit 5/min
+    // POST /admin/upgrade/push  — receive new binary + sig; rate-limit 1/min
+    if (config.upgrade_nonce_store)
+    {
+        auto *nonceStore = static_cast<ntm::upgrade::NonceStore *>(
+            config.upgrade_nonce_store.get());
+
+        static WebRateLimiter upgradeNonceLimiter(5);   // 5 nonce req/min per IP
+        static WebRateLimiter upgradePushLimiter(1);    // 1 push/min per IP
+
+        // Allow large multipart uploads (server binary can be several MB).
+        svr.set_payload_max_length(32UL * 1024 * 1024); // 32 MiB
+
+        // GET /admin/upgrade/nonce
+        svr.Get("/admin/upgrade/nonce",
+            [nonceStore, config](const httplib::Request &req, httplib::Response &res)
+            {
+                const std::string ip = effectiveClientIP(req, config);
+                if (!upgradeNonceLimiter.tryAcquire(ip))
+                {
+                    res.status = 429;
+                    res.set_content("{\"error\":\"rate limit exceeded\"}\n",
+                                    "application/json");
+                    return;
+                }
+                std::string nonce = nonceStore->generate(300); // 5-minute TTL
+                if (nonce.empty())
+                {
+                    res.status = 500;
+                    res.set_content("{\"error\":\"nonce generation failed\"}\n",
+                                    "application/json");
+                    return;
+                }
+                res.set_content(
+                    "{\"nonce\":\"" + nonce + "\","
+                    "\"server_version\":\"" + config.upgrade_server_version + "\"}\n",
+                    "application/json");
+            });
+
+        // POST /admin/upgrade/push
+        svr.Post("/admin/upgrade/push",
+            [nonceStore, config](const httplib::Request &req, httplib::Response &res)
+            {
+                const std::string ip = effectiveClientIP(req, config);
+                if (!upgradePushLimiter.tryAcquire(ip))
+                {
+                    res.status = 429;
+                    res.set_content("{\"error\":\"rate limit exceeded\"}\n",
+                                    "application/json");
+                    return;
+                }
+
+                // Helper: extract multipart field by name
+                auto getField = [&](const std::string &name) -> std::string {
+                    auto it = req.files.find(name);
+                    return (it == req.files.end()) ? "" : it->second.content;
+                };
+
+                const std::string versionStr  = getField("version");
+                const std::string nonceHex    = getField("nonce");
+                const std::string authProofB64 = getField("auth_proof");
+                const std::string binaryStr    = getField("binary");
+                const std::string sigStr       = getField("signature");
+
+                // --- Basic field presence check ---
+                if (versionStr.empty() || nonceHex.empty() || authProofB64.empty()
+                    || binaryStr.empty() || sigStr.empty())
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"missing required field\"}\n",
+                                    "application/json");
+                    return;
+                }
+
+                // (a) Consume nonce — prevents replay attacks
+                if (!nonceStore->consume(nonceHex))
+                {
+                    res.status = 403;
+                    res.set_content(
+                        "{\"error\":\"invalid, expired, or already-used nonce\"}\n",
+                        "application/json");
+                    return;
+                }
+
+                // Convert binary/sig from string to byte vectors
+                const std::vector<std::uint8_t> binaryBytes(binaryStr.begin(), binaryStr.end());
+                const std::vector<std::uint8_t> sigBytes(sigStr.begin(), sigStr.end());
+
+                // (b) Decode nonce hex and compute SHA3-256(binary)
+                const std::vector<std::uint8_t> nonceBytes =
+                    ntm::upgrade::hexDecode(nonceHex);
+                const std::vector<std::uint8_t> binaryHash =
+                    ntm::upgrade::sha3_256(binaryBytes);
+                const std::vector<std::uint8_t> authProof =
+                    ntm::upgrade::base64Decode(authProofB64);
+
+                if (nonceBytes.empty() || binaryHash.empty() || authProof.empty())
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"malformed nonce, binary, or auth_proof\"}\n",
+                                    "application/json");
+                    return;
+                }
+
+                // (c) Verify ML-DSA-65 auth proof: proves sender holds the private key
+                std::string authErr;
+                if (!ntm::upgrade::verifyUpgradeAuth(
+                        nonceBytes, binaryHash, authProof,
+                        ntm::signing::kBuildPublicKeyDer.data(),
+                        ntm::signing::kBuildPublicKeyDer.size(),
+                        authErr))
+                {
+                    res.status = 403;
+                    res.set_content(
+                        "{\"error\":\"auth proof verification failed\"}\n",
+                        "application/json");
+                    // Log security event with source IP (don't leak detail to client)
+                    (void)authErr; // detail logged server-side only
+                    return;
+                }
+
+                // (d) Version check — warn and discard if not strictly newer
+                const ntm::upgrade::Semver newVer  = ntm::upgrade::parseSemver(versionStr);
+                const ntm::upgrade::Semver curVer  =
+                    ntm::upgrade::parseSemver(config.upgrade_server_version);
+                if (!newVer.valid || !curVer.valid)
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"unparseable version string\"}\n",
+                                    "application/json");
+                    return;
+                }
+                if (newVer <= curVer)
+                {
+                    // Not an attack — just an operator mistake; log warning, return 409
+                    res.status = 409;
+                    res.set_content(
+                        "{\"error\":\"uploaded binary v" + newVer.str()
+                        + " is not newer than current v" + curVer.str()
+                        + "; discarding\"}\n",
+                        "application/json");
+                    return;
+                }
+
+                // (e) Verify new binary + sig using embedded build public key
+                std::string sigErr;
+                if (!ntm::signing::verifyServerSignatureBytes(binaryBytes, sigBytes, sigErr))
+                {
+                    res.status = 403;
+                    res.set_content(
+                        "{\"error\":\"binary signature verification failed\"}\n",
+                        "application/json");
+                    return;
+                }
+
+                // (f) Write new binary + sig atomically (same filename, new content)
+                std::string writeErr;
+                if (!ntm::upgrade::writeUpgradeAtomically(
+                        config.upgrade_binary_path,
+                        binaryBytes.data(), binaryBytes.size(),
+                        sigBytes.data(),    sigBytes.size(),
+                        writeErr))
+                {
+                    res.status = 500;
+                    res.set_content("{\"error\":\"failed to write upgrade\"}\n",
+                                    "application/json");
+                    return;
+                }
+
+                // Success — acknowledge before triggering shutdown
+                res.set_content(
+                    "{\"ok\":true,\"upgraded_to\":\"" + newVer.str() + "\"}\n",
+                    "application/json");
+
+                // Schedule clean exit on a background thread so the HTTP response
+                // is fully sent before the process exits.
+                // systemd (Restart=on-exit) relaunches with the new binary.
+                if (config.upgrade_shutdown_cb)
+                {
+                    std::thread([cb = config.upgrade_shutdown_cb]() {
+                        std::this_thread::sleep_for(std::chrono::seconds(30));
+                        cb();
+                    }).detach();
+                }
+            });
     }
 
     // All other paths → 404

@@ -456,3 +456,59 @@ cmake --build build-windows -j $env:NUMBER_OF_PROCESSORS
 | Npcap SDK 1.13 | `C:\npcap-sdk` — downloaded and extracted by setup script |
 | Native toolchain file | `cmake/toolchain-windows-mingw64.cmake` |
 
+---
+
+## Server Auto-Upgrade
+
+The `scripts/push-upgrade.sh` script pushes a new signed server binary to the live
+server via the `/admin/upgrade/push` endpoint.
+
+### Critical policy — agents MUST NOT push autonomously
+
+> **Agents MUST NEVER call `push-upgrade.sh --confirm` on their own initiative.**
+> The `--confirm` flag must only be supplied when a human explicitly instructs the
+> push in that conversation turn.  Dry-run (`push-upgrade.sh <binary>`, no flag)
+> is permitted at any time for pre-flight validation.
+
+### Prerequisites
+
+| File | Location | Purpose |
+|---|---|---|
+| `ntmserver.info` | `~/.ntm/ntmserver.info` | `server=<host>` and `port=<port>` lines |
+| Private build key | `~/.ntm/privatebuildkey.secret` | ML-DSA-65 key; mode 600; never in repo |
+
+`ntmserver.info` is a build-machine-only file — **never commit it to the repository**.
+
+### Push workflow
+
+```bash
+# 1. Build and sign (on main branch, clean working tree):
+rm -f build-linux/ntm-server-linux-amd64-*
+cmake -B build-linux -DCMAKE_BUILD_TYPE=Release
+cmake --build build-linux -j$(nproc)
+# Produces: build-linux/ntm-server-linux-amd64-<version>
+#           build-linux/ntm-server-linux-amd64-<version>.sig
+
+# 2. Dry-run (always do this first):
+./scripts/push-upgrade.sh build-linux/ntm-server-linux-amd64-<version>
+
+# 3. Push (ONLY when human explicitly requests it):
+./scripts/push-upgrade.sh build-linux/ntm-server-linux-amd64-<version> --confirm
+```
+
+### Branch safety (enforced by the script)
+
+- Current branch must be `main`
+- Working tree must be clean (no uncommitted changes)
+- Local `main` must match `origin/main`
+
+Any of these checks failing causes an immediate error — no partial push.
+
+### Server-side behaviour on receiving a push
+
+1. Verifies the ML-DSA-65 auth proof (nonce + binary hash, signed with build key)
+2. Verifies the ML-DSA-65 binary signature (same embedded public key)
+3. If new version ≤ current version → logs warning, returns 409 Conflict, discards
+4. Atomically replaces the binary at its current path (same filename → systemd compatibility)
+5. Returns HTTP 200 and schedules a graceful restart after 30 s connection drain
+

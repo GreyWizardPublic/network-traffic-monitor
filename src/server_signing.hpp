@@ -167,6 +167,66 @@ inline bool verifySignatureWithKey(
 }
 
 // ---------------------------------------------------------------------------
+// In-memory overload — verify binary and signature already in RAM
+// ---------------------------------------------------------------------------
+
+// Verify ML-DSA-65 signature over binary bytes already in memory.
+// Used by the upgrade endpoint to verify the received binary without a temp-file
+// round-trip.  Same algorithm as verifySignatureWithKey.
+inline bool verifySignatureWithKeyBytes(
+    const std::vector<std::uint8_t> &binData,
+    const std::vector<std::uint8_t> &sigData,
+    const std::uint8_t              *derPubKey,
+    std::size_t                      derPubKeyLen,
+    std::string                     &errOut)
+{
+    if (binData.empty()) { errOut = "binary data is empty"; return false; }
+    if (sigData.empty()) { errOut = "signature data is empty"; return false; }
+
+    const std::uint8_t *p = derPubKey;
+    EVP_PKEY *pkey = d2i_PUBKEY(nullptr, &p, static_cast<long>(derPubKeyLen));
+    if (!pkey)
+    {
+        errOut = "failed to load public key: " + detail::opensslErrors();
+        return false;
+    }
+
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    if (!ctx) { EVP_PKEY_free(pkey); errOut = "EVP_MD_CTX_new failed"; return false; }
+
+    bool ok = false;
+    if (EVP_DigestVerifyInit(ctx, nullptr, nullptr, nullptr, pkey) != 1)
+    {
+        errOut = "EVP_DigestVerifyInit failed: " + detail::opensslErrors();
+    }
+    else
+    {
+        int rc = EVP_DigestVerify(ctx,
+                                  sigData.data(), sigData.size(),
+                                  binData.data(), binData.size());
+        if (rc == 1) ok = true;
+        else errOut = "signature verification failed: " + detail::opensslErrors();
+    }
+
+    EVP_MD_CTX_free(ctx);
+    EVP_PKEY_free(pkey);
+    return ok;
+}
+
+// Convenience: verify using the embedded build public key (bytes in RAM).
+inline bool verifyServerSignatureBytes(
+    const std::vector<std::uint8_t> &binData,
+    const std::vector<std::uint8_t> &sigData,
+    std::string                     &errOut)
+{
+    return verifySignatureWithKeyBytes(
+        binData, sigData,
+        kBuildPublicKeyDer.data(),
+        kBuildPublicKeyDer.size(),
+        errOut);
+}
+
+// ---------------------------------------------------------------------------
 // Production entry point — uses the embedded build public key
 // ---------------------------------------------------------------------------
 

@@ -15,6 +15,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -53,6 +54,16 @@ struct WebConfig
     // Only connections whose remote_addr exactly matches this value are trusted,
     // preventing header injection by direct (non-proxied) connections.
     std::string trusted_proxy;
+
+    // ── Auto-upgrade endpoint ────────────────────────────────────────────────
+    // Null nonce_store = upgrade endpoint disabled (no webauthn or not configured).
+    // binary_path = absolute path of the running server binary (/proc/self/exe).
+    // server_version = current kServerVersion string for version-check responses.
+    // shutdown_cb = called after a successful upgrade to trigger clean exit.
+    std::shared_ptr<void> upgrade_nonce_store;  // actually ntm::upgrade::NonceStore*
+    std::string           upgrade_binary_path;
+    std::string           upgrade_server_version;
+    std::function<void()> upgrade_shutdown_cb;
 
     // IPs of the server itself (enumerated at startup) and dashboard clients
     // (added on each authenticated request). Used to classify entity flows as
