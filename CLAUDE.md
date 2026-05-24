@@ -415,21 +415,3 @@ cmake --build build-windows -j $env:NUMBER_OF_PROCESSORS
 | Npcap SDK 1.13 | `C:\npcap-sdk` — downloaded and extracted by setup script |
 | Native toolchain file | `cmake/toolchain-windows-mingw64.cmake` |
 
-**Cross-compile fallback (Arch Linux Agent only, when Windows Agent is unavailable):**
-```bash
-cmake -B build-windows \
-  -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-mingw64.cmake \
-  -DNPCAP_SDK=/opt/npcap-sdk \
-  -DOPENSSL_CRYPTO_LIBRARY=/usr/x86_64-w64-mingw32/lib64/libcrypto.a \
-  -DOPENSSL_SSL_LIBRARY=/usr/x86_64-w64-mingw32/lib64/libssl.a \
-  -DCMAKE_BUILD_TYPE=Release
-cmake --build build-windows -j$(nproc)
-# build-windows/ntm-client-windows-amd64-<version>.exe
-```
-
-| Cross-compile dependency | Location |
-|---|---|
-| MinGW-w64 cross-compiler | `x86_64-w64-mingw32-g++` (Arch `mingw-w64-gcc`) |
-| Npcap SDK | `/opt/npcap-sdk` |
-| MinGW OpenSSL static libs | `/usr/x86_64-w64-mingw32/lib64/libssl.a` + `libcrypto.a` |
-| Toolchain file | `cmake/toolchain-mingw64.cmake` |
