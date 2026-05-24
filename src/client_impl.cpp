@@ -67,7 +67,9 @@ public:
                      unsigned reconnectIntervalSec = 60,
                      AdaptiveInterval::Config aggCfg = AdaptiveInterval::Config{},
                      std::uint32_t aggMaxFlows = kAggMaxFlows,
-                     bool useCompression = true)
+                     bool useCompression = true,
+                     bool isDaemon = false,
+                     bool verbose = false)
         : aggInterval_(aggCfg)
         , aggMaxFlows_(aggMaxFlows)
         , useCompression_(useCompression)
@@ -80,6 +82,8 @@ public:
         , reconnectMaxAttempts_(reconnectMaxAttempts)
         , reconnectIntervalSec_(reconnectIntervalSec)
         , g_runningPtr_(gRunning)
+        , isDaemon_(isDaemon)
+        , verbose_(verbose)
     {
         // sendBuffer_ / flushBuffer_ are no longer used for D-lines (aggregation
         // builds D-lines directly into flushBuffer_ each flush cycle).
@@ -197,6 +201,8 @@ private:
     unsigned                 reconnectFailures_{0};
     std::chrono::steady_clock::time_point lastReconnectAttempt_{};
     std::atomic<bool>       *g_runningPtr_{nullptr};
+    bool                     isDaemon_{false};
+    bool                     verbose_{false};
 
     platform::NetworkMonitor netMonitor_;
 
@@ -435,7 +441,7 @@ private:
                 return false;
             }
             if (!verifyServerIdentityAndPin(ssl, host_, tlsServerCertPath_,
-                                            false, false))
+                                            verbose_, isDaemon_))
             {
                 lastError_ = "server identity verification failed";
                 SSL_free(ssl);
@@ -446,7 +452,7 @@ private:
 
         std::uint8_t negotiatedCaps = kCapNone;
         if (!performClientAuth(ssl, static_cast<std::uintptr_t>(fd),
-                               identityPath_, false, false, &lastError_,
+                               identityPath_, isDaemon_, verbose_, &lastError_,
                                useCompression_, &negotiatedCaps))
         {
             if (ssl) { SSL_shutdown(ssl); SSL_free(ssl); }
@@ -735,7 +741,9 @@ int runClient(bool daemonMode, const ClientConfig &config, char **argv)
                                 config.reconnectIntervalSec,
                                 aggCfg,
                                 config.aggMaxFlows,
-                                config.useCompression);
+                                config.useCompression,
+                                daemonMode,
+                                config.verbose);
 
     // Enumerate capturable devices. Returns false only when pcap_findalldevs
     // itself errors (hard failure at startup); an empty result is valid and
