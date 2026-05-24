@@ -115,6 +115,18 @@ and **cross-agent work** (see [Cross-agent handoff](#cross-agent-handoff)).
       Cross-reference with the closed PR list if you are unsure whether a branch
       has been merged. Do not leave merged branches accumulating on the remote.
 
+   c. **Audit stale handoff branches you resolved.** Any handoff PR you closed
+      in a previous session may have left its branch behind (see Handoff workflow
+      step 2 above). Check for handoff branches from *other* agents that targeted
+      your prefix and have a closed PR:
+      ```
+      git ls-remote --heads origin linux/handoff/
+      git ls-remote --heads origin ios/handoff/
+      git ls-remote --heads origin win/handoff/
+      ```
+      For each branch listed, check whether its PR is already closed (`gh pr list
+      --state closed --head <branch>`). If so, delete the branch immediately.
+
 ---
 
 ### Arch Linux Agent
@@ -248,12 +260,20 @@ Title: [WINDOWS AGENT] <short description>   ← or [LINUX AGENT] / [SWIFT AGENT
 1. Requesting agent creates a feature branch `<my-prefix>/handoff/<desc>`, adds
    any starter code or stubs, and opens a PR targeting `main`.
 2. Receiving agent picks up the PR, implements or completes the work on its own
-   branch (`<my-prefix>/<desc>`), resolves the handoff PR (close or supersede),
-   and merges its own PR to `main`.
+   branch (`<my-prefix>/<desc>`), merges its own PR to `main`, then closes the
+   handoff PR with a comment summarising what was done, and **immediately deletes
+   the handoff branch** — even though the branch carries the requesting agent's
+   prefix:
+   ```
+   git push origin --delete <requesting-prefix>/handoff/<desc>
+   ```
+   GitHub's auto-delete-on-merge only fires when a PR is *merged*; closing a PR
+   manually leaves the branch behind. The requesting agent may never re-visit the
+   closed PR, so the **receiving agent is solely responsible** for this cleanup.
 3. Requesting agent rebases its active branch on the updated `main`.
 
-The receiving agent addresses the handoff in its next session and closes the
-original PR with a comment summarising what was done.
+**Rule: the agent that closes a handoff PR owns the handoff branch deletion,
+regardless of which agent's prefix the branch carries.**
 
 ---
 
