@@ -4,6 +4,7 @@
 
 #include "client_platform.hpp"
 #include "client_core.hpp"
+#include "client_http_util.hpp"
 
 #include <pcap/pcap.h>
 
@@ -179,17 +180,11 @@ std::unordered_set<std::string> collectLanAddresses()
 
 std::string queryExternalIP(const std::string &url, unsigned timeoutMs)
 {
-    if (url.size() < 8 || url.substr(0, 7) != "http://") return {};
-    std::string rest = url.substr(7);
-    auto slashPos = rest.find('/');
-    std::string hostPort = (slashPos == std::string::npos) ? rest : rest.substr(0, slashPos);
-    std::string path     = (slashPos == std::string::npos) ? "/" : rest.substr(slashPos);
-
-    std::string host, portStr = "80";
-    auto colonPos = hostPort.rfind(':');
-    if (colonPos != std::string::npos) { host = hostPort.substr(0, colonPos); portStr = hostPort.substr(colonPos + 1); }
-    else host = hostPort;
-    if (host.empty()) return {};
+    auto parsed = http_util::parseHttpUrl(url);
+    if (!parsed.ok) return {};
+    const std::string &host    = parsed.host;
+    const std::string &portStr = parsed.port;
+    const std::string &path    = parsed.path;
 
     struct addrinfo hints{};
     hints.ai_family   = AF_UNSPEC;
@@ -221,7 +216,7 @@ std::string queryExternalIP(const std::string &url, unsigned timeoutMs)
     ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
-    std::string req = "GET " + path + " HTTP/1.0\r\nHost: " + host + "\r\nConnection: close\r\n\r\n";
+    std::string req = http_util::buildGetRequest(path, host);
     if (::send(fd, req.c_str(), req.size(), MSG_NOSIGNAL) < 0) { ::close(fd); return {}; }
 
     std::string response;
@@ -235,19 +230,7 @@ std::string queryExternalIP(const std::string &url, unsigned timeoutMs)
     }
     ::close(fd);
 
-    auto pos = response.find("\r\n\r\n");
-    if (pos == std::string::npos) return {};
-    std::string body = response.substr(pos + 4);
-    while (!body.empty() && (body.back() == '\r' || body.back() == '\n' ||
-                              body.back() == ' '  || body.back() == '\t'))
-        body.pop_back();
-    auto bstart = body.find_first_not_of(" \r\n\t");
-    if (bstart != std::string::npos && bstart > 0) body = body.substr(bstart);
-    auto nl = body.find('\n');
-    if (nl != std::string::npos && nl < 8) body = body.substr(nl + 1);
-    while (!body.empty() && (body.back() == '\r' || body.back() == '\n' ||
-                              body.back() == ' '  || body.back() == '\t'))
-        body.pop_back();
+    std::string body = http_util::extractHttpBody(response);
 
     struct in_addr a4; struct in6_addr a6;
     if (::inet_pton(AF_INET,  body.c_str(), &a4) == 1 ||

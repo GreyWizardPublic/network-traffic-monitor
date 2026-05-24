@@ -1,6 +1,9 @@
 #include "client.hpp"
 #include "client_core.hpp"
 #include "client_platform.hpp"
+#include "client_transport.hpp"
+#include "client_transport_tcptls.hpp"
+#include "client_transport_websocket.hpp"
 #include "flow_aggregator.hpp"
 #include "proto_client_server.hpp"
 #include "client_version.hpp"
@@ -46,9 +49,6 @@
 namespace ntm
 {
 
-using platform::SockFd;
-using platform::kInvalidSock;
-
 // ---------------------------------------------------------------------------
 // ClientConnection
 // ---------------------------------------------------------------------------
@@ -70,7 +70,8 @@ public:
                      std::uint32_t aggMaxFlows = kAggMaxFlows,
                      bool useCompression = true,
                      bool isDaemon = false,
-                     bool verbose = false)
+                     bool verbose = false,
+                     TransportMode transportMode = TransportMode::TcpTls)
         : aggInterval_(aggCfg)
         , aggMaxFlows_(aggMaxFlows)
         , useCompression_(useCompression)
@@ -85,6 +86,7 @@ public:
         , g_runningPtr_(gRunning)
         , isDaemon_(isDaemon)
         , verbose_(verbose)
+        , transportMode_(transportMode)
     {
         // sendBuffer_ / flushBuffer_ are no longer used for D-lines (aggregation
         // builds D-lines directly into flushBuffer_ each flush cycle).
@@ -182,9 +184,9 @@ private:
     mutable std::mutex       connectionMutex_;
     std::string              host_;
     std::uint16_t            port_;
-    SockFd                   fd_{kInvalidSock};
     SSL_CTX                 *sslCtx_{nullptr};
-    SSL                     *ssl_{nullptr};
+    std::unique_ptr<ITransport> transport_;      // active connection; null when disconnected
+    TransportMode            transportMode_{TransportMode::TcpTls};
     std::chrono::steady_clock::time_point sessionStart_;
     std::string              identityPath_;
     std::string              tlsCaPath_;
@@ -207,22 +209,23 @@ private:
 
     platform::NetworkMonitor netMonitor_;
 
-    // Write `data` to the connection, compressing via zlib if compression is active.
-    // Falls back to a plain write if no deflater is set (v2 auth or --no-compress).
-    bool deflateAndWrite(SSL *ssl, SockFd fd, const void *data, std::size_t len)
+    // Write `data` to the active transport, compressing via zlib if compression
+    // is active.  Falls back to a plain write if no deflater is set
+    // (v2 auth or --no-compress).  transport_ must be non-null when called.
+    bool deflateAndWrite(const void *data, std::size_t len)
     {
         if (len == 0) return true;
         if (deflater_)
         {
             compBuf_.clear();
             if (!deflater_->feed(data, len, compBuf_)) return false;
-            return platform::writeExact(ssl, fd,
-                                        compBuf_.data(), compBuf_.size());
+            return transport_->writeExact(compBuf_.data(), compBuf_.size());
         }
-        return platform::writeExact(ssl, fd, data, len);
+        return transport_->writeExact(data, len);
     }
 
-    bool sendAnnounce(SSL *ssl, SockFd fd)
+    // Send the initial LAN announce (X + A lines).  transport_ must be live.
+    bool sendAnnounce()
     {
         auto lanAddrs = platform::collectLanAddresses();
         if (lanAddrs.empty()) return true;
@@ -230,12 +233,12 @@ private:
         std::string extIp = platform::queryExternalIP(externalIpUrl_, externalIpTimeoutMs_);
         std::string xLine = std::string(kExtIPLinePrefix)
                           + (extIp.empty() ? kExtIPNull : extIp) + '\n';
-        if (!deflateAndWrite(ssl, fd, xLine.data(), xLine.size())) return false;
+        if (!deflateAndWrite(xLine.data(), xLine.size())) return false;
 
         for (const auto &ip : lanAddrs)
         {
             std::string aLine = std::string(kAddrLinePrefix) + ip + '\n';
-            if (!deflateAndWrite(ssl, fd, aLine.data(), aLine.size())) return false;
+            if (!deflateAndWrite(aLine.data(), aLine.size())) return false;
         }
 
         lastReannounceTime_ = std::chrono::duration_cast<std::chrono::seconds>(
@@ -307,7 +310,8 @@ private:
                 if (flushBuffer_.empty() && !netChanged && !healthDue) continue;
 
                 std::lock_guard<std::mutex> connLock(connectionMutex_);
-                if (!platform::sockValid(fd_))
+                const bool connected = transport_ && transport_->isConnected();
+                if (!connected)
                 {
                     const auto now = std::chrono::steady_clock::now();
                     const bool waitInterval = reconnectFailures_ > 0 &&
@@ -343,16 +347,16 @@ private:
                     aggInterval_.reset();  // fresh connection — start responsive
                 }
 
-                if (platform::sockValid(fd_) && netChanged)
+                if (transport_ && transport_->isConnected() && netChanged)
                 {
                     if (nowEpochSec - lastReannounceTime_ >= static_cast<std::int64_t>(kAnnounceRateLimitSec))
                     {
                         lastReannounceTime_ = nowEpochSec;
-                        if (!sendAnnounce(ssl_, fd_)) closeUnlocked();
+                        if (!sendAnnounce()) closeUnlocked();
                     }
                 }
 
-                if (platform::sockValid(fd_) && healthDue)
+                if (transport_ && transport_->isConnected() && healthDue)
                 {
                     lastHealthReportSec_.store(nowEpochSec, std::memory_order_relaxed);
                     std::string hLine = std::string(kHealthLinePrefix)
@@ -365,11 +369,11 @@ private:
                         + " agg_interval_ms=" + std::to_string(aggInterval_.intervalMs())
                         + " agg_flows="       + std::to_string(aggLastFlows_)
                         + "\n";
-                    if (!deflateAndWrite(ssl_, fd_, hLine.data(), hLine.size()))
+                    if (!deflateAndWrite(hLine.data(), hLine.size()))
                         closeUnlocked();
                 }
 
-                if (platform::sockValid(fd_))
+                if (transport_ && transport_->isConnected())
                 {
                     auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
                         std::chrono::steady_clock::now() - sessionStart_).count();
@@ -378,8 +382,8 @@ private:
                         closeUnlocked();
                 }
 
-                if (!flushBuffer_.empty() && platform::sockValid(fd_) &&
-                    !deflateAndWrite(ssl_, fd_, flushBuffer_.data(), flushBuffer_.size()))
+                if (!flushBuffer_.empty() && transport_ && transport_->isConnected() &&
+                    !deflateAndWrite(flushBuffer_.data(), flushBuffer_.size()))
                     closeUnlocked();
             }
             catch (const std::exception &e)
@@ -397,14 +401,13 @@ private:
 
     void closeUnlocked()
     {
-        if (ssl_) { SSL_shutdown(ssl_); SSL_free(ssl_); ssl_ = nullptr; }
-        if (platform::sockValid(fd_)) { platform::closeSocket(fd_); fd_ = kInvalidSock; }
+        if (transport_) { transport_->close(); transport_.reset(); }
         deflater_.reset();  // new session may negotiate different caps
     }
 
     bool connectUnlocked()
     {
-        if (platform::sockValid(fd_)) return true;
+        if (transport_ && transport_->isConnected()) return true;
 
         auto logInfo = [&](const std::string &msg) {
             if (verbose_) platform::ntmLog(platform::LogLevel::Info, isDaemon_, msg);
@@ -413,118 +416,39 @@ private:
             platform::ntmLog(platform::LogLevel::Err, isDaemon_, msg);
         };
 
-        logInfo("ntm-client: [connect] attempting TCP connect to "
-                + host_ + ":" + std::to_string(port_));
-
-        SockFd fd = platform::connectToServer(host_, port_, lastError_);
-        if (!platform::sockValid(fd))
+        // ── Create the appropriate transport for this attempt ────────────────
+        std::unique_ptr<ITransport> t;
+        if (transportMode_ == TransportMode::WebSocket)
         {
-            logErr("ntm-client: [connect] TCP connect failed: " + lastError_);
-            return false;
-        }
-        logInfo("ntm-client: [connect] TCP connection established");
-
-        platform::setSendBufferSize(fd, 4 * 1024 * 1024);
-
-        SSL *ssl = nullptr;
-        if (sslCtx_)
-        {
-            ssl = SSL_new(sslCtx_);
-            if (!ssl)
-            {
-                lastError_ = "SSL_new failed";
-                platform::closeSocket(fd);
-                return false;
-            }
-            // SNI: only for DNS hostnames, not IP literals (RFC 6066)
-            {
-                unsigned char ipBuf[16];
-                const bool isIp = (::inet_pton(AF_INET,  host_.c_str(), ipBuf) == 1) ||
-                                  (::inet_pton(AF_INET6, host_.c_str(), ipBuf) == 1);
-                if (!isIp)
-                {
-                    SSL_set_tlsext_host_name(ssl, host_.c_str());
-                    logInfo("ntm-client: [connect] TLS SNI set to: " + host_);
-                }
-                else
-                    logInfo("ntm-client: [connect] TLS SNI skipped (IP literal)");
-            }
-#ifdef _WIN32
-            SSL_set_fd(ssl, static_cast<int>(fd));
-#else
-            SSL_set_fd(ssl, fd);
-#endif
-            logInfo("ntm-client: [connect] starting TLS handshake (ALPN offered: ntm-wire)...");
-            if (SSL_connect(ssl) != 1)
-            {
-                // Collect the full OpenSSL error chain — this is the most useful
-                // information for diagnosing cert/CA/handshake failures.
-                char errBuf[256];
-                unsigned long opensslErr;
-                std::string errChain;
-                while ((opensslErr = ERR_get_error()) != 0)
-                {
-                    ERR_error_string_n(opensslErr, errBuf, sizeof(errBuf));
-                    if (!errChain.empty()) errChain += "; ";
-                    errChain += errBuf;
-                }
-                lastError_ = "TLS handshake failed";
-                logErr("ntm-client: [connect] TLS handshake FAILED"
-                       + (errChain.empty() ? "" : ": " + errChain));
-                SSL_free(ssl);
-                platform::closeSocket(fd);
-                return false;
-            }
-
-            // Log negotiated TLS details — protocol version, cipher, and the ALPN
-            // the server selected. If ALPN is "http/1.1" instead of "ntm-wire",
-            // the connection went through an HTTP proxy (Cloudflare etc.) and the
-            // binary auth handshake will fail immediately after this point.
-            if (verbose_)
-            {
-                const char *tlsVer = SSL_get_version(ssl);
-                const char *cipher  = SSL_get_cipher(ssl);
-                const unsigned char *alpnData = nullptr;
-                unsigned int alpnLen = 0;
-                SSL_get0_alpn_selected(ssl, &alpnData, &alpnLen);
-                std::string alpn = alpnLen
-                    ? std::string(reinterpret_cast<const char *>(alpnData), alpnLen)
-                    : "(none)";
-                logInfo(std::string("ntm-client: [connect] TLS handshake ok: ")
-                        + (tlsVer ? tlsVer : "?") + " / " + (cipher ? cipher : "?")
-                        + " / ALPN=" + alpn);
-                if (alpn != "ntm-wire")
-                    platform::ntmLog(platform::LogLevel::Warn, isDaemon_,
-                        "ntm-client: [connect] WARNING — server selected ALPN='" + alpn
-                        + "' not 'ntm-wire'. The connection is likely going through an HTTP "
-                        "proxy (e.g. Cloudflare). The binary auth handshake will fail.");
-            }
-
-            logInfo("ntm-client: [connect] verifying server identity...");
-            if (!verifyServerIdentityAndPin(ssl, host_, tlsServerCertPath_,
-                                            verbose_, isDaemon_))
-            {
-                lastError_ = "server identity verification failed";
-                logErr("ntm-client: [connect] server identity verification FAILED");
-                SSL_free(ssl);
-                platform::closeSocket(fd);
-                return false;
-            }
+            logInfo("ntm-client: [connect] using WebSocket transport");
+            t = std::make_unique<WebSocketTransport>(
+                sslCtx_, tlsServerCertPath_, verbose_, isDaemon_);
         }
         else
         {
-            logInfo("ntm-client: [connect] WARNING — no TLS context; connecting in plaintext");
+            logInfo("ntm-client: [connect] using TCP+TLS transport");
+            t = std::make_unique<TcpTlsTransport>(
+                sslCtx_, tlsServerCertPath_, verbose_, isDaemon_);
         }
 
-        std::uint8_t negotiatedCaps = kCapNone;
-        if (!performClientAuth(ssl, static_cast<std::uintptr_t>(fd),
-                               identityPath_, isDaemon_, verbose_, &lastError_,
-                               useCompression_, &negotiatedCaps))
+        logInfo("ntm-client: [connect] attempting connection to "
+                + host_ + ":" + std::to_string(port_));
+
+        if (!t->connect(host_, port_, lastError_))
         {
-            if (ssl) { SSL_shutdown(ssl); SSL_free(ssl); }
-            platform::closeSocket(fd);
+            logErr("ntm-client: [connect] connection failed: " + lastError_);
             return false;
         }
+
+        // ── Auth ─────────────────────────────────────────────────────────────
+        std::uint8_t negotiatedCaps = kCapNone;
+        if (!performClientAuth(*t, identityPath_, isDaemon_, verbose_, &lastError_,
+                               useCompression_, &negotiatedCaps))
+        {
+            t->close();
+            return false;
+        }
+
         if (negotiatedCaps & kCapZlib)
         {
             deflater_ = std::make_unique<ZlibDeflater>();
@@ -536,22 +460,28 @@ private:
             deflater_.reset();
         }
 
+        // Transport is live — make it visible to deflateAndWrite / sendAnnounce.
+        transport_ = std::move(t);
+
         logInfo("ntm-client: [connect] sending address announce (X/A lines)...");
-        if (!sendAnnounce(ssl, fd))
+        if (!sendAnnounce())
         {
-            if (ssl) { SSL_shutdown(ssl); SSL_free(ssl); }
-            platform::closeSocket(fd);
-            lastError_ = "failed to send address announce";
+            const std::string err = "failed to send address announce";
             logErr("ntm-client: [connect] address announce FAILED");
+            lastError_ = err;
+            transport_->close();
+            transport_.reset();
+            deflater_.reset();
             return false;
         }
 
-        fd_ = fd;
-        ssl_ = ssl;
         sessionStart_ = std::chrono::steady_clock::now();
+        const char *tMode = (transportMode_ == TransportMode::WebSocket)
+                            ? "WebSocket" : "TCP+TLS";
         platform::ntmLog(platform::LogLevel::Info, isDaemon_,
-                         "ntm-client: connected to " + host_ + ":" + std::to_string(port_)
-                         + (ssl ? " (TLS, session max 6h)" : " (plain)"));
+                         std::string("ntm-client: connected to ")
+                         + host_ + ":" + std::to_string(port_)
+                         + " (" + tMode + ", session max 6h)");
         return true;
     }
 };
@@ -769,9 +699,13 @@ int runClient(bool daemonMode, const ClientConfig &config, char **argv)
     const char *ca = config.tlsCaPath.empty()          ? "(none)" : config.tlsCaPath.c_str();
     const char *sc = config.tlsServerCertPath.empty()  ? "(none)" : config.tlsServerCertPath.c_str();
 
+    const char *tMode = (config.transport == TransportMode::WebSocket)
+                        ? "websocket" : "tcp";
+
     std::string msg = "ntm-client: connecting to " + config.server
                     + ":" + std::to_string(config.port)
-                    + " (identity=" + id + ", ca=" + ca + ", server-cert=" + sc + ")";
+                    + " (transport=" + tMode
+                    + ", identity=" + id + ", ca=" + ca + ", server-cert=" + sc + ")";
     platform::ntmLog(platform::LogLevel::Info, daemonMode, msg);
 
     // Refuse to run without TLS. With neither a CA bundle nor a pinned server
@@ -812,7 +746,8 @@ int runClient(bool daemonMode, const ClientConfig &config, char **argv)
                                 config.aggMaxFlows,
                                 config.useCompression,
                                 daemonMode,
-                                config.verbose);
+                                config.verbose,
+                                config.transport);
 
     // Enumerate capturable devices. Returns false only when pcap_findalldevs
     // itself errors (hard failure at startup); an empty result is valid and

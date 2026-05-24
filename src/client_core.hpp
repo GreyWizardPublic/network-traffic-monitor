@@ -1,6 +1,7 @@
 #pragma once
 
 #include "proto_client_server.hpp"
+#include "client_transport.hpp"   // ITransport
 
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
@@ -87,22 +88,21 @@ bool verifyServerIdentityAndPin(SSL *ssl,
 
 // ---------------------------------------------------------------------------
 // Ed25519 client authentication (OpenSSL — cross-platform)
-// Calls platform::readExact / platform::writeExact via the SockFd overload.
+// I/O goes through ITransport so the same auth logic works over raw TLS
+// (TcpTlsTransport) and WebSocket (WebSocketTransport).
 // ---------------------------------------------------------------------------
 
-// Forward-declared here; implemented in client_core.cpp using platform::readExact/writeExact.
-// ssl may be nullptr for plain connections.
-//
 // For auth v3 (the default on Linux): after pubkey+sig the client sends a 1-byte
 // capability flags field, and after result=OK the server responds with a 1-byte
 // negotiated capability flags field.  `negotiatedCapsOut` (if non-null) receives
 // those negotiated flags.  `requestCompression` = true requests kCapZlib (bit 0).
 // On Windows, kCapNone is always sent regardless of `requestCompression`.
-bool performClientAuth(void *ssl, std::uintptr_t sockFd,
+bool performClientAuth(ITransport       &transport,
                        const std::string &identityPath,
-                       bool isDaemon, bool verbose,
-                       std::string *errOut = nullptr,
-                       bool requestCompression = true,
-                       std::uint8_t *negotiatedCapsOut = nullptr);
+                       bool               isDaemon,
+                       bool               verbose,
+                       std::string       *errOut              = nullptr,
+                       bool               requestCompression  = true,
+                       std::uint8_t      *negotiatedCapsOut   = nullptr);
 
 } // namespace ntm
