@@ -359,6 +359,24 @@ platform and version (e.g. `ntm-client-linux-amd64-1.9.0`) and match the
 auto-update naming convention exactly — they can be dropped directly into
 `update_dir` on the server without renaming.
 
+### Stale binary cleanup (required on every version bump)
+
+Because the version is baked into the filename, a version bump produces a
+**new filename** while the old binary stays in the build directory.
+**Always delete old versioned binaries before or after building a new version**
+to avoid deploying the wrong file by mistake.
+
+```bash
+# Linux — remove old client binaries before building the new one
+rm -f build-linux/ntm-client-linux-amd64-*
+
+# Windows — remove old client binaries before building the new one
+Remove-Item build-windows\ntm-client-windows-amd64-*.exe -ErrorAction SilentlyContinue
+```
+
+`ntm-server` is not versioned in its filename so it is always overwritten in
+place — no cleanup needed for the server binary.
+
 ### Linux client + server
 *(Arch Linux Agent)*
 
