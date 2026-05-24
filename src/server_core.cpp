@@ -859,7 +859,10 @@ static SSL_CTX *createServerTLSContext(const std::string &certPath, const std::s
     SSL_CTX *ctx = SSL_CTX_new(method);
     if (!ctx)
         return nullptr;
-    if (SSL_CTX_use_certificate_file(ctx, certPath.c_str(), SSL_FILETYPE_PEM) != 1)
+    // Use _chain_file so OpenSSL loads the full certificate chain (leaf + intermediates),
+    // not just the end-entity cert.  Without intermediates, clients that don't have them
+    // cached (e.g. Cloudflare's tunnel daemon on a fresh connection) may fail TLS.
+    if (SSL_CTX_use_certificate_chain_file(ctx, certPath.c_str()) != 1)
     {
         SSL_CTX_free(ctx);
         return nullptr;
@@ -1652,6 +1655,19 @@ static void httpWebThread(int connFd,
 
     if (!webSvr || !ssl) return;
 
+    // The accept loop set SO_RCVTIMEO = SO_SNDTIMEO = 10 s for the TLS handshake.
+    // Clear them now: httplib SSLSocketStream manages its own timeouts via select().
+    // If the OS-level SO_SNDTIMEO fires during SSL_write (e.g. TCP send buffer full
+    // while serving the large dashboard HTML), OpenSSL returns SSL_ERROR_SYSCALL —
+    // not SSL_ERROR_WANT_WRITE — so SSLSocketStream does not retry, the write fails,
+    // process_request returns false, the connection closes with no HTTP response, and
+    // Cloudflare reports 502. Setting tv = {0,0} restores the OS default (no timeout).
+    {
+        struct timeval tv { 0, 0 };
+        ::setsockopt(connFd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        ::setsockopt(connFd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    }
+
     try
     {
         // Wrap the pre-accepted SSL in an httplib SSLSocketStream so the HTTP
@@ -1674,20 +1690,23 @@ static void httpWebThread(int connFd,
         }
 
         // HTTP keep-alive loop: serve up to N requests on this connection.
-        // httplib sets Connection: close when it wants to end keep-alive;
-        // process_request signals this via the close_connection out-param.
-        bool closeConn = false;
-        int  keepAlive = CPPHTTPLIB_KEEPALIVE_MAX_COUNT;
-        while (keepAlive-- > 0 && !closeConn)
+        // Pass close_connection=true on the last request so httplib includes
+        // "Connection: close" in the response headers — matching the behaviour of
+        // httplib's own process_server_socket_core (count == 1 → close_connection).
+        // Without this, Cloudflare keeps the upstream connection open after the server
+        // silently closes it (30 s idle timeout), then reuses it and gets ECONNRESET → 502.
+        int keepAlive = CPPHTTPLIB_KEEPALIVE_MAX_COUNT;
+        while (keepAlive-- > 0)
         {
             bool connClosed = false;
+            bool isLast     = (keepAlive == 0); // final iteration: signal close
             if (!webSvr->process_request(strm,
                                           remoteAddr, remotePort,
                                           localAddr,  localPort,
-                                          closeConn,  connClosed,
+                                          isLast,     connClosed,
                                           [ssl](httplib::Request &req) { req.ssl = ssl; }))
                 break;
-            if (connClosed) break;
+            if (connClosed || isLast) break;
         }
     }
     catch (const std::exception &e)
