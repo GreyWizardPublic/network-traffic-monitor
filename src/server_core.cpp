@@ -1668,6 +1668,10 @@ static void httpWebThread(int connFd,
         ::setsockopt(connFd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
     }
 
+    serverLog(LogLevel::Info,
+              "ntm-server: web connection accepted from %s fd=%d",
+              remoteAddr.c_str(), connFd);
+
     try
     {
         // Wrap the pre-accepted SSL in an httplib SSLSocketStream so the HTTP
@@ -1696,18 +1700,50 @@ static void httpWebThread(int connFd,
         // Without this, Cloudflare keeps the upstream connection open after the server
         // silently closes it (30 s idle timeout), then reuses it and gets ECONNRESET → 502.
         int keepAlive = CPPHTTPLIB_KEEPALIVE_MAX_COUNT;
+        int reqNum    = 0;
         while (keepAlive-- > 0)
         {
             bool connClosed = false;
             bool isLast     = (keepAlive == 0); // final iteration: signal close
+
+            serverLog(LogLevel::Info,
+                      "ntm-server: web request #%d starting from %s",
+                      ++reqNum, remoteAddr.c_str());
+
             if (!webSvr->process_request(strm,
                                           remoteAddr, remotePort,
                                           localAddr,  localPort,
                                           isLast,     connClosed,
                                           [ssl](httplib::Request &req) { req.ssl = ssl; }))
+            {
+                // Log SSL/errno context so we know WHY process_request failed:
+                // SSL_ERROR_ZERO_RETURN = peer sent close_notify (graceful close)
+                // SSL_ERROR_SYSCALL     = OS-level I/O error (check errno)
+                // SSL_ERROR_SSL         = fatal SSL protocol error
+                // ssl_err=0 / errno=0   = plain read EOF (keep-alive idle timeout)
+                int   sslErr   = SSL_get_error(ssl, -1);
+                int   savedErr = errno;
+                unsigned long opensslCode = ERR_peek_last_error();
+                serverLog(LogLevel::Warn,
+                          "ntm-server: web request #%d from %s failed "
+                          "(ssl_error=%d openssl=0x%lx errno=%d)",
+                          reqNum, remoteAddr.c_str(),
+                          sslErr, opensslCode, savedErr);
                 break;
+            }
+
+            serverLog(LogLevel::Info,
+                      "ntm-server: web request #%d from %s done "
+                      "(connClosed=%d isLast=%d)",
+                      reqNum, remoteAddr.c_str(),
+                      static_cast<int>(connClosed), static_cast<int>(isLast));
+
             if (connClosed || isLast) break;
         }
+
+        serverLog(LogLevel::Info,
+                  "ntm-server: web connection from %s closed after %d request(s)",
+                  remoteAddr.c_str(), reqNum);
     }
     catch (const std::exception &e)
     {
@@ -2242,13 +2278,15 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
 
         if (SSL_accept(ssl) != 1)
         {
+            unsigned long opensslCode = ERR_peek_last_error();
             SSL_free(ssl);
             ::close(clientFd);
             perIPLimiter.release(clientIpStr);
             activeConnections--;
-            if (config.verbose)
-                serverLog(LogLevel::Warn, "ntm-server: TLS handshake failed from %s",
-                          clientIpStr.c_str());
+            // Always log TLS failures — they indicate a config or cert problem.
+            serverLog(LogLevel::Warn,
+                      "ntm-server: TLS handshake failed from %s (openssl=0x%lx)",
+                      clientIpStr.c_str(), opensslCode);
             continue;
         }
 
