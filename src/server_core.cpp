@@ -2026,6 +2026,13 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
     std::unique_ptr<NtmHttpServer> webSvr;
     std::unique_ptr<httplib::SSLServer> demoSvr;
     std::thread demoThread;
+    // IMPORTANT: webCfg must be declared at the SAME scope as webSvr.
+    // Every route handler lambda in registerWebHandlers captures config (== webCfg)
+    // by reference ([&config]).  If webCfg were declared inside the try-block below,
+    // it would be destroyed when that block exits while webSvr's lambdas are still
+    // live — the next request would dereference a dangling WebConfig, corrupting
+    // MonitoringIpSet::ips internal state and causing SIGFPE on operator[].
+    WebConfig webCfg;
 
     {
         try
@@ -2063,8 +2070,6 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                 }
             }
             auto dashboardIpSet = std::make_shared<MonitoringIpSet>();
-
-            WebConfig webCfg;
             webCfg.port             = port;               // informational only
             webCfg.bind             = config.client_bind; // informational only
             webCfg.rate_limit_rpm   = config.web_rate_limit_rpm;
