@@ -130,7 +130,7 @@ TEST_CASE("buildUpgradeRequest: ends with double CRLF")
 // parseUpgradeResponse — success cases
 // ═══════════════════════════════════════════════════════════════════════════
 
-TEST_CASE("parseUpgradeResponse: valid 101 with accept header")
+TEST_CASE("parseUpgradeResponse: valid 101 with accept header (canonical casing)")
 {
     const std::string resp =
         "HTTP/1.1 101 Switching Protocols\r\n"
@@ -140,6 +140,23 @@ TEST_CASE("parseUpgradeResponse: valid 101 with accept header")
         "\r\n";
     std::string accept, err;
     REQUIRE(parseUpgradeResponse(resp, accept, err));
+    REQUIRE_EQ(accept, std::string{"s3pPLMBiTxaQ9kYGzzhZRbK+xOo="});
+    REQUIRE(err.empty());
+}
+
+TEST_CASE("parseUpgradeResponse: valid 101 with lowercase accept header (cloudflared)")
+{
+    // cloudflared lowercases all header names when proxying through Cloudflare
+    // Tunnel. Verify the parser handles both casings.
+    const std::string resp =
+        "HTTP/1.1 101 Switching Protocols\r\n"
+        "upgrade: websocket\r\n"
+        "connection: Upgrade\r\n"
+        "sec-websocket-accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n"
+        "\r\n";
+    std::string accept, err;
+    REQUIRE(parseUpgradeResponse(resp, accept, err));
+    // Value must be preserved exactly (base64 is case-sensitive)
     REQUIRE_EQ(accept, std::string{"s3pPLMBiTxaQ9kYGzzhZRbK+xOo="});
     REQUIRE(err.empty());
 }

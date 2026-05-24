@@ -9,7 +9,9 @@
 // OpenSSL-dependent operations (SHA-1 for accept-key computation, RAND_bytes
 // for mask-key generation) live in client_transport_websocket.cpp.
 
+#include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -132,10 +134,19 @@ inline bool parseUpgradeResponse(const std::string &response,
         return false;
     }
 
-    // Find Sec-WebSocket-Accept header (case-insensitive name match not
-    // needed for RFC 6455 compliance — servers must use this exact casing).
-    const std::string kAcceptHdr = "Sec-WebSocket-Accept: ";
-    auto pos = response.find(kAcceptHdr);
+    // Find Sec-WebSocket-Accept header.
+    // RFC 7230 §3.2 requires case-insensitive header-name matching.
+    // Cloudflare's tunnel (cloudflared) lowercases all header names when
+    // proxying, so the header may arrive as "sec-websocket-accept: " rather
+    // than the canonical RFC 6455 casing.  Search a lowercase copy of the
+    // response for the lowercase needle, then extract the value from the
+    // original string so the base64 accept value is preserved exactly.
+    std::string lower(response.size(), '\0');
+    std::transform(response.begin(), response.end(), lower.begin(),
+                   [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+
+    const std::string kAcceptHdr = "sec-websocket-accept: ";
+    auto pos = lower.find(kAcceptHdr);
     if (pos == std::string::npos)
     {
         errOut = "Sec-WebSocket-Accept header missing";
