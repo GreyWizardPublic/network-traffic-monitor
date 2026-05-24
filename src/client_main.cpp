@@ -37,7 +37,7 @@ int main(int argc, char *argv[])
                          "                  [--server HOST] [--port N]\n"
                          "                  [--identity PEM_PATH] [--ca CA_FILE] [--server-cert SERVER_PEM]\n"
                          "                  [--reconnect-attempts N] [--reconnect-interval SECS]\n"
-                         "                  [--no-compress]\n"
+                         "                  [--no-compress] [--transport tcp|websocket]\n"
                          "  --daemon                  run as background daemon\n"
                          "  --verbose                 print detailed connection and authentication diagnostics\n"
                          "  --server HOST             server hostname or IP (default: 127.0.0.1)\n"
@@ -48,6 +48,8 @@ int main(int argc, char *argv[])
                          "  --reconnect-attempts N    max consecutive reconnect failures before exit (default 10)\n"
                          "  --reconnect-interval SECS seconds between reconnect attempts (default 60)\n"
                          "  --no-compress             disable zlib compression on the data phase\n"
+                         "  --transport MODE          connection transport: tcp (default) or websocket\n"
+                         "                            Use websocket to traverse Cloudflare tunnels\n"
                          "  All options can also be set in a config file (key=value); CLI overrides config.\n";
             return 0;
         }
@@ -95,6 +97,20 @@ int main(int argc, char *argv[])
             opts.verbose = true;
         else if (arg == "--no-compress")
             opts.useCompression = false;
+        else if (arg == "--transport" && i + 1 < argc)
+        {
+            std::string mode(argv[++i]);
+            if (mode == "websocket" || mode == "ws")
+                opts.transport = ntm::TransportMode::WebSocket;
+            else if (mode == "tcp")
+                opts.transport = ntm::TransportMode::TcpTls;
+            else
+            {
+                std::cerr << "ntm-client: unknown transport '" << mode
+                          << "' — expected 'tcp' or 'websocket'\n";
+                return 1;
+            }
+        }
         else if (arg == "--reconnect-attempts" && i + 1 < argc)
         {
             try
