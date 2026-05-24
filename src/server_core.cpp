@@ -647,12 +647,24 @@ static std::string wsComputeAccept(const std::string &key)
 }
 
 // Extract Sec-WebSocket-Key header value from an HTTP request string.
+// Header names are case-insensitive per RFC 7230 §3.2.  Cloudflare's tunnel
+// (cloudflared) lowercases all header names when forwarding to the origin, so
+// the header arrives as "sec-websocket-key:" rather than the canonical casing.
+// We therefore search a lowercase copy of the request for the needle.
 static std::string wsExtractKey(const std::string &request)
 {
-    const std::string needle = "Sec-WebSocket-Key: ";
-    auto pos = request.find(needle);
+    // Lowercase the entire request for case-insensitive header-name lookup.
+    std::string lower(request.size(), '\0');
+    std::transform(request.begin(), request.end(), lower.begin(),
+                   [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+
+    const std::string needle = "sec-websocket-key: ";
+    auto pos = lower.find(needle);
     if (pos == std::string::npos) return {};
     pos += needle.size();
+
+    // Extract the value from the *original* (un-lowercased) request so the
+    // base64 key value is preserved exactly as sent.
     auto end = request.find('\r', pos);
     if (end == std::string::npos) end = request.find('\n', pos);
     if (end == std::string::npos) return {};
@@ -1670,6 +1682,9 @@ static void wsConnectionThread(
     {
         serverLog(LogLevel::Warn,
                   "ntm-server: [ws] missing Sec-WebSocket-Key from %s", peerAddr.c_str());
+        const std::string resp400 =
+            "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        writeExact(ssl, clientFd, resp400.data(), resp400.size());
         return;
     }
 
