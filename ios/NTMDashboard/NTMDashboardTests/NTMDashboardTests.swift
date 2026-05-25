@@ -11,7 +11,7 @@ final class DashboardSnapshotDecodeTests: XCTestCase {
         let json = """
         {
           "api_version": 7,
-          "server_version": "1.15.0",
+          "server_version": "1.18.0",
           "server_wire_proto_version": 2,
           "window_start": 1716480000,
           "generated_at": 1716480030,
@@ -22,11 +22,18 @@ final class DashboardSnapshotDecodeTests: XCTestCase {
             {"client":"home-pi","iface":"eth0","src_entity":"LAN (192.168.1.1)",
              "dst_entity":"google.com","bytes":400000,"packets":800}
           ],
-          "entities_internet": [],
-          "entities_local":   [],
-          "overhead_entities": [],
+          "truncated": false,
+          "overhead_entities": [
+            {"client":"home-pi","iface":"eth0","src_entity":"home-pi",
+             "dst_entity":"ntm-server","bytes":2000,"packets":50}
+          ],
+          "truncated_overhead": false,
           "overhead_summary": {"packets":50,"bytes":2000,"pct_of_total_bytes":"0.40"},
-          "entities_lan": [],
+          "entities_lan": [
+            {"ip":"192.168.1.55","reported_by":"","out_packets":80,"out_bytes":10000,
+             "in_packets":40,"in_bytes":5000}
+          ],
+          "truncated_lan": false,
           "client_health": [
             {
               "client": "home-pi",
@@ -36,7 +43,8 @@ final class DashboardSnapshotDecodeTests: XCTestCase {
               "pcap_recv": 10000,
               "pcap_drop": 5,
               "pcap_drop_pct": "0.05",
-              "buf_drop": 0,
+              "buf_drop": 3,
+              "buf_drop_pct": "0.03",
               "reported_at": 1716480025,
               "stale": false,
               "wire_proto_version": 2,
@@ -45,13 +53,18 @@ final class DashboardSnapshotDecodeTests: XCTestCase {
               "agg_flows": 42
             }
           ],
-          "proto_rejected_clients": []
+          "proto_rejected_clients": [],
+          "update_manifest": [
+            {"platform":"linux-amd64","version":"1.13.0",
+             "filename":"ntm-client-linux-amd64-1.13.0",
+             "sha256":"a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4"}
+          ]
         }
         """
         let s = try decode(json)
 
         XCTAssertEqual(s.apiVersion, 7)
-        XCTAssertEqual(s.serverVersion, "1.15.0")
+        XCTAssertEqual(s.serverVersion, "1.18.0")
         XCTAssertEqual(s.serverWireProtoVersion, 2)
         XCTAssertEqual(s.windowStart, 1716480000)
         XCTAssertEqual(s.generatedAt, 1716480030)
@@ -65,14 +78,31 @@ final class DashboardSnapshotDecodeTests: XCTestCase {
         XCTAssertEqual(s.interfaces[0].bytes, 500000)
         XCTAssertEqual(s.interfaces[0].packets, 1000)
 
-        // Entities
+        // Entities + truncation
         XCTAssertEqual(s.entities.count, 1)
         XCTAssertEqual(s.entities[0].bytes, 400000)
         XCTAssertEqual(s.entities[0].packets, 800)
         XCTAssertEqual(s.entities[0].srcEntity, "LAN (192.168.1.1)")
         XCTAssertEqual(s.entities[0].dstEntity, "google.com")
+        XCTAssertFalse(s.truncated)
 
-        // Client health — all fields
+        // Overhead
+        XCTAssertEqual(s.overheadEntities.count, 1)
+        XCTAssertFalse(s.truncatedOverhead)
+
+        // OverheadSummary
+        let os = try XCTUnwrap(s.overheadSummary)
+        XCTAssertEqual(os.packets, 50)
+        XCTAssertEqual(os.bytes, 2000)
+        XCTAssertEqual(os.pctOfTotalBytes, "0.40")
+
+        // LAN devices + truncation
+        XCTAssertEqual(s.entitiesLan.count, 1)
+        XCTAssertEqual(s.entitiesLan[0].ip, "192.168.1.55")
+        XCTAssertEqual(s.entitiesLan[0].reportedBy, "")
+        XCTAssertFalse(s.truncatedLan)
+
+        // Client health — all fields including v7 additions
         let ch = try XCTUnwrap(s.clientHealth.first)
         XCTAssertEqual(ch.client, "home-pi")
         XCTAssertEqual(ch.clientId, "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234")
@@ -81,18 +111,22 @@ final class DashboardSnapshotDecodeTests: XCTestCase {
         XCTAssertEqual(ch.pcapRecv, 10000)
         XCTAssertEqual(ch.pcapDrop, 5)
         XCTAssertEqual(ch.pcapDropPct, "0.05")
-        XCTAssertEqual(ch.bufDrop, 0)
+        XCTAssertEqual(ch.bufDrop, 3)
+        XCTAssertEqual(ch.bufDropPct, "0.03")
         XCTAssertFalse(ch.stale)
         XCTAssertEqual(ch.wireProtoVersion, 2)
         XCTAssertEqual(ch.wireProtoOk, true)
         XCTAssertEqual(ch.aggIntervalMs, 500)
         XCTAssertEqual(ch.aggFlows, 42)
 
-        // OverheadSummary
-        let os = try XCTUnwrap(s.overheadSummary)
-        XCTAssertEqual(os.packets, 50)
-        XCTAssertEqual(os.bytes, 2000)
-        XCTAssertEqual(os.pctOfTotalBytes, "0.40")
+        // update_manifest
+        XCTAssertEqual(s.updateManifest.count, 1)
+        let um = s.updateManifest[0]
+        XCTAssertEqual(um.platform, "linux-amd64")
+        XCTAssertEqual(um.version, "1.13.0")
+        XCTAssertEqual(um.filename, "ntm-client-linux-amd64-1.13.0")
+        XCTAssertEqual(um.sha256, "a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4")
+        XCTAssertEqual(um.id, "linux-amd64")
     }
 
     // MARK: Optional arrays default to empty — api_version 4-era server
@@ -117,8 +151,13 @@ final class DashboardSnapshotDecodeTests: XCTestCase {
         XCTAssertTrue(s.entitiesLan.isEmpty)
         XCTAssertTrue(s.clientHealth.isEmpty)
         XCTAssertTrue(s.protoRejectedClients.isEmpty)
+        XCTAssertTrue(s.updateManifest.isEmpty, "update_manifest absent → empty array")
         XCTAssertNil(s.overheadSummary)
         XCTAssertNil(s.localSummary)
+        // truncation flags default to false when absent
+        XCTAssertFalse(s.truncated,         "truncated absent → false")
+        XCTAssertFalse(s.truncatedOverhead, "truncated_overhead absent → false")
+        XCTAssertFalse(s.truncatedLan,      "truncated_lan absent → false")
     }
 
     // MARK: ClientHealth — all optional fields absent (old client, no agg, no wire_proto fields)
@@ -143,6 +182,43 @@ final class DashboardSnapshotDecodeTests: XCTestCase {
         XCTAssertNil(ch.wireProtoOk)
         XCTAssertNil(ch.clientId)
         XCTAssertNil(ch.platform)
+        // buf_drop_pct absent on pre-v7 servers — defaults to "0.00"
+        XCTAssertEqual(ch.bufDropPct, "0.00",
+                       "buf_drop_pct absent on old server must default to '0.00'")
+    }
+
+    // buf_drop_pct present when server emits it
+    func testClientHealthBufDropPct() throws {
+        let json = """
+        {"client":"fast-client","version":"1.13.0","pcap_recv":50000,"pcap_drop":0,
+         "pcap_drop_pct":"0.00","buf_drop":25,"buf_drop_pct":"0.05",
+         "reported_at":1716480000,"stale":false}
+        """
+        let ch = try JSONDecoder().decode(ClientHealth.self, from: Data(json.utf8))
+        XCTAssertEqual(ch.bufDrop, 25)
+        XCTAssertEqual(ch.bufDropPct, "0.05")
+    }
+
+    // id falls back to client name when client_id absent (pre-v7 server)
+    func testClientHealthIdFallsBackToClientName() throws {
+        let json = """
+        {"client":"my-pi","version":"1.9.0","pcap_recv":0,"pcap_drop":0,
+         "pcap_drop_pct":"0.00","buf_drop":0,"reported_at":0,"stale":false}
+        """
+        let ch = try JSONDecoder().decode(ClientHealth.self, from: Data(json.utf8))
+        XCTAssertNil(ch.clientId)
+        XCTAssertEqual(ch.id, "my-pi", "id must fall back to 'client' when client_id absent")
+    }
+
+    // id is the 64-hex client_id when present (v7+)
+    func testClientHealthIdIsClientIdWhenPresent() throws {
+        let hex = String(repeating: "a", count: 64)
+        let json = """
+        {"client":"my-pi","client_id":"\(hex)","version":"1.13.0","pcap_recv":0,
+         "pcap_drop":0,"pcap_drop_pct":"0.00","buf_drop":0,"reported_at":0,"stale":false}
+        """
+        let ch = try JSONDecoder().decode(ClientHealth.self, from: Data(json.utf8))
+        XCTAssertEqual(ch.id, hex)
     }
 
     func testClientHealthStaleTrue() throws {
@@ -244,11 +320,12 @@ final class DashboardSnapshotDecodeTests: XCTestCase {
 
     func testLanDeviceWithHostname() throws {
         let json = """
-        {"ip":"192.168.1.55","out_bytes":10000,"in_bytes":5000,
+        {"ip":"192.168.1.55","reported_by":"203.0.113.1","out_bytes":10000,"in_bytes":5000,
          "out_packets":80,"in_packets":40,"hostname":"smart-tv.local"}
         """
         let d = try JSONDecoder().decode(LanDevice.self, from: Data(json.utf8))
         XCTAssertEqual(d.ip, "192.168.1.55")
+        XCTAssertEqual(d.reportedBy, "203.0.113.1")
         XCTAssertEqual(d.outBytes, 10000)
         XCTAssertEqual(d.inBytes, 5000)
         XCTAssertEqual(d.outPackets, 80)
@@ -259,10 +336,43 @@ final class DashboardSnapshotDecodeTests: XCTestCase {
 
     func testLanDeviceWithoutHostname() throws {
         let json = """
-        {"ip":"10.0.0.2","out_bytes":500,"in_bytes":200,"out_packets":5,"in_packets":2}
+        {"ip":"10.0.0.2","reported_by":"","out_bytes":500,"in_bytes":200,
+         "out_packets":5,"in_packets":2}
         """
         let d = try JSONDecoder().decode(LanDevice.self, from: Data(json.utf8))
         XCTAssertNil(d.hostname)
+        XCTAssertEqual(d.reportedBy, "")
+    }
+
+    // reported_by: same subnet (empty string means client and device are on the same LAN)
+    func testLanDeviceReportedBySameSubnet() throws {
+        let json = """
+        {"ip":"192.168.1.100","reported_by":"","out_bytes":1000,"in_bytes":500,
+         "out_packets":10,"in_packets":5}
+        """
+        let d = try JSONDecoder().decode(LanDevice.self, from: Data(json.utf8))
+        XCTAssertEqual(d.reportedBy, "",
+                       "empty reported_by means the client is on the same subnet")
+    }
+
+    // reported_by: remote client (non-empty WAN IP)
+    func testLanDeviceReportedByRemoteClient() throws {
+        let json = """
+        {"ip":"10.0.0.42","reported_by":"203.0.113.7","out_bytes":2000,"in_bytes":1000,
+         "out_packets":20,"in_packets":10}
+        """
+        let d = try JSONDecoder().decode(LanDevice.self, from: Data(json.utf8))
+        XCTAssertEqual(d.reportedBy, "203.0.113.7")
+    }
+
+    // reported_by absent (pre-v7 server) → defaults to empty string
+    func testLanDeviceReportedByDefaultsToEmptyWhenAbsent() throws {
+        let json = """
+        {"ip":"192.168.0.5","out_bytes":100,"in_bytes":50,"out_packets":1,"in_packets":1}
+        """
+        let d = try JSONDecoder().decode(LanDevice.self, from: Data(json.utf8))
+        XCTAssertEqual(d.reportedBy, "",
+                       "reported_by absent on pre-v7 server must default to empty string")
     }
 
     // MARK: OverheadSummary
@@ -302,24 +412,78 @@ final class DashboardSnapshotDecodeTests: XCTestCase {
         XCTAssertEqual(s.protoRejectedClients[0].peerIp, "5.5.5.5")
     }
 
-    // MARK: Spec gap tests — skipped, serve as living bug reports
+    // MARK: Truncation flags (spec § 10)
 
-    /// API spec § 10 documents `truncated`, `truncated_overhead`, `truncated_lan` booleans.
-    /// DashboardSnapshot omits them. Add these fields and enable the assertions.
-    func testTruncatedFlags_specGap() throws {
-        throw XCTSkip("Spec gap #4: DashboardSnapshot missing truncated/truncated_overhead/truncated_lan")
+    // truncated = true: server capped the entities list
+    func testTruncatedTrueWhenPresent() throws {
+        let json = """
+        {"server_version":"1.18.0","window_start":0,"generated_at":0,
+         "interfaces":[],"entities":[],"truncated":true,"overhead_entities":[]}
+        """
+        let s = try decode(json)
+        XCTAssertTrue(s.truncated)
     }
 
-    /// API spec § 10 (api_version 7) documents `update_manifest` array.
-    /// DashboardSnapshot omits it.
-    func testUpdateManifest_specGap() throws {
-        throw XCTSkip("Spec gap #5: DashboardSnapshot missing update_manifest array")
+    // truncated_overhead = true: server capped overhead_entities
+    func testTruncatedOverheadTrueWhenPresent() throws {
+        let json = """
+        {"server_version":"1.18.0","window_start":0,"generated_at":0,
+         "interfaces":[],"entities":[],"overhead_entities":[],"truncated_overhead":true}
+        """
+        let s = try decode(json)
+        XCTAssertTrue(s.truncatedOverhead)
     }
 
-    /// API spec § 10 documents `reported_by` field in LanDevice entries.
-    /// LanDevice model omits it.
-    func testLanDeviceReportedBy_specGap() throws {
-        throw XCTSkip("Spec gap #2: LanDevice missing reported_by field")
+    // truncated_lan = true: server capped entities_lan
+    func testTruncatedLanTrueWhenPresent() throws {
+        let json = """
+        {"server_version":"1.18.0","window_start":0,"generated_at":0,
+         "interfaces":[],"entities":[],"overhead_entities":[],"truncated_lan":true}
+        """
+        let s = try decode(json)
+        XCTAssertTrue(s.truncatedLan)
+    }
+
+    // MARK: update_manifest (spec § 10, api_version 7)
+
+    func testUpdateManifestDecodesAllFields() throws {
+        let json = """
+        {"server_version":"1.18.0","window_start":0,"generated_at":0,
+         "interfaces":[],"entities":[],"overhead_entities":[],
+         "update_manifest":[
+           {"platform":"linux-amd64","version":"1.13.0",
+            "filename":"ntm-client-linux-amd64-1.13.0",
+            "sha256":"deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"}
+         ]}
+        """
+        let s = try decode(json)
+        XCTAssertEqual(s.updateManifest.count, 1)
+        let um = s.updateManifest[0]
+        XCTAssertEqual(um.platform, "linux-amd64")
+        XCTAssertEqual(um.version, "1.13.0")
+        XCTAssertEqual(um.filename, "ntm-client-linux-amd64-1.13.0")
+        XCTAssertEqual(um.sha256,
+                       "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+        XCTAssertEqual(um.id, "linux-amd64")
+    }
+
+    func testUpdateManifestMultiplePlatforms() throws {
+        let json = """
+        {"server_version":"1.18.0","window_start":0,"generated_at":0,
+         "interfaces":[],"entities":[],"overhead_entities":[],
+         "update_manifest":[
+           {"platform":"linux-amd64","version":"1.13.0",
+            "filename":"ntm-client-linux-amd64-1.13.0",
+            "sha256":"aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd"},
+           {"platform":"windows-amd64","version":"1.12.0",
+            "filename":"ntm-client-windows-amd64-1.12.0.exe",
+            "sha256":"11223344112233441122334411223344112233441122334411223344112233aa"}
+         ]}
+        """
+        let s = try decode(json)
+        XCTAssertEqual(s.updateManifest.count, 2)
+        XCTAssertEqual(s.updateManifest[0].platform, "linux-amd64")
+        XCTAssertEqual(s.updateManifest[1].platform, "windows-amd64")
     }
 
     // MARK: - Helpers

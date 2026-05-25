@@ -24,6 +24,7 @@
 		8170C0447D586E7C3AB8C218 /* EntityFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C6C15169CB5FC9E7CBBDA95 /* EntityFlow.swift */; };
 		89D1CF18AC87CA02A3B688B5 /* EntityFlowsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AB372E094EFED56458E95BD /* EntityFlowsSection.swift */; };
 		8F722091EAB8FDFB2A84A997 /* NTMDashboardApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39E3B19CB0DD2B03641509F1 /* NTMDashboardApp.swift */; };
+		95F73691B23CD8B27906FD24 /* UpdateManifest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 157633DE3976373B39528F5D /* UpdateManifest.swift */; };
 		9C029F8BCE9FBE3E5E7095D8 /* RegisterDeviceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A28C84A9FAFD2E66259B3B9 /* RegisterDeviceView.swift */; };
 		A5CAE318D2F9ACC241A15574 /* CertificatePinner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 211C120F7F3FAB95364C4930 /* CertificatePinner.swift */; };
 		A6DC3789757BD7F4A0B4AF12 /* ProtocolVersion.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4DD610B34BF286883320588 /* ProtocolVersion.swift */; };
@@ -55,6 +56,7 @@
 /* Begin PBXFileReference section */
 		0B4B0DCACE152D40FFA4FDFC /* Color+NTM.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Color+NTM.swift"; sourceTree = "<group>"; };
 		14B5DDB449A2E0FBF1884AB5 /* ClientHealth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientHealth.swift; sourceTree = "<group>"; };
+		157633DE3976373B39528F5D /* UpdateManifest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateManifest.swift; sourceTree = "<group>"; };
 		1786AF78B5E75A6D76546E5A /* DashboardSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardSnapshot.swift; sourceTree = "<group>"; };
 		17D7EA47DF8FD33E34D5FD50 /* GlassCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlassCard.swift; sourceTree = "<group>"; };
 		1996311C087DD337943D5408 /* ConnectionBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionBar.swift; sourceTree = "<group>"; };
@@ -230,6 +232,7 @@
 				EEC74B35B28474BABB90D917 /* InterfaceStat.swift */,
 				2DC19E4E0E4229D577684AAC /* LanDevice.swift */,
 				8514DAA6EF7557EBA0370386 /* ProtoRejectedClient.swift */,
+				157633DE3976373B39528F5D /* UpdateManifest.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -366,6 +369,7 @@
 				70D5500660FEEA05B228DEDD /* SettingsView.swift in Sources */,
 				E1150CEA5CE76C8881B1AF04 /* SettingsViewModel.swift in Sources */,
 				FC204BDFFB2287D1EC0A694F /* StatBadge.swift in Sources */,
+				95F73691B23CD8B27906FD24 /* UpdateManifest.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -418,7 +422,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.5.0;
+				MARKETING_VERSION = 1.6.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ntm.NTMDashboard;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -507,7 +511,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.5.0;
+				MARKETING_VERSION = 1.6.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ntm.NTMDashboard;
 				SDKROOT = iphoneos;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
