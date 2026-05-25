@@ -1,6 +1,6 @@
-# NTM Dashboard API Protocol — Specification v7
+# NTM Dashboard API Protocol — Specification v9
 
-**API version:** 7  
+**API version:** 9  
 **Software version where introduced:** ntm 1.12.0  
 **File owner:** This document is the authoritative specification for the HTTPS
 API between `ntm-server` and any dashboard client (iOS app, web browser, or
@@ -106,6 +106,7 @@ software version (`server_version`).
 
 | Version | Change |
 |---|---|
+| 9 | Added `GET /api/client/history` — per-client traffic histogram data (in/out bytes and packets per minute or per hour). Returns a fine ring (last N 1-minute buckets) or a coarse ring (hourly aggregation across the full retention window). Requires authenticated session; rate-limited to 30 req/IP/min (ntm-server 1.21.0). |
 | 8 | Added `GET /api/update/download_sig` — download ML-DSA-65 signature file for the client binary. Added `sig_size` field to `/api/update/check` response. Added client push endpoints `GET /admin/client/nonce` and `POST /admin/client/push` — push signed client binaries into `update_dir` via ML-DSA-65 authenticated upload (ntm-server 1.19.0, ntm-client 1.15.0). |
 | 7 | Added auto-update endpoints: `GET /api/update/check`, `GET /api/update/download`, `POST /api/admin/update/scan`, `POST /api/admin/update/force`. Added `client_id` and `platform` fields to each `client_health` entry. Added `update_manifest` array to `/api/summary`. Added admin session endpoints `GET /api/admin/monitors` (ntm-server 1.12.0). |
 | 6 | Added Internet/Local traffic split: `entities_internet`, `truncated_internet`, `entities_local`, `truncated_local`, `local_summary` to `/api/summary`. Added `GET /api/admin/monitors`, `POST /api/admin/demo`. Admin session token support (30 min TTL) for legacy password mode. NTMDashboard 1.3.0, ntm-server 1.11.0. |
@@ -329,7 +330,7 @@ recognise. New optional fields may be added at any `api_version` without a bump.
 
 ```json
 {
-  "api_version":              <integer>,  // API contract revision; currently 7
+  "api_version":              <integer>,  // API contract revision; currently 9
   "server_version":           <string>,   // ntm-server module version, e.g. "1.8.1"
   "server_wire_proto_version": <integer>, // wire protocol data-phase version the server speaks
   "window_start":              <integer>, // unix epoch: start of the rolling stats window
@@ -793,9 +794,73 @@ Rate-limited to 1 request/minute per IP.
 
 ---
 
-## 15. Stability Contract
+## 15. Per-Client Traffic History *(api_version 9+)*
 
-- All fields documented in § 10–14 are **stable at `api_version: 8`**.
+### `GET /api/client/history`
+
+Returns per-minute or per-hour in/out traffic buckets for a single connected
+(or historically connected) client. Used by the web dashboard to render the
+traffic histogram panel when a client is selected.
+
+**Authentication:** Authenticated session required (same as `/api/summary`).
+
+**Rate limit:** 30 requests/IP/minute (shared with general rate limiter).
+
+**Query parameters:**
+
+| Name | Required | Description |
+|---|---|---|
+| `client_id` | yes | 64 lowercase hex chars — Ed25519 public key (stable client identity) |
+| `minutes` | no | Integer 1–1440: return the last N 1-minute buckets (fine ring). Omitted, `0`, or negative: return all hourly buckets across the full retention window (coarse ring). Values > 1440 are clamped to 1440. |
+
+**Fine ring response** (`minutes` in [1, 1440]):
+
+```json
+{
+  "client_id":      "<64 hex>",
+  "bucket_seconds": 60,
+  "window_days":    7,
+  "buckets": [
+    {
+      "t":           1716480000,
+      "in_bytes":    12345,
+      "out_bytes":   67890,
+      "in_packets":  42,
+      "out_packets": 91
+    }
+  ]
+}
+```
+
+`buckets` contains up to `minutes` entries, oldest-first, covering only
+non-empty slots (slots that have never been written are omitted). The most
+recent bucket is always last in the array.
+
+**Coarse ring response** (`minutes` omitted or ≤ 0):
+
+Same schema with `"bucket_seconds": 3600`. Contains up to 168 hourly buckets
+(7 days × 24 hours). Slots that have never been written are omitted; the array
+is sorted oldest-first by `t`.
+
+**Direction convention:**
+
+- `in_bytes` / `in_packets`: traffic whose **destination** is a LAN/loopback
+  IP and whose **source** is a WAN IP (i.e. inbound to the LAN).
+- `out_bytes` / `out_packets`: all other traffic (outbound from the LAN, or
+  LAN-to-LAN flows).
+
+**Error responses:**
+
+| Status | Reason |
+|---|---|
+| `400` | `client_id` is missing or not exactly 64 lowercase hex chars |
+| `200` with empty `buckets` | `client_id` is valid but no history data exists for this client |
+
+---
+
+## 16. Stability Contract
+
+- All fields documented in § 10–15 are **stable at `api_version: 9`**.
   No field will be removed or renamed without a version bump.
 - New **optional** fields may be added at any `api_version` without bumping;
   clients must tolerate extra fields.
@@ -812,4 +877,6 @@ Rate-limited to 1 request/minute per IP.
 - Servers at `api_version: 7` (ntm-server < 1.19.0) do not have `/api/update/download_sig`
   or the client push endpoints. Clients must not call `download_sig` on such servers;
   the updater falls back to SHA-256-only verification.
+- Servers at `api_version: 8` (ntm-server < 1.21.0) do not have `/api/client/history`.
+  Web dashboard clients must suppress the histogram panel when `api_version < 9`.
 - The protocol doc is updated **before** the commit that changes either side.

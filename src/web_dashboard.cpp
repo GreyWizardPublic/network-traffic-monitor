@@ -1442,6 +1442,16 @@ tr:hover td{background:#171726}
 .cli-row{display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:0.82em}
 .cli-row label{color:#888}
 .cli-sel{background:#111118;color:#ccc;border:1px solid #252535;padding:2px 8px;font-family:monospace;font-size:0.82em;border-radius:3px;outline:none;min-width:160px}
+#histPanel{margin-top:10px;padding:8px;border:1px solid #252535;border-radius:4px;background:#0b0b12}
+.hist-controls{display:flex;align-items:center;gap:10px;margin-bottom:6px;font-size:0.78em;color:#888}
+.hist-controls label{cursor:pointer}
+.hist-controls input[type=radio]{accent-color:#7af}
+.hist-controls input[type=number]{width:48px;background:#111118;color:#ccc;border:1px solid #252535;padding:1px 4px;font-family:monospace;font-size:0.82em;border-radius:3px;outline:none}
+#histCanvas{display:block;width:100%;max-width:900px;height:180px}
+.hist-legend{font-size:0.72em;color:#666;margin-top:2px}
+.hist-legend span{margin-right:12px}
+.hist-in{color:#5b8}
+.hist-out{color:#e84}
 </style>
 </head>
 <body>
@@ -1496,6 +1506,21 @@ tr:hover td{background:#171726}
   <div class="note" id="lan_note"></div>
 </div>
 
+<div id="histPanel" style="display:none">
+  <div class="section">Traffic History</div>
+  <div class="hist-controls">
+    <label><input type="radio" name="histMode" value="recent" checked onchange="histModeChanged()"> Recent</label>
+    <input type="number" id="histMins" value="60" min="1" max="1440" onchange="fetchHistory()">
+    <span>min</span>
+    <label><input type="radio" name="histMode" value="full" onchange="histModeChanged()"> Full window</label>
+  </div>
+  <canvas id="histCanvas"></canvas>
+  <div class="hist-legend">
+    <span class="hist-in">&#9646; In</span>
+    <span class="hist-out">&#9646; Out</span>
+    <span id="histInfo" style="color:#555"></span>
+  </div>
+</div>
 
 <script>
 async function doLogout(){
@@ -1627,6 +1652,108 @@ function setS(ok,m){
   document.getElementById('dot').className='dot '+(ok?'ok':'err');
   document.getElementById('smsg').textContent=m;
 }
+// ── Traffic History Histogram ────────────────────────────────────────────
+let clientIdMap={};  // display name → hex64 client_id (from client_health)
+function updateClientIdMap(d){
+  clientIdMap={};
+  (d.client_health||[]).forEach(function(h){
+    if(h.client&&h.client_id)clientIdMap[h.client]=h.client_id;
+  });
+}
+function histModeChanged(){fetchHistory();}
+function fetchHistory(){
+  if(!selClient)return;
+  const hexId=clientIdMap[selClient];
+  if(!hexId){document.getElementById('histInfo').textContent='(no client_id available)';return;}
+  const mode=document.querySelector('input[name=histMode]:checked').value;
+  const mins=mode==='recent'?parseInt(document.getElementById('histMins').value||60,10):0;
+  const url='/api/client/history?client_id='+encodeURIComponent(hexId)+(mins>0?'&minutes='+mins:'');
+  fetch(url,{cache:'no-store'}).then(r=>r.json()).then(drawHistogram).catch(function(e){
+    document.getElementById('histInfo').textContent='Error: '+e.message;
+  });
+}
+function fmtBAxis(b){
+  if(b>=1073741824)return(b/1073741824).toFixed(1)+'G';
+  if(b>=1048576)return(b/1048576).toFixed(1)+'M';
+  if(b>=1024)return(b/1024).toFixed(0)+'K';
+  return b+'B';
+}
+function fmtBucketLabel(t,bucketSec){
+  const d=new Date(t*1000);
+  if(bucketSec>=3600)return(d.getMonth()+1)+'/'+(d.getDate())+' '+d.getHours()+'h';
+  return d.getHours()+':'+(d.getMinutes()<10?'0':'')+d.getMinutes();
+}
+function drawHistogram(data){
+  const buckets=data.buckets||[];
+  const bSec=data.bucket_seconds||60;
+  const wDays=data.window_days||7;
+  const info=bSec>=3600?'Hourly, up to '+wDays+' day(s)':'1-minute buckets';
+  document.getElementById('histInfo').textContent=info;
+  const canvas=document.getElementById('histCanvas');
+  const dpr=window.devicePixelRatio||1;
+  const W=canvas.clientWidth||800;
+  const H=180;
+  canvas.width=Math.round(W*dpr);
+  canvas.height=Math.round(H*dpr);
+  const ctx=canvas.getContext('2d');
+  ctx.scale(dpr,dpr);
+  ctx.clearRect(0,0,W,H);
+  if(!buckets.length){
+    ctx.fillStyle='#555';ctx.font='12px monospace';
+    ctx.fillText('No data',W/2-30,H/2);return;
+  }
+  const maxVal=buckets.reduce(function(m,b){return Math.max(m,b.in_bytes,b.out_bytes);},1);
+  const PAD_L=52,PAD_R=10,PAD_T=10,PAD_B=32;
+  const cW=W-PAD_L-PAD_R,cH=H-PAD_T-PAD_B;
+  const n=buckets.length;
+  const bW=Math.max(1,Math.floor(cW/n)-1);
+  const gap=Math.max(0,Math.floor((cW-bW*n)/(n+1)));
+  // Y axis
+  ctx.strokeStyle='#252535';ctx.lineWidth=1;
+  for(let i=0;i<=4;i++){
+    const y=PAD_T+cH*(1-i/4);
+    ctx.beginPath();ctx.moveTo(PAD_L,y);ctx.lineTo(W-PAD_R,y);ctx.stroke();
+    ctx.fillStyle='#555';ctx.font='10px monospace';ctx.textAlign='right';
+    ctx.fillText(fmtBAxis(Math.round(maxVal*i/4)),PAD_L-4,y+3);
+  }
+  // Bars
+  buckets.forEach(function(b,i){
+    const x=PAD_L+gap+(bW+gap)*i;
+    const hIn=Math.round((b.in_bytes/maxVal)*cH);
+    const hOut=Math.round((b.out_bytes/maxVal)*cH);
+    const half=Math.max(1,Math.floor(bW/2));
+    // In bar (left half)
+    ctx.fillStyle='#3a7a5a';
+    ctx.fillRect(x,PAD_T+cH-hIn,half,hIn);
+    // Out bar (right half)
+    ctx.fillStyle='#b85520';
+    ctx.fillRect(x+half,PAD_T+cH-hOut,bW-half,hOut);
+  });
+  // X labels (show ~6 evenly spaced)
+  ctx.fillStyle='#555';ctx.font='9px monospace';ctx.textAlign='center';
+  const step=Math.max(1,Math.floor(n/6));
+  buckets.forEach(function(b,i){
+    if(i%step===0||i===n-1){
+      const x=PAD_L+gap+(bW+gap)*i+bW/2;
+      ctx.fillText(fmtBucketLabel(b.t,bSec),x,H-PAD_B+12);
+    }
+  });
+}
+// Show/hide histogram panel when client selection changes
+const _origOnClientChange=onClientChange;
+onClientChange=function(){
+  _origOnClientChange();
+  const panel=document.getElementById('histPanel');
+  if(selClient){panel.style.display='';fetchHistory();}
+  else panel.style.display='none';
+};
+// Also update clientIdMap on each refresh
+const _origRefresh=refresh;
+refresh=async function(){
+  await _origRefresh();
+  if(lastSnap)updateClientIdMap(lastSnap);
+  if(selClient)fetchHistory();
+};
 refresh();
 setInterval(refresh,POLL_MS);
 </script>
@@ -2252,6 +2379,55 @@ void registerWebHandlers(NtmHttpServer &svr,
                                              config.server_ips, config.dashboard_ips,
                                              config.ip_data_updater),
                             "application/json");
+        });
+
+    // GET /api/client/history?client_id=<hex64>&minutes=<N>
+    //   N in [1, 1440] → last N 1-minute buckets from the fine ring.
+    //   N omitted or <= 0 → full coarse ring (per-hour, up to 7 days).
+    // Requires a WebAuthn session (no admin cookie needed).
+    svr.Get("/api/client/history",
+        [&stats](const httplib::Request &req, httplib::Response &res)
+        {
+            res.set_header("Cache-Control", "no-store");
+            const std::string clientId = req.get_param_value("client_id");
+            if (clientId.size() != 64 ||
+                clientId.find_first_not_of("0123456789abcdefABCDEF") != std::string::npos)
+            {
+                res.status = 400;
+                res.set_content("{\"error\":\"client_id must be 64 hex characters\"}", "application/json");
+                return;
+            }
+            int minutes = 0;
+            const std::string mStr = req.get_param_value("minutes");
+            if (!mStr.empty())
+            {
+                try { minutes = std::stoi(mStr); } catch (...) { minutes = 0; }
+                if (minutes < 1 || minutes > static_cast<int>(ClientHistoryRing::kMinuteSlots))
+                    minutes = 0;
+            }
+            const ClientHistorySnapshot snap = stats.snapshotHistory(clientId, minutes);
+            std::string body;
+            body.reserve(256 + snap.buckets.size() * 80);
+            body += "{\"client_id\":\"";
+            body += snap.clientId;
+            body += "\",\"bucket_seconds\":";
+            body += std::to_string(snap.bucketSeconds);
+            body += ",\"window_days\":";
+            body += std::to_string(snap.windowDays);
+            body += ",\"buckets\":[";
+            for (std::size_t i = 0; i < snap.buckets.size(); ++i)
+            {
+                const auto &b = snap.buckets[i];
+                if (i) body += ',';
+                body += "{\"t\":";    body += std::to_string(b.t);
+                body += ",\"in_bytes\":";  body += std::to_string(b.inBytes);
+                body += ",\"out_bytes\":"; body += std::to_string(b.outBytes);
+                body += ",\"in_packets\":";  body += std::to_string(b.inPackets);
+                body += ",\"out_packets\":"; body += std::to_string(b.outPackets);
+                body += '}';
+            }
+            body += "]}";
+            res.set_content(body, "application/json");
         });
 
     // POST /api/admin/auth — verify admin password and issue ntm_admin proof cookie.
