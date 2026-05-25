@@ -99,6 +99,7 @@ if(WIN32)
     add_executable(ntm-client
         ${NTM_CLIENT_COMMON_SOURCES}
         src/client_windows.cpp
+        src/client_windows_service.cpp
         src/third_party/miniz/miniz.c
     )
     target_include_directories(ntm-client PRIVATE "${NPCAP_SDK}/Include" src)
@@ -110,6 +111,7 @@ if(WIN32)
             wpcap          # Npcap import library (runtime — requires npcap.sys kernel driver)
             ws2_32
             iphlpapi
+            advapi32       # Windows SCM APIs (service mode)
             crypt32        # Windows certificate store (required by OpenSSL)
             bcrypt         # Windows CNG (required by OpenSSL 3.x)
             Threads::Threads
