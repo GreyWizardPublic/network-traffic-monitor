@@ -209,6 +209,18 @@ info "Auth proof ready (${#AUTH_PROOF_B64} b64 chars)"
 # ---------------------------------------------------------------------------
 # Step 3: Push binary + signature + auth proof to server
 # ---------------------------------------------------------------------------
+# On Windows/MSYS2, MinGW curl misparses POSIX paths (/c/Users/...) when a
+# ;type= suffix is appended to -F @file fields (curl error 26). Converting to
+# Windows mixed paths (C:/Users/...) via cygpath -m avoids the issue.
+# On Linux, cygpath is absent and BINARY_FOR_CURL == BINARY.
+if command -v cygpath >/dev/null 2>&1; then
+    BINARY_FOR_CURL=$(cygpath -m "$BINARY")
+    SIG_FOR_CURL=$(cygpath -m "$SIG_FILE")
+else
+    BINARY_FOR_CURL="$BINARY"
+    SIG_FOR_CURL="$SIG_FILE"
+fi
+
 info "Uploading binary and signature to $BASE_URL/admin/client/push ..."
 PUSH_RESP=$(curl --silent --show-error --fail \
     --insecure \
@@ -216,8 +228,8 @@ PUSH_RESP=$(curl --silent --show-error --fail \
     -F "version=$VERSION" \
     -F "nonce=$NONCE" \
     -F "auth_proof=$AUTH_PROOF_B64" \
-    -F "binary=@$BINARY;type=application/octet-stream" \
-    -F "signature=@$SIG_FILE;type=application/octet-stream" \
+    -F "binary=@$BINARY_FOR_CURL;type=application/octet-stream" \
+    -F "signature=@$SIG_FOR_CURL;type=application/octet-stream" \
     "$BASE_URL/admin/client/push") \
     || die "server rejected the push (see server logs for details)"
 
