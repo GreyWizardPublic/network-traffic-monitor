@@ -38,7 +38,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 // 2. Connect to ntm-server.
                 // NWConnections in the extension process bypass the tunnel automatically.
                 try await wireClient.connect(
-                    host: config.host,
+                    host: config.wireHost ?? "",
                     port: UInt16(config.wirePort),
                     pinnedCertData: config.pinnedCertData,
                     privateKey: privateKey,
@@ -149,7 +149,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             do {
                 if !alreadyConnected {
                     try await wireClient.connect(
-                        host: config.host,
+                        host: config.wireHost ?? "",
                         port: UInt16(config.wirePort),
                         pinnedCertData: config.pinnedCertData,
                         privateKey: privateKey,

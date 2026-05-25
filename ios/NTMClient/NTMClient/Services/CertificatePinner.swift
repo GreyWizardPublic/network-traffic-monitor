@@ -1,7 +1,11 @@
+import CryptoKit
 import Foundation
 
 final class CertificatePinner: NSObject, URLSessionDelegate, @unchecked Sendable {
     private let pinnedCertData: Data?
+    // Always populated with the server's leaf cert DER when a TLS challenge fires.
+    // Used by SetupViewModel's TOFU flow to capture and pin an untrusted cert.
+    private(set) var lastSeenCert: Data?
 
     init(pinnedCertData: Data?) {
         self.pinnedCertData = pinnedCertData
@@ -19,22 +23,26 @@ final class CertificatePinner: NSObject, URLSessionDelegate, @unchecked Sendable
             return
         }
 
-        guard let pinnedData = pinnedCertData else {
-            completionHandler(.useCredential, URLCredential(trust: serverTrust))
-            return
+        if let chain = SecTrustCopyCertificateChain(serverTrust) as? [SecCertificate],
+           let first = chain.first {
+            lastSeenCert = SecCertificateCopyData(first) as Data
         }
 
-        guard let chain = SecTrustCopyCertificateChain(serverTrust) as? [SecCertificate],
-              let serverCert = chain.first else {
-            completionHandler(.cancelAuthenticationChallenge, nil)
-            return
-        }
-
-        let serverCertData = SecCertificateCopyData(serverCert) as Data
-        if serverCertData == pinnedData {
-            completionHandler(.useCredential, URLCredential(trust: serverTrust))
+        if let pinned = pinnedCertData {
+            if lastSeenCert == pinned {
+                completionHandler(.useCredential, URLCredential(trust: serverTrust))
+            } else {
+                completionHandler(.cancelAuthenticationChallenge, nil)
+            }
         } else {
-            completionHandler(.cancelAuthenticationChallenge, nil)
+            completionHandler(.useCredential, URLCredential(trust: serverTrust))
         }
+    }
+
+    // SHA-256 of the cert's DER bytes, first 8 pairs shown as "XX:XX:…".
+    static func fingerprint(_ data: Data) -> String {
+        let digest = SHA256.hash(data: data)
+        let hex = digest.map { String(format: "%02X", $0) }
+        return hex.prefix(8).joined(separator: ":") + "…"
     }
 }
