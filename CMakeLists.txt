@@ -170,6 +170,7 @@ if(WIN32)
             iphlpapi
             crypt32
             bcrypt
+            advapi32   # required by aclapi.h (GetEffectiveRightsFromAclW etc.)
             Threads::Threads
     )
     target_compile_definitions(ntm-tests-windows PRIVATE HAVE_REMOTE)
