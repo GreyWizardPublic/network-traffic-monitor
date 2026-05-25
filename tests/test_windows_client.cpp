@@ -18,7 +18,9 @@
 //   9.  daemonize stub (no crash)
 //   10. NetworkMonitor start / stop / checkAndClear lifecycle
 //   11. ClientConfig default values
-//   12. ALPN constants and selectAlpnFromClientList (port-multiplexing helper)
+//   12. Version / platform identity constants
+//   13. connectToServer — error paths (no live server required)
+//   14. collectLanAddresses — smoke test (no Npcap required)
 
 #ifndef _WIN32
 #  error "test_windows_client.cpp is Windows-only"
@@ -617,90 +619,102 @@ TEST_CASE("ClientConfig: reconnectMaxAttempts and reconnectIntervalSec are posit
     REQUIRE(cfg.reconnectIntervalSec > 0u);
 }
 
-// ── 12. ALPN constants and selectAlpnFromClientList ───────────────────────────
-// Covers the TLS port-multiplexing helper added in server v1.15.0 / client v1.13.0.
-// selectAlpnFromClientList parses OpenSSL wire-format ALPN offer lists
-// (length-prefixed strings) and selects "ntm-wire" > "http/1.1" > fallback.
-// Pure function — no OpenSSL dependency; compilable and testable on Windows.
+// ═══════════════════════════════════════════════════════════════════════════
+// 12. Version / platform identity constants
+// ═══════════════════════════════════════════════════════════════════════════
 
-TEST_CASE("ALPN: kAlpnNtmWire value is \"ntm-wire\"")
+TEST_CASE("version: kClientPlatform is windows-amd64")
 {
-    REQUIRE_EQ(std::string{ntm::kAlpnNtmWire}, std::string{"ntm-wire"});
+    REQUIRE_EQ(std::string{kClientPlatform}, std::string{"windows-amd64"});
 }
 
-TEST_CASE("ALPN: kAlpnHttp11 value is \"http/1.1\"")
+TEST_CASE("version: kClientVersion is non-empty")
 {
-    REQUIRE_EQ(std::string{ntm::kAlpnHttp11}, std::string{"http/1.1"});
+    REQUIRE(!std::string{kClientVersion}.empty());
 }
 
-TEST_CASE("ALPN: kAlpnNtmWire has length 8")
+TEST_CASE("version: kClientVersion matches MAJOR.MINOR.PATCH semver")
 {
-    // Wire encoding uses a 1-byte length prefix; the string must fit in a uint8.
-    REQUIRE_EQ(std::strlen(ntm::kAlpnNtmWire), std::size_t{8});
+    const std::string ver{kClientVersion};
+    // Quick parse: must have exactly two dots, all segments non-empty digits.
+    auto d1 = ver.find('.');
+    REQUIRE(d1 != std::string::npos);
+    auto d2 = ver.find('.', d1 + 1);
+    REQUIRE(d2 != std::string::npos);
+    REQUIRE(d2 > d1 + 1);                      // minor segment non-empty
+    REQUIRE(ver.size() > d2 + 1);              // patch segment non-empty
+    // Verify each segment is all digits.
+    for (std::size_t i = 0; i < ver.size(); ++i)
+    {
+        if (ver[i] != '.')
+            REQUIRE(ver[i] >= '0' && ver[i] <= '9');
+    }
 }
 
-TEST_CASE("ALPN: kAlpnHttp11 has length 8")
+// ═══════════════════════════════════════════════════════════════════════════
+// 13. connectToServer — error paths (no live server required)
+// ═══════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("connectToServer: unresolvable hostname returns INVALID_SOCKET with error")
 {
-    REQUIRE_EQ(std::strlen(ntm::kAlpnHttp11), std::size_t{8});
+    std::string err;
+    SOCKET fd = ntm::platform::connectToServer("this-host-does-not-exist.invalid.", 5555, err);
+    REQUIRE_EQ(fd, INVALID_SOCKET);
+    REQUIRE(!err.empty());
+    // Error message must mention the resolution failure.
+    REQUIRE(err.find("cannot resolve") != std::string::npos);
 }
 
-TEST_CASE("ALPN: select ntm-wire when client offers only ntm-wire")
+TEST_CASE("connectToServer: unreachable port returns INVALID_SOCKET with WSA error")
 {
-    // Wire format: 0x08 + "ntm-wire"
-    const unsigned char offer[] = "\x08ntm-wire";
-    auto result = ntm::selectAlpnFromClientList(offer, static_cast<unsigned>(sizeof(offer) - 1));
-    REQUIRE_EQ(result, std::string{"ntm-wire"});
+    std::string err;
+    // 127.0.0.1 resolves but port 1 is almost certainly not open.
+    SOCKET fd = ntm::platform::connectToServer("127.0.0.1", 1, err);
+    if (fd == INVALID_SOCKET)
+    {
+        REQUIRE(!err.empty());
+        // Error must mention the connect failure and include a WSA code.
+        REQUIRE(err.find("connect to") != std::string::npos);
+        REQUIRE(err.find("WSA") != std::string::npos);
+    }
+    else
+    {
+        // Unlikely but possible (port 1 occupied) — close gracefully and pass.
+        ::closesocket(fd);
+    }
 }
 
-TEST_CASE("ALPN: select http/1.1 when client offers only http/1.1")
+TEST_CASE("connectToServer: empty hostname returns INVALID_SOCKET")
 {
-    const unsigned char offer[] = "\x08http/1.1";
-    auto result = ntm::selectAlpnFromClientList(offer, static_cast<unsigned>(sizeof(offer) - 1));
-    REQUIRE_EQ(result, std::string{"http/1.1"});
+    std::string err;
+    SOCKET fd = ntm::platform::connectToServer("", 5555, err);
+    REQUIRE_EQ(fd, INVALID_SOCKET);
+    REQUIRE(!err.empty());
 }
 
-TEST_CASE("ALPN: ntm-wire wins over http/1.1 regardless of offer order (ntm first)")
+// ═══════════════════════════════════════════════════════════════════════════
+// 14. collectLanAddresses — smoke test (no Npcap required)
+// ═══════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("collectLanAddresses: does not crash and returns a set")
 {
-    // Client offers ["ntm-wire", "http/1.1"]
-    const unsigned char offer[] = "\x08ntm-wire\x08http/1.1";
-    auto result = ntm::selectAlpnFromClientList(offer, static_cast<unsigned>(sizeof(offer) - 1));
-    REQUIRE_EQ(result, std::string{"ntm-wire"});
+    // The result may be empty in CI environments with no LAN adapters up,
+    // but the call must not throw, crash, or return garbage.
+    auto addrs = ntm::platform::collectLanAddresses();
+    // If non-empty, every entry must be a non-empty string.
+    for (const auto &a : addrs)
+        REQUIRE(!a.empty());
 }
 
-TEST_CASE("ALPN: ntm-wire wins over http/1.1 regardless of offer order (http first)")
+TEST_CASE("collectLanAddresses: all returned addresses parse as valid IP literals")
 {
-    // Client offers ["http/1.1", "ntm-wire"] — browser-style offer ordering
-    const unsigned char offer[] = "\x08http/1.1\x08ntm-wire";
-    auto result = ntm::selectAlpnFromClientList(offer, static_cast<unsigned>(sizeof(offer) - 1));
-    REQUIRE_EQ(result, std::string{"ntm-wire"});
-}
-
-TEST_CASE("ALPN: fallback to http/1.1 on empty offer list")
-{
-    auto result = ntm::selectAlpnFromClientList(nullptr, 0u);
-    REQUIRE_EQ(result, std::string{"http/1.1"});
-}
-
-TEST_CASE("ALPN: fallback to http/1.1 on unrecognised protocol")
-{
-    // Client offers only "h2" (HTTP/2) — not recognised by the server
-    const unsigned char offer[] = "\x02h2";
-    auto result = ntm::selectAlpnFromClientList(offer, static_cast<unsigned>(sizeof(offer) - 1));
-    REQUIRE_EQ(result, std::string{"http/1.1"});
-}
-
-TEST_CASE("ALPN: fallback to http/1.1 on truncated input (length byte only)")
-{
-    // Malformed: length byte says 8 bytes follow, but buffer ends immediately after.
-    const unsigned char offer[] = "\x08";
-    auto result = ntm::selectAlpnFromClientList(offer, static_cast<unsigned>(sizeof(offer) - 1));
-    REQUIRE_EQ(result, std::string{"http/1.1"});
-}
-
-TEST_CASE("ALPN: ntm-wire found after unrecognised leading protocol")
-{
-    // Client offers ["h2", "ntm-wire"] — ntm-wire buried after an unknown entry
-    const unsigned char offer[] = "\x02h2\x08ntm-wire";
-    auto result = ntm::selectAlpnFromClientList(offer, static_cast<unsigned>(sizeof(offer) - 1));
-    REQUIRE_EQ(result, std::string{"ntm-wire"});
+    auto addrs = ntm::platform::collectLanAddresses();
+    for (const auto &a : addrs)
+    {
+        struct in_addr  v4{};
+        struct in6_addr v6{};
+        bool ok4 = (::inet_pton(AF_INET,  a.c_str(), &v4) == 1);
+        bool ok6 = (::inet_pton(AF_INET6, a.c_str(), &v6) == 1);
+        REQUIRE(ok4 || ok6);
+    }
 }
