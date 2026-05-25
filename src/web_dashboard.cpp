@@ -677,6 +677,37 @@ static std::string sessionFromRequest(const httplib::Request &req)
                               req.get_header_value("Cookie"));
 }
 
+// Persist HiddenEntitiesStore to its JSON file (truncate-rewrite under write lock).
+// Caller must hold the write lock or be the sole writer.
+static bool saveHiddenEntities(HiddenEntitiesStore &store)
+{
+    if (store.filePath.empty()) return true;
+    std::string j = "{\n  \"hidden_clients\": [";
+    bool first = true;
+    for (const auto &id : store.hiddenClients)
+    {
+        if (!first) j += ',';
+        j += "\n    \""; j += jsonEsc(id); j += '"';
+        first = false;
+    }
+    j += "\n  ],\n  \"hidden_interfaces\": [";
+    first = true;
+    for (const auto &p : store.hiddenIfaces)
+    {
+        if (!first) j += ',';
+        j += "\n    {\"client_id\":\""; j += jsonEsc(p.first);
+        j += "\",\"iface\":\"";         j += jsonEsc(p.second); j += "\"}";
+        first = false;
+    }
+    j += "\n  ]\n}\n";
+
+    std::ofstream f(store.filePath, std::ios::trunc);
+    if (!f) return false;
+    f << j;
+    return static_cast<bool>(f);
+}
+
+
 // ---------------------------------------------------------------------------
 // Summary JSON builder
 // ---------------------------------------------------------------------------
@@ -686,7 +717,8 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
                                     const std::shared_ptr<ClientRegistry> &registry,
                                     const std::shared_ptr<MonitoringIpSet> &serverIps,
                                     const std::shared_ptr<MonitoringIpSet> &dashboardIps,
-                                    const std::shared_ptr<void> &ipDataUpdater)
+                                    const std::shared_ptr<void> &ipDataUpdater,
+                                    const std::shared_ptr<HiddenEntitiesStore> &hiddenStore)
 {
     TrafficStats::InterfaceTotals totals;
     TrafficStats::InterfaceFlows flows;
@@ -834,6 +866,7 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
         auto sep = kv.first.find('|');
         std::string client = sep == std::string::npos ? std::string{} : kv.first.substr(0, sep);
         std::string iface  = sep == std::string::npos ? kv.first : kv.first.substr(sep + 1);
+        if (hiddenStore && hiddenStore->isIfaceHidden(client, iface)) continue;
         if (!first) j += ',';
         j += "\n    {\"client\":\"";
         j += jsonEsc(displayClient(client));   // hex → nickname (or hex if no nickname)
@@ -886,6 +919,7 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
         auto sep = kv.first.find('|');
         std::string client = sep == std::string::npos ? std::string{} : kv.first.substr(0, sep);
         std::string iface  = sep == std::string::npos ? kv.first : kv.first.substr(sep + 1);
+        if (hiddenStore && hiddenStore->isIfaceHidden(client, iface)) continue;
         const std::string &dispCli = displayClient(client);
 
         for (const auto &ek : kv.second)
@@ -1183,6 +1217,7 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
 
         for (const auto &snap : healthSnaps)
         {
+            if (hiddenStore && hiddenStore->isClientHidden(snap.clientId)) continue;
             const auto &hs = snap.hs;
             const std::uint64_t pcapTotal = hs.pcapRecv + hs.pcapDrop;
             const bool stale = (hs.reportedAtSec >= 0) &&
@@ -1868,6 +1903,37 @@ button{font-family:monospace;font-size:0.82em;padding:5px 14px;border-radius:3px
 </div>
 <div id="msg"></div>
 
+<!-- ── Hidden Entities ────────────────────────────────────────────────── -->
+<div class="section" style="margin-top:22px">Hidden Entities</div>
+<div class="sub">Clients and interfaces hidden here are suppressed from the main dashboard. The choice is persisted across server restarts. Unhide a client to restore it.</div>
+<div class="panel">
+  <div style="margin-bottom:10px;font-size:0.8em;color:#7af">Hidden Clients</div>
+  <table id="hidden_clients_tbl">
+    <thead><tr><th>Client ID</th><th>Action</th></tr></thead>
+    <tbody id="hidden_clients_body"><tr><td colspan="2" style="color:#555">None</td></tr></tbody>
+  </table>
+  <div style="margin-top:14px;display:flex;align-items:center;gap:10px">
+    <select id="hide_client_sel" style="font-family:monospace;font-size:0.82em;padding:5px 8px;background:#0e0e14;color:#ccc;border:1px solid #3a3a5a;border-radius:3px">
+      <option value="">— select client to hide —</option>
+    </select>
+    <button onclick="doHideClient()" style="font-family:monospace;font-size:0.82em;padding:5px 14px;border-radius:3px;border:1px solid #4a5a3a;background:#0d1808;color:#8c8;cursor:pointer">Hide Client</button>
+  </div>
+  <div style="margin-top:18px;margin-bottom:10px;font-size:0.8em;color:#7af">Hidden Interfaces</div>
+  <table id="hidden_ifaces_tbl">
+    <thead><tr><th>Client ID</th><th>Interface</th><th>Action</th></tr></thead>
+    <tbody id="hidden_ifaces_body"><tr><td colspan="3" style="color:#555">None</td></tr></tbody>
+  </table>
+  <div style="margin-top:14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <select id="hide_iface_client_sel" style="font-family:monospace;font-size:0.82em;padding:5px 8px;background:#0e0e14;color:#ccc;border:1px solid #3a3a5a;border-radius:3px" onchange="onHideIfaceClientChange()">
+      <option value="">— select client —</option>
+    </select>
+    <input id="hide_iface_name" type="text" placeholder="interface name" maxlength="64"
+      style="font-family:monospace;font-size:0.82em;padding:5px 8px;background:#0e0e14;color:#ccc;border:1px solid #3a3a5a;border-radius:3px;width:160px">
+    <button onclick="doHideIface()" style="font-family:monospace;font-size:0.82em;padding:5px 14px;border-radius:3px;border:1px solid #4a5a3a;background:#0d1808;color:#8c8;cursor:pointer">Hide Interface</button>
+  </div>
+  <div class="err-msg" id="hidden_err" style="margin-top:8px"></div>
+</div>
+
 <!-- ── Software Updates ──────────────────────────────────────────────── -->
 <div class="section" style="margin-top:22px">Software Updates</div>
 <div class="sub">Place binaries in the server update directory. Naming convention: <code style="background:#111118;padding:1px 4px;border-radius:2px">ntm-client-linux-amd64-1.9.0</code> / <code style="background:#111118;padding:1px 4px;border-radius:2px">ntm-client-windows-amd64-1.9.0.exe</code>. Auto-update clients check once per day; use Force Update per agent to push immediately regardless of version.</div>
@@ -2166,8 +2232,115 @@ async function doScanManifest(){
   document.getElementById('scan_btn').disabled=false;
 }
 
+let gAllClients=[];  // [{client_id, nickname}] from /api/admin/clients
+
+async function loadHiddenEntities(){
+  try{
+    const [hRes,cRes]=await Promise.all([
+      fetch('/api/admin/hidden'),
+      fetch('/api/admin/clients')
+    ]);
+    if(hRes.status===404||cRes.status===404) return; // feature disabled on this server
+    handleAdminExpiry(hRes.status);
+    handleAdminExpiry(cRes.status);
+    const h=await hRes.json();
+    const c=await cRes.json();
+    gAllClients=c.clients||[];
+
+    // Populate hidden clients table
+    const hcBody=document.getElementById('hidden_clients_body');
+    if(h.hidden_clients&&h.hidden_clients.length){
+      hcBody.innerHTML=h.hidden_clients.map(function(id){
+        const nick=gAllClients.find(function(x){return x.client_id===id;});
+        const label=nick?esc(nick.nickname||id):esc(id.substring(0,16)+'…');
+        return '<tr><td title="'+esc(id)+'">'+label+'</td>'
+          +'<td><button onclick="doUnhideClient(\''+esc(id)+'\')" style="font-family:monospace;font-size:0.78em;padding:3px 10px;border-radius:3px;border:1px solid #5a3a3a;background:#180d0d;color:#c88;cursor:pointer">Unhide</button></td></tr>';
+      }).join('');
+    } else {
+      hcBody.innerHTML='<tr><td colspan="2" style="color:#555">None</td></tr>';
+    }
+
+    // Populate hidden interfaces table
+    const hiBody=document.getElementById('hidden_ifaces_body');
+    if(h.hidden_interfaces&&h.hidden_interfaces.length){
+      hiBody.innerHTML=h.hidden_interfaces.map(function(p){
+        const nick=gAllClients.find(function(x){return x.client_id===p.client_id;});
+        const label=nick?esc(nick.nickname||p.client_id):esc(p.client_id.substring(0,16)+'…');
+        return '<tr><td title="'+esc(p.client_id)+'">'+label+'</td>'
+          +'<td>'+esc(p.iface)+'</td>'
+          +'<td><button onclick="doUnhideIface(\''+esc(p.client_id)+'\',\''+esc(p.iface)+'\')" style="font-family:monospace;font-size:0.78em;padding:3px 10px;border-radius:3px;border:1px solid #5a3a3a;background:#180d0d;color:#c88;cursor:pointer">Unhide</button></td></tr>';
+      }).join('');
+    } else {
+      hiBody.innerHTML='<tr><td colspan="3" style="color:#555">None</td></tr>';
+    }
+
+    // Populate dropdowns
+    const cSel=document.getElementById('hide_client_sel');
+    const prevC=cSel.value;
+    cSel.innerHTML='<option value="">— select client to hide —</option>'
+      +gAllClients.map(function(x){
+        const hidden=h.hidden_clients&&h.hidden_clients.includes(x.client_id);
+        return '<option value="'+esc(x.client_id)+'"'+(hidden?' disabled':'')+'>'+esc(x.nickname||x.client_id.substring(0,16)+'…')+(hidden?' (hidden)':'')+'</option>';
+      }).join('');
+    if(prevC) cSel.value=prevC;
+
+    const ifSel=document.getElementById('hide_iface_client_sel');
+    const prevI=ifSel.value;
+    ifSel.innerHTML='<option value="">— select client —</option>'
+      +gAllClients.map(function(x){
+        return '<option value="'+esc(x.client_id)+'">'+esc(x.nickname||x.client_id.substring(0,16)+'…')+'</option>';
+      }).join('');
+    if(prevI) ifSel.value=prevI;
+  } catch(e) {
+    // Silently ignore — hidden entities feature may not be configured on this server.
+  }
+}
+
+function onHideIfaceClientChange(){
+  // Auto-fill the iface input if a common interface name is known (optional UX aid)
+}
+
+async function doHideClient(){
+  const id=document.getElementById('hide_client_sel').value;
+  if(!id) return;
+  await setHiddenClient(id,'hide');
+}
+async function doUnhideClient(id){
+  await setHiddenClient(id,'unhide');
+}
+async function setHiddenClient(id,action){
+  const errEl=document.getElementById('hidden_err');
+  errEl.textContent='';
+  try{
+    const r=await fetch('/api/admin/hidden/client',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({client_id:id,action:action})});
+    handleAdminExpiry(r.status);
+    if(!r.ok){const j=await r.json();errEl.textContent='Error: '+(j.error||r.status);return;}
+    await loadHiddenEntities();
+  } catch(e){ errEl.textContent='Request failed: '+esc(e.message); }
+}
+async function doHideIface(){
+  const id=document.getElementById('hide_iface_client_sel').value;
+  const iface=document.getElementById('hide_iface_name').value.trim();
+  if(!id||!iface) return;
+  await setHiddenIface(id,iface,'hide');
+}
+async function doUnhideIface(id,iface){
+  await setHiddenIface(id,iface,'unhide');
+}
+async function setHiddenIface(id,iface,action){
+  const errEl=document.getElementById('hidden_err');
+  errEl.textContent='';
+  try{
+    const r=await fetch('/api/admin/hidden/interface',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({client_id:id,iface:iface,action:action})});
+    handleAdminExpiry(r.status);
+    if(!r.ok){const j=await r.json();errEl.textContent='Error: '+(j.error||r.status);return;}
+    document.getElementById('hide_iface_name').value='';
+    await loadHiddenEntities();
+  } catch(e){ errEl.textContent='Request failed: '+esc(e.message); }
+}
+
 async function loadAll(){
-  await Promise.all([loadClients(),loadMonitors()]);
+  await Promise.all([loadClients(),loadMonitors(),loadHiddenEntities()]);
 }
 
 loadAll();
@@ -2377,7 +2550,8 @@ void registerWebHandlers(NtmHttpServer &svr,
             res.set_content(buildSummaryJson(stats, config.max_entity_lines,
                                              config.client_nicknames, config.registry,
                                              config.server_ips, config.dashboard_ips,
-                                             config.ip_data_updater),
+                                             config.ip_data_updater,
+                                             config.hidden_store),
                             "application/json");
         });
 
@@ -2752,6 +2926,187 @@ void registerWebHandlers(NtmHttpServer &svr,
 
                 std::string resp = "{\"ok\":true,\"demo_enabled\":";
                 resp += enabled ? "true" : "false";
+                resp += "}\n";
+                res.set_content(resp, "application/json");
+            });
+    }
+
+    // ── Hidden entities admin endpoints (F4) ─────────────────────────────────
+    // All four require an admin session (pre-routing enforces this via isAdminApiPath).
+
+    // GET /api/admin/clients — list all known clients with nickname and connection status.
+    if (adminAvailable && config.clients_store && config.registry)
+    {
+        svr.Get("/api/admin/clients",
+            [&config](const httplib::Request &, httplib::Response &res)
+            {
+                // Snapshot health registry for liveness.
+                std::unordered_map<std::string, bool> liveSet;
+                {
+                    std::lock_guard<std::mutex> lk(config.registry->mtx);
+                    for (const auto &kv : config.registry->clientHealth)
+                        liveSet[kv.first] = true;
+                }
+
+                std::string j = "{\"clients\":[";
+                bool first = true;
+                std::shared_lock<std::shared_mutex> lk(config.clients_store->mu);
+                for (const auto &kv : config.clients_store->nicknames)
+                {
+                    if (!first) j += ',';
+                    j += "{\"client_id\":\""; j += jsonEsc(kv.first);
+                    j += "\",\"nickname\":\""; j += jsonEsc(kv.second);
+                    j += "\",\"connected\":";
+                    j += liveSet.count(kv.first) ? "true" : "false";
+                    j += '}';
+                    first = false;
+                }
+                j += "]}\n";
+                res.set_content(j, "application/json");
+            });
+    }
+
+    // GET /api/admin/hidden — return current hidden clients and interfaces.
+    if (adminAvailable && config.hidden_store)
+    {
+        svr.Get("/api/admin/hidden",
+            [&config](const httplib::Request &, httplib::Response &res)
+            {
+                std::shared_lock<std::shared_mutex> lk(config.hidden_store->mu);
+                std::string j = "{\"hidden_clients\":[";
+                bool first = true;
+                for (const auto &id : config.hidden_store->hiddenClients)
+                {
+                    if (!first) j += ',';
+                    j += '"'; j += jsonEsc(id); j += '"';
+                    first = false;
+                }
+                j += "],\"hidden_interfaces\":[";
+                first = true;
+                for (const auto &p : config.hidden_store->hiddenIfaces)
+                {
+                    if (!first) j += ',';
+                    j += "{\"client_id\":\""; j += jsonEsc(p.first);
+                    j += "\",\"iface\":\"";   j += jsonEsc(p.second); j += "\"}";
+                    first = false;
+                }
+                j += "]}\n";
+                res.set_content(j, "application/json");
+            });
+    }
+
+    // POST /api/admin/hidden/client — hide or unhide a client by client_id.
+    if (adminAvailable && config.hidden_store)
+    {
+        svr.Post("/api/admin/hidden/client",
+            [&config](const httplib::Request &req, httplib::Response &res)
+            {
+                const std::string ip = effectiveClientIP(req, config);
+                const std::string &body = req.body;
+                const std::string clientId = jsonGetString(body, "client_id");
+                const std::string action   = jsonGetString(body, "action");
+
+                if (clientId.size() != 64 ||
+                    clientId.find_first_not_of("0123456789abcdef") != std::string::npos)
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"client_id must be 64 lowercase hex chars\"}\n",
+                                    "application/json");
+                    return;
+                }
+                if (action != "hide" && action != "unhide")
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"action must be hide or unhide\"}\n",
+                                    "application/json");
+                    return;
+                }
+
+                bool hidden;
+                {
+                    std::unique_lock<std::shared_mutex> lk(config.hidden_store->mu);
+                    if (action == "hide")
+                        config.hidden_store->hiddenClients.insert(clientId);
+                    else
+                        config.hidden_store->hiddenClients.erase(clientId);
+                    hidden = config.hidden_store->hiddenClients.count(clientId) > 0;
+                    if (!saveHiddenEntities(*config.hidden_store))
+                    {
+                        serverLog(LogLevel::Err,
+                                  "ntm-server: hidden/client from %s: save failed", ip.c_str());
+                        res.status = 500;
+                        res.set_content("{\"error\":\"server error: cannot write hidden entities file\"}\n",
+                                        "application/json");
+                        return;
+                    }
+                }
+                serverLog(LogLevel::Warn, "ntm-server: admin hidden/client %s: %s from %s",
+                          action.c_str(), clientId.c_str(), ip.c_str());
+                std::string resp = "{\"ok\":true,\"hidden\":";
+                resp += hidden ? "true" : "false";
+                resp += "}\n";
+                res.set_content(resp, "application/json");
+            });
+    }
+
+    // POST /api/admin/hidden/interface — hide or unhide a (client_id, iface) pair.
+    if (adminAvailable && config.hidden_store)
+    {
+        svr.Post("/api/admin/hidden/interface",
+            [&config](const httplib::Request &req, httplib::Response &res)
+            {
+                const std::string ip = effectiveClientIP(req, config);
+                const std::string &body = req.body;
+                const std::string clientId = jsonGetString(body, "client_id");
+                const std::string iface    = jsonGetString(body, "iface");
+                const std::string action   = jsonGetString(body, "action");
+
+                if (clientId.size() != 64 ||
+                    clientId.find_first_not_of("0123456789abcdef") != std::string::npos)
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"client_id must be 64 lowercase hex chars\"}\n",
+                                    "application/json");
+                    return;
+                }
+                if (iface.empty() || iface.size() > kMaxIfaceLabelLen)
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"iface must be 1\xe2\x80\x93" "64 characters\"}\n",
+                                    "application/json");
+                    return;
+                }
+                if (action != "hide" && action != "unhide")
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"action must be hide or unhide\"}\n",
+                                    "application/json");
+                    return;
+                }
+
+                bool hidden;
+                {
+                    std::unique_lock<std::shared_mutex> lk(config.hidden_store->mu);
+                    const auto key = std::make_pair(clientId, iface);
+                    if (action == "hide")
+                        config.hidden_store->hiddenIfaces.insert(key);
+                    else
+                        config.hidden_store->hiddenIfaces.erase(key);
+                    hidden = config.hidden_store->hiddenIfaces.count(key) > 0;
+                    if (!saveHiddenEntities(*config.hidden_store))
+                    {
+                        serverLog(LogLevel::Err,
+                                  "ntm-server: hidden/interface from %s: save failed", ip.c_str());
+                        res.status = 500;
+                        res.set_content("{\"error\":\"server error: cannot write hidden entities file\"}\n",
+                                        "application/json");
+                        return;
+                    }
+                }
+                serverLog(LogLevel::Warn, "ntm-server: admin hidden/interface %s: %s|%s from %s",
+                          action.c_str(), clientId.c_str(), iface.c_str(), ip.c_str());
+                std::string resp = "{\"ok\":true,\"hidden\":";
+                resp += hidden ? "true" : "false";
                 resp += "}\n";
                 res.set_content(resp, "application/json");
             });

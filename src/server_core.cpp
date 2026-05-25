@@ -112,6 +112,10 @@ struct ServerConfig
     // migrated to PBKDF2 and this file is securely erased (idempotent).
     std::string admin_password_file;
 
+    // Hidden entities: clients/ifaces filtered from /api/summary.
+    // Empty = feature disabled (store not loaded; admin endpoints not registered).
+    std::string hidden_entities_file;
+
     // WebAuthn passkey authentication (FIDO2 / passkeys).
     // Set webauthn_rp_id to enable; the other keys configure behaviour.
     std::string webauthn_rp_id;              // RP ID, e.g. "ntm.happyhomelives.me"
@@ -368,6 +372,92 @@ static std::shared_ptr<AllowedClientsStore> loadAllowedKeys(const std::string &p
             }
         }
     }
+    return store;
+}
+
+static std::shared_ptr<HiddenEntitiesStore> loadHiddenEntities(const std::string &path)
+{
+    auto store = std::make_shared<HiddenEntitiesStore>();
+    store->filePath = path;
+    if (path.empty()) return store;
+
+    std::ifstream f(path);
+    if (!f)
+    {
+        // File absent on first run — that is fine; it will be created on first hide action.
+        return store;
+    }
+
+    // Minimal JSON parser for the fixed schema produced by saveHiddenEntities().
+    std::string content((std::istreambuf_iterator<char>(f)),
+                         std::istreambuf_iterator<char>());
+
+    // Parse "hidden_clients" array of string values.
+    {
+        auto arrStart = content.find("\"hidden_clients\"");
+        if (arrStart != std::string::npos)
+        {
+            auto lb = content.find('[', arrStart);
+            auto rb = content.find(']', lb == std::string::npos ? 0 : lb);
+            if (lb != std::string::npos && rb != std::string::npos)
+            {
+                std::size_t pos = lb + 1;
+                while (pos < rb)
+                {
+                    auto q1 = content.find('"', pos);
+                    if (q1 == std::string::npos || q1 >= rb) break;
+                    auto q2 = content.find('"', q1 + 1);
+                    if (q2 == std::string::npos || q2 >= rb) break;
+                    std::string id = content.substr(q1 + 1, q2 - q1 - 1);
+                    if (id.size() == 64)
+                        store->hiddenClients.insert(id);
+                    pos = q2 + 1;
+                }
+            }
+        }
+    }
+
+    // Parse "hidden_interfaces" array of {client_id, iface} objects.
+    {
+        auto arrStart = content.find("\"hidden_interfaces\"");
+        if (arrStart != std::string::npos)
+        {
+            auto lb = content.find('[', arrStart);
+            auto rb = content.rfind(']');   // last ']' in file = end of this array
+            if (lb != std::string::npos && rb != std::string::npos && rb > lb)
+            {
+                std::size_t pos = lb + 1;
+                while (pos < rb)
+                {
+                    auto ob = content.find('{', pos);
+                    auto cb = content.find('}', ob == std::string::npos ? rb : ob);
+                    if (ob == std::string::npos || cb == std::string::npos || ob >= rb) break;
+                    std::string obj = content.substr(ob, cb - ob + 1);
+                    // Extract client_id and iface from the object.
+                    auto extractVal = [&](const std::string &key) -> std::string {
+                        auto k = obj.find('"' + key + '"');
+                        if (k == std::string::npos) return {};
+                        auto col = obj.find(':', k + key.size() + 2);
+                        if (col == std::string::npos) return {};
+                        auto q1 = obj.find('"', col + 1);
+                        if (q1 == std::string::npos) return {};
+                        auto q2 = obj.find('"', q1 + 1);
+                        if (q2 == std::string::npos) return {};
+                        return obj.substr(q1 + 1, q2 - q1 - 1);
+                    };
+                    std::string clientId = extractVal("client_id");
+                    std::string iface    = extractVal("iface");
+                    if (clientId.size() == 64 && !iface.empty())
+                        store->hiddenIfaces.insert({clientId, iface});
+                    pos = cb + 1;
+                }
+            }
+        }
+    }
+
+    serverLog(LogLevel::Info,
+              "ntm-server: loaded %zu hidden client(s) and %zu hidden interface(s) from '%s'",
+              store->hiddenClients.size(), store->hiddenIfaces.size(), path.c_str());
     return store;
 }
 
@@ -841,6 +931,7 @@ static const std::set<std::string> &knownServerConfigKeys()
         "webauthn_session_ttl_hours", "webauthn_idle_timeout_minutes",
         "update_dir",
         "trusted_proxy",
+        "hidden_entities_file",
     };
     return keys;
 }
@@ -971,6 +1062,7 @@ static ServerConfig loadServerConfig(const std::string &configPath, bool *ok = n
             }
             else if (key == "update_dir") { cfg.update_dir = val; }
             else if (key == "trusted_proxy") { cfg.trusted_proxy = val; }
+            else if (key == "hidden_entities_file") { cfg.hidden_entities_file = val; }
             else if (key == "aggregation_window_days")
             {
                 u = std::stoul(val);
@@ -2255,6 +2347,8 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
         serverLog(LogLevel::Warn,
                   "ntm-server: require_tls is obsolete — TLS is always mandatory; ignoring");
 
+    auto hiddenStore  = loadHiddenEntities(config.hidden_entities_file);
+
     // NEW-H1: fail-closed authentication.
     auto clientsStore = loadAllowedKeys(allowedKeysPath);
     if (!allowedKeysPath.empty())
@@ -2557,6 +2651,7 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
             webCfg.registry         = clientRegistry;
             webCfg.webauthn         = webAuthnRP;
             webCfg.clients_store    = clientsStore;
+            webCfg.hidden_store     = hiddenStore;
             webCfg.server_ips       = serverIpSet;
             webCfg.dashboard_ips    = dashboardIpSet;
             webCfg.update_dir       = config.update_dir;

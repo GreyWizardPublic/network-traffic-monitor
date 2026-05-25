@@ -43,6 +43,9 @@ struct WebConfig
     std::shared_ptr<WebAuthnRP> webauthn;
     // Shared wire-protocol client store; null = registration endpoint disabled.
     std::shared_ptr<AllowedClientsStore> clients_store;
+    // Persisted hidden-entities store; null = hide feature disabled.
+    // When set, clients/ifaces in the store are omitted from /api/summary.
+    std::shared_ptr<HiddenEntitiesStore> hidden_store;
 
     // Directory containing operator-placed client update binaries.
     // Empty = auto-update endpoints disabled.

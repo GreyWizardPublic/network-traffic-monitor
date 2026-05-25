@@ -179,6 +179,29 @@ struct AllowedClientsStore
     std::string                                    filePath;
 };
 
+// Persisted set of clients and (client, iface) pairs that should be hidden
+// from the main dashboard /api/summary response. Thread-safe for concurrent
+// reads by the JSON builder and occasional writes from admin endpoints.
+struct HiddenEntitiesStore
+{
+    mutable std::shared_mutex mu;
+    std::unordered_set<std::string> hiddenClients;              // hex64 client_id
+    std::set<std::pair<std::string,std::string>> hiddenIfaces;  // (client_id, iface)
+    std::string filePath;
+
+    bool isClientHidden(const std::string &clientId) const
+    {
+        std::shared_lock<std::shared_mutex> lk(mu);
+        return hiddenClients.count(clientId) > 0;
+    }
+    bool isIfaceHidden(const std::string &clientId, const std::string &iface) const
+    {
+        std::shared_lock<std::shared_mutex> lk(mu);
+        return hiddenClients.count(clientId) > 0
+            || hiddenIfaces.count({clientId, iface}) > 0;
+    }
+};
+
 // Thread-safe set of IP addresses belonging to monitoring infrastructure
 // (the server itself, or dashboard browser/app clients). Used at JSON
 // serialisation time to classify entity flows as overhead vs. regular traffic.
