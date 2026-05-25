@@ -326,7 +326,7 @@ PATCH, MINOR, or MAJOR, it is always REVISION.
    There is no such thing as a change too small to version.
 2. **Update the version file in the same commit as the change** — never in a
    separate follow-up commit.
-3. **Never skip levels.** Go 1.0.0.0 → 1.0.0.1 → 1.0.1.0, not 1.0.0.0 → 1.0.0.3.
+3. **One component, one step forward.** Each commit increments exactly one component by exactly 1 — `1.0.0.0 → 1.0.0.1` is correct, `1.0.0.0 → 1.0.0.3` (skipping values) is not. Also choose the *lowest* applicable level: a bug fix is PATCH even if large; bumping MINOR for a bug fix overcounts and is not allowed.
 4. **Lower components reset when a higher one bumps.**
    1.2.3.4 + PATCH → 1.2.4.0 (not 1.2.4.4). 1.2.3.4 + MINOR → 1.3.0.0.
 5. Always read the current version from the module's version file before deciding
