@@ -17,10 +17,15 @@ struct StatusView: View {
                         }
                     }
                     LabeledContent("Server") {
-                        Text(setupVM.config.host.isEmpty
-                             ? "—"
-                             : "\(setupVM.config.host):\(setupVM.config.wirePort)")
+                        Text(setupVM.config.wireHost.map { "\($0):\(setupVM.config.wirePort)" } ?? "—")
                             .foregroundStyle(.secondary)
+                    }
+                    if setupVM.isReadyToConnect && !tunnelVM.state.isActive {
+                        Button("Reconnect") {
+                            wireVM.stop()
+                            Task { await wireVM.start(config: setupVM.config) }
+                        }
+                        .disabled(wireVM.state == .connecting)
                     }
                 }
 

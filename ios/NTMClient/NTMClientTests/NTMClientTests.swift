@@ -38,30 +38,31 @@ final class NTMClientServerConfigTests: XCTestCase {
         XCTAssertFalse(ServerConfig.default.isConfigured)
     }
 
-    func testIsConfiguredTrueWithNonEmptyHost() {
-        XCTAssertTrue(makeConfig(host: "ntm.home.me").isConfigured)
+    func testIsConfiguredTrueWithURL() {
+        XCTAssertTrue(makeConfig(serverURL: "https://ntm.home.me:8443").isConfigured)
     }
 
-    func testIsConfiguredFalseWithEmptyHost() {
-        XCTAssertFalse(makeConfig(host: "").isConfigured)
+    func testIsConfiguredFalseWithEmptyURL() {
+        XCTAssertFalse(makeConfig(serverURL: "").isConfigured)
     }
 
     func testHttpsBaseURLConstruction() {
-        let cfg = makeConfig(host: "ntm.home.me", httpsPort: 9443)
+        let cfg = makeConfig(serverURL: "https://ntm.home.me:9443")
         XCTAssertEqual(cfg.httpsBaseURL?.absoluteString, "https://ntm.home.me:9443")
     }
 
-    func testHttpsBaseURLUsesDefaultPort8443() {
-        let cfg = makeConfig(host: "ntm.home.me")
+    func testHttpsBaseURLPrependsHTTPS() {
+        let cfg = makeConfig(serverURL: "ntm.home.me:8443")
         XCTAssertEqual(cfg.httpsBaseURL?.absoluteString, "https://ntm.home.me:8443")
     }
 
-    func testHttpsBaseURLNilWhenHostEmpty() {
+    func testHttpsBaseURLNilWhenEmpty() {
         XCTAssertNil(ServerConfig.default.httpsBaseURL)
     }
 
-    func testDefaultHttpsPort() {
-        XCTAssertEqual(ServerConfig.default.httpsPort, 8443)
+    func testWireHostExtracted() {
+        let cfg = makeConfig(serverURL: "https://ntm.home.me:8443")
+        XCTAssertEqual(cfg.wireHost, "ntm.home.me")
     }
 
     func testDefaultWirePort() {
@@ -73,31 +74,42 @@ final class NTMClientServerConfigTests: XCTestCase {
     }
 
     func testCodableRoundTrip() throws {
-        let original = makeConfig(host: "ntm.home.me", httpsPort: 8443,
-                                   wirePort: 5555, nickname: "my-iphone",
-                                   cert: Data([0x01, 0x02, 0x03]))
+        let original = makeConfig(serverURL: "https://ntm.home.me:8443",
+                                  wirePort: 5555, nickname: "my-iphone",
+                                  cert: Data([0x01, 0x02, 0x03]))
         let data    = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(ServerConfig.self, from: data)
-        XCTAssertEqual(decoded.host, "ntm.home.me")
-        XCTAssertEqual(decoded.httpsPort, 8443)
+        XCTAssertEqual(decoded.serverURL, "https://ntm.home.me:8443")
         XCTAssertEqual(decoded.wirePort, 5555)
         XCTAssertEqual(decoded.nickname, "my-iphone")
         XCTAssertEqual(decoded.pinnedCertData, Data([0x01, 0x02, 0x03]))
     }
 
     func testCodableRoundTripNilCert() throws {
-        let original = makeConfig(host: "ntm.home.me")
+        let original = makeConfig(serverURL: "https://ntm.home.me:8443")
         let data    = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(ServerConfig.self, from: data)
         XCTAssertNil(decoded.pinnedCertData)
     }
 
+    func testLegacyMigrationFromHostAndHttpsPort() throws {
+        // Simulate an old 1.2.x UserDefaults payload that used host + httpsPort keys.
+        let legacyJSON = """
+        {"host":"ntm.home.me","httpsPort":9443,"wirePort":5555,"nickname":"old-iphone"}
+        """.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(ServerConfig.self, from: legacyJSON)
+        XCTAssertEqual(decoded.serverURL, "https://ntm.home.me:9443")
+        XCTAssertEqual(decoded.wirePort, 5555)
+        XCTAssertEqual(decoded.nickname, "old-iphone")
+        XCTAssertEqual(decoded.httpsBaseURL?.host, "ntm.home.me")
+    }
+
     // MARK: - Helpers
-    private func makeConfig(host: String = "ntm.home.me", httpsPort: Int = 8443,
+    private func makeConfig(serverURL: String = "https://ntm.home.me:8443",
                              wirePort: Int = 5555, nickname: String = "",
                              cert: Data? = nil) -> ServerConfig {
-        ServerConfig(host: host, httpsPort: httpsPort, wirePort: wirePort,
-                     pinnedCertData: cert, nickname: nickname)
+        ServerConfig(serverURL: serverURL, wirePort: wirePort,
+                     pinnedCertData: cert, nickname: nickname, useWebSocket: false)
     }
 }
 
