@@ -32,10 +32,10 @@ if(NOT WIN32)
     # ---------------------------------------------------------------------------
     file(STRINGS "src/server_version.hpp" _sver_line
          REGEX "kServerVersion\\[\\]")
-    string(REGEX MATCH "\"([0-9]+\\.[0-9]+\\.[0-9]+)\"" _ "${_sver_line}")
+    string(REGEX MATCH "\"([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+)\"" _ "${_sver_line}")
     set(NTM_SERVER_VERSION "${CMAKE_MATCH_1}")
     if(NOT NTM_SERVER_VERSION)
-        message(FATAL_ERROR "Could not parse kServerVersion from src/server_version.hpp")
+        message(FATAL_ERROR "Could not parse kServerVersion from src/server_version.hpp (expected MAJOR.MINOR.PATCH.REVISION)")
     endif()
 
     set_target_properties(ntm-server PROPERTIES
@@ -196,10 +196,10 @@ endif()
 
 file(STRINGS "src/client_version.hpp" _ver_line
      REGEX "kClientVersion\\[\\]")
-string(REGEX MATCH "\"([0-9]+\\.[0-9]+\\.[0-9]+)\"" _ "${_ver_line}")
+string(REGEX MATCH "\"([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+)\"" _ "${_ver_line}")
 set(NTM_CLIENT_VERSION "${CMAKE_MATCH_1}")
 if(NOT NTM_CLIENT_VERSION)
-    message(FATAL_ERROR "Could not parse kClientVersion from src/client_version.hpp")
+    message(FATAL_ERROR "Could not parse kClientVersion from src/client_version.hpp (expected MAJOR.MINOR.PATCH.REVISION)")
 endif()
 
 if(WIN32)
