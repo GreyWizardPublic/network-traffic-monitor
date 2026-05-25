@@ -193,7 +193,7 @@ info "Server nonce: $NONCE"
 #   auth_proof   = ML-DSA-65 signature over auth_message
 # ---------------------------------------------------------------------------
 info "Computing binary SHA3-256 ..."
-BINARY_HASH=$(openssl dgst -sha3-256 -binary "$BINARY" | xxd -p -c 256 | tr -d '\n')
+BINARY_HASH=$(openssl dgst -sha3-256 -binary "$BINARY" | xxd -p -c 256 | tr -d '\r\n')
 info "Binary SHA3-256: $BINARY_HASH"
 
 # Concatenate nonce bytes (raw) with binary hash bytes (raw) into a temp file
@@ -216,21 +216,37 @@ openssl pkeyutl -sign \
     -rawin \
     || die "failed to sign auth message"
 
-# Base64-encode the auth proof for multipart upload
-AUTH_PROOF_B64=$(openssl base64 -in "$AUTH_PROOF_FILE" | tr -d '\n')
+# Base64-encode the auth proof for multipart upload.
+# Strip both \r and \n: on MSYS2/MinGW, openssl base64 emits CRLF line endings;
+# tr -d '\n' alone leaves stray \r chars that produce invalid base64 (length mod 4 != 0).
+AUTH_PROOF_B64=$(openssl base64 -in "$AUTH_PROOF_FILE" | tr -d '\r\n')
 info "Auth proof ready (${#AUTH_PROOF_B64} b64 chars)"
 
 # ---------------------------------------------------------------------------
 # Step 3: Push binary + signature + auth proof to server
 # ---------------------------------------------------------------------------
+# On Windows/MSYS2, MinGW curl misparses POSIX paths (/c/Users/...) when a
+# ;type= suffix is appended to -F @file fields (curl error 26). Converting to
+# Windows mixed paths (C:/Users/...) via cygpath -m avoids the issue.
+# On Linux, cygpath is absent and BINARY_FOR_CURL == BINARY.
+# Note: push-upgrade.sh is primarily used from Linux; the cygpath guard is
+# included for completeness and symmetry with push-client.sh.
+if command -v cygpath >/dev/null 2>&1; then
+    BINARY_FOR_CURL=$(cygpath -m "$BINARY")
+    SIG_FOR_CURL=$(cygpath -m "$SIG_FILE")
+else
+    BINARY_FOR_CURL="$BINARY"
+    SIG_FOR_CURL="$SIG_FILE"
+fi
+
 info "Uploading binary and signature to $BASE_URL/admin/upgrade/push ..."
 PUSH_RESP=$(curl --silent --show-error --fail \
     --insecure \
     -F "version=$VERSION" \
     -F "nonce=$NONCE" \
     -F "auth_proof=$AUTH_PROOF_B64" \
-    -F "binary=@$BINARY;type=application/octet-stream" \
-    -F "signature=@$SIG_FILE;type=application/octet-stream" \
+    -F "binary=@$BINARY_FOR_CURL;type=application/octet-stream" \
+    -F "signature=@$SIG_FOR_CURL;type=application/octet-stream" \
     "$BASE_URL/admin/upgrade/push") \
     || die "server rejected the push (see server logs for details)"
 
