@@ -18,11 +18,12 @@ actor TCPRelay {
         var clientSeqNext:  UInt32   // next seq we expect from the client
         var serverSeqNext:  UInt32   // next seq we send toward the client
         var clientFinSeen:  Bool = false
+        var lastActivity:   Date = .now
     }
 
     private var flows: [FlowKey: FlowState] = [:]
 
-    // Entry point: called for every IPv4 TCP packet read from packetFlow.
+    // Entry point: called for every IPv4/IPv6 TCP packet read from packetFlow.
     func handlePacket(pkt: IPPacket, tcp: TCPHeader, rawData: Data,
                       packetFlow: NEPacketTunnelFlow) {
         let key = FlowKey(srcIP: pkt.srcIP, srcPort: tcp.srcPort,
@@ -34,7 +35,6 @@ actor TCPRelay {
         }
 
         if tcp.isSYN && !tcp.isACK {
-            // New connection request.
             openFlow(key: key, clientISN: tcp.seq, packetFlow: packetFlow)
             return
         }
@@ -52,7 +52,6 @@ actor TCPRelay {
         if tcp.isFIN, !state.clientFinSeen {
             state.clientFinSeen = true
             state.clientSeqNext &+= 1
-            // Half-close toward server.
             state.conn.send(content: nil,
                             contentContext: .defaultMessage,
                             isComplete: true,
@@ -64,7 +63,30 @@ actor TCPRelay {
             state.clientSeqNext = tcp.seq &+ UInt32(tcp.payloadLen)
         }
 
+        state.lastActivity = .now
         flows[key] = state
+
+        // Pure ACK: tell the client's TCP stack we received its data so it stops
+        // retransmitting. Without this Apple's stack retransmits 3× then gives up.
+        if tcp.payloadLen > 0 || tcp.isFIN {
+            sendToClient(key: key,
+                         seq: state.serverSeqNext,
+                         ack: state.clientSeqNext,
+                         flags: 0x10 /* ACK */,
+                         payload: Data(),
+                         packetFlow: packetFlow)
+        }
+    }
+
+    // Remove flows that have been idle for more than idleSecs seconds.
+    // Called periodically by PacketTunnelProvider (every ~30 s).
+    func sweep(idleSecs: TimeInterval = 60) {
+        let cutoff = Date.now.addingTimeInterval(-idleSecs)
+        let stale = flows.filter { $0.value.lastActivity < cutoff }
+        for key in stale.keys {
+            flows[key]?.conn.cancel()
+            flows.removeValue(forKey: key)
+        }
     }
 
     // Cancel all open flows (called from stopTunnel).
@@ -77,7 +99,6 @@ actor TCPRelay {
 
     private func openFlow(key: FlowKey, clientISN: UInt32,
                           packetFlow: NEPacketTunnelFlow) {
-        // Close any stale flow for this key first.
         flows[key]?.conn.cancel()
 
         let serverISN = UInt32.random(in: 0...UInt32.max)
@@ -94,8 +115,7 @@ actor TCPRelay {
                               serverSeqNext: serverISN &+ 1)
         flows[key] = state
 
-        // Send SYN-ACK immediately so the client doesn't time out while
-        // the NWConnection is connecting asynchronously.
+        // SYN-ACK so the client doesn't time out while NWConnection is connecting.
         sendToClient(key: key, seq: serverISN, ack: clientSeqNext,
                      flags: 0x12 /* SYN+ACK */, payload: Data(),
                      packetFlow: packetFlow)
@@ -133,6 +153,7 @@ actor TCPRelay {
                          payload: data,
                          packetFlow: packetFlow)
             state.serverSeqNext = state.serverSeqNext &+ UInt32(data.count)
+            state.lastActivity  = .now
             flows[key] = state
         }
 
@@ -143,7 +164,6 @@ actor TCPRelay {
         }
 
         if isComplete {
-            // Server closed its write side — send FIN+ACK to client.
             sendToClient(key: key,
                          seq: state.serverSeqNext,
                          ack: state.clientSeqNext,
@@ -154,12 +174,10 @@ actor TCPRelay {
             return
         }
 
-        // Continue receiving.
         receiveFromServer(conn: conn, key: key, packetFlow: packetFlow)
     }
 
     // Injects a raw IP+TCP packet toward the client (srcIP/srcPort = the remote server).
-    // Detects IP version from the address format (IPv6 contains ":").
     private func sendToClient(key: FlowKey, seq: UInt32, ack: UInt32,
                                flags: UInt8, payload: Data,
                                packetFlow: NEPacketTunnelFlow) {
