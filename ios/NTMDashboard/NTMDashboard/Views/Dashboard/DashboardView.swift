@@ -35,42 +35,48 @@ struct DemoBanner: View {
 struct DashboardView: View {
     @Environment(DashboardViewModel.self) private var vm
     @Environment(AuthViewModel.self) private var authVM
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if vm.apiVersionBlocking, let warning = vm.apiVersionWarning {
-                    ContentUnavailableView(
-                        "Incompatible Server",
-                        systemImage: "exclamationmark.triangle",
-                        description: Text(warning)
-                    )
-                } else if let snap = vm.snapshot {
-                    ScrollView {
-                        VStack(spacing: 16) {
-                            if snap.demo == true, let exp = snap.demoExpiresAt {
-                                DemoBanner(expiresAt: exp)
+        Group {
+            if vm.apiVersionBlocking, let warning = vm.apiVersionWarning {
+                ContentUnavailableView(
+                    "Incompatible Server",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text(warning)
+                )
+            } else if let snap = vm.snapshot {
+                ScrollView {
+                    VStack(spacing: 16) {
+                        if snap.demo == true, let exp = snap.demoExpiresAt {
+                            DemoBanner(expiresAt: exp)
+                        }
+                        if let warning = vm.apiVersionWarning {
+                            HStack(spacing: 8) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(Color.ntmAmber)
+                                Text(warning)
+                                    .font(.caption)
+                                    .foregroundStyle(Color.ntmAmber)
                             }
-                            if let warning = vm.apiVersionWarning {
-                                HStack(spacing: 8) {
-                                    Image(systemName: "exclamationmark.triangle.fill")
-                                        .foregroundStyle(Color.ntmAmber)
-                                    Text(warning)
-                                        .font(.caption)
-                                        .foregroundStyle(Color.ntmAmber)
-                                }
-                                .padding(10)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(Color.ntmAmber.opacity(0.12))
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
-                            }
-                            ConnectionBar(
-                                isConnected: true,
-                                serverHost: snap.demo == true
-                                    ? "your-server.example.com"
-                                    : ServerConfig.load().baseURL?.host() ?? "",
-                                lastUpdated: vm.lastUpdated
-                            )
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.ntmAmber.opacity(0.12))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                        }
+                        ConnectionBar(
+                            isConnected: true,
+                            serverHost: snap.demo == true
+                                ? "your-server.example.com"
+                                : ServerConfig.load().baseURL?.host() ?? "",
+                            lastUpdated: vm.lastUpdated
+                        )
+
+                        // Adaptive grid: 1 column on compact, 2+ on regular (iPad/landscape)
+                        LazyVGrid(
+                            columns: [GridItem(.adaptive(minimum: 340))],
+                            spacing: 16
+                        ) {
                             InterfacesSection(interfaces: snap.interfaces)
                             EntityFlowsSection(
                                 flows: snap.entities,
@@ -86,41 +92,43 @@ struct DashboardView: View {
                                 rejectedClients: snap.protoRejectedClients
                             )
                         }
-                        .padding(.horizontal)
-                        .padding(.bottom)
                     }
-                    .refreshable { await vm.refresh() }
-                } else if vm.isLoading {
-                    ProgressView("Connecting…")
-                } else if let err = vm.error {
-                    ContentUnavailableView(
-                        "Cannot reach server",
-                        systemImage: "network.slash",
-                        description: Text(err)
-                    )
-                } else {
-                    ContentUnavailableView(
-                        "Not configured",
-                        systemImage: "gear.badge.xmark",
-                        description: Text("Add server details in Settings")
-                    )
+                    .padding(.horizontal)
+                    .padding(.bottom)
+                    .frame(maxWidth: sizeClass == .regular ? 720 : .infinity)
+                    .frame(maxWidth: .infinity, alignment: .center)
                 }
+                .refreshable { await vm.refresh() }
+            } else if vm.isLoading {
+                ProgressView("Connecting…")
+            } else if let err = vm.error {
+                ContentUnavailableView(
+                    "Cannot reach server",
+                    systemImage: "network.slash",
+                    description: Text(err)
+                )
+            } else {
+                ContentUnavailableView(
+                    "Not configured",
+                    systemImage: "gear.badge.xmark",
+                    description: Text("Add server details in Settings")
+                )
             }
-            .navigationTitle("NTM Dashboard")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        Task { await vm.refresh() }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .disabled(vm.isLoading)
+        }
+        .navigationTitle("NTM Dashboard")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    Task { await vm.refresh() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
                 }
-                if vm.snapshot?.demo == true {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button("Exit Demo", role: .destructive) {
-                            Task { await authVM.logout() }
-                        }
+                .disabled(vm.isLoading)
+            }
+            if vm.snapshot?.demo == true {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Exit Demo", role: .destructive) {
+                        Task { await authVM.logout() }
                     }
                 }
             }

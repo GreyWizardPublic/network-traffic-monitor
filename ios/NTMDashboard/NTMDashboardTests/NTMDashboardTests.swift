@@ -862,6 +862,48 @@ final class DashboardViewModelApiVersionTests: XCTestCase {
     }
 }
 
+// MARK: - AppDestination navigation enum
+
+final class AppDestinationTests: XCTestCase {
+
+    func testAllCasesCount() {
+        XCTAssertEqual(AppDestination.allCases.count, 5)
+    }
+
+    // Raw values are stable — changing them breaks SceneStorage persistence
+    func testRawValueStability() {
+        XCTAssertEqual(AppDestination.overview.rawValue,  "overview")
+        XCTAssertEqual(AppDestination.perClient.rawValue, "per-client")
+        XCTAssertEqual(AppDestination.lan.rawValue,       "lan")
+        XCTAssertEqual(AppDestination.admin.rawValue,     "admin")
+        XCTAssertEqual(AppDestination.settings.rawValue,  "settings")
+    }
+
+    func testHashableRoundTrip() {
+        var seen = Set<AppDestination>()
+        for dest in AppDestination.allCases { seen.insert(dest) }
+        XCTAssertEqual(seen.count, AppDestination.allCases.count,
+                       "all cases must hash distinctly")
+    }
+
+    func testRoundTripFromRawValue() {
+        for dest in AppDestination.allCases {
+            XCTAssertEqual(AppDestination(rawValue: dest.rawValue), dest,
+                           "rawValue round-trip failed for \(dest)")
+        }
+    }
+
+    func testIdentifiableIdMatchesRawValue() {
+        for dest in AppDestination.allCases {
+            XCTAssertEqual(dest.id, dest.rawValue)
+        }
+    }
+
+    func testUnknownRawValueReturnsNil() {
+        XCTAssertNil(AppDestination(rawValue: "unknown-destination"))
+    }
+}
+
 // MARK: - NTMError descriptions
 
 final class NTMErrorTests: XCTestCase {

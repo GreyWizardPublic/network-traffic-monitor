@@ -41,8 +41,8 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         DEVELOPMENT_TEAM: W65LG3MSG6
         CODE_SIGN_STYLE: Automatic
-        MARKETING_VERSION: "1.9.0"
-        CURRENT_PROJECT_VERSION: "16"
+        MARKETING_VERSION: "1.10.0"
+        CURRENT_PROJECT_VERSION: "17"
       configs:
         Debug:
           DEBUG_INFORMATION_FORMAT: dwarf
