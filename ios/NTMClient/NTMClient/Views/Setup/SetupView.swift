@@ -1,9 +1,8 @@
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct SetupView: View {
     @Environment(SetupViewModel.self) private var vm
-    @State private var showCertPicker = false
+    @State private var showRegister = false
     @State private var showRegenerateConfirm = false
 
     var body: some View {
@@ -16,17 +15,6 @@ struct SetupView: View {
                 registrationSection
             }
             .navigationTitle("Setup")
-            .fileImporter(
-                isPresented: $showCertPicker,
-                allowedContentTypes: [UTType.x509Certificate]
-            ) { result in
-                if case .success(let url) = result,
-                   url.startAccessingSecurityScopedResource(),
-                   let data = try? Data(contentsOf: url) {
-                    url.stopAccessingSecurityScopedResource()
-                    vm.importCert(data: data)
-                }
-            }
             .confirmationDialog(
                 "Regenerate key pair?",
                 isPresented: $showRegenerateConfirm,
@@ -37,6 +25,9 @@ struct SetupView: View {
             } message: {
                 Text("The existing key will be deleted and you will need to re-register this device on the server.")
             }
+            .sheet(isPresented: $showRegister) {
+                RegisterDeviceView()
+            }
         }
     }
 
@@ -46,17 +37,10 @@ struct SetupView: View {
     private var serverSection: some View {
         @Bindable var vm = vm
         Section("Server") {
-            TextField("Host / domain", text: $vm.config.host)
+            TextField("https://ntm.yourserver.com:8443", text: $vm.config.serverURL)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-            HStack {
-                Text("HTTPS port")
-                Spacer()
-                TextField("8443", value: $vm.config.httpsPort, format: .number)
-                    .multilineTextAlignment(.trailing)
-                    .keyboardType(.numberPad)
-                    .frame(width: 70)
-            }
+                .keyboardType(.URL)
             HStack {
                 Text("Wire port")
                 Spacer()
@@ -68,10 +52,11 @@ struct SetupView: View {
             HStack {
                 Text("Device nickname")
                 Spacer()
-                TextField(UIDevice.current.name, text: $vm.config.nickname)
+                TextField("My iPhone", text: $vm.config.nickname)
                     .multilineTextAlignment(.trailing)
                     .autocorrectionDisabled()
             }
+            Toggle("Use WebSocket", isOn: $vm.config.useWebSocket)
         }
     }
 
@@ -85,15 +70,25 @@ struct SetupView: View {
                     Spacer()
                     Button("Clear", role: .destructive) { vm.clearCert() }
                 }
-            } else {
-                Button("Import server certificate (DER)…") {
-                    showCertPicker = true
+            } else if let fp = vm.untrustedCertFingerprint {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("Certificate not trusted", systemImage: "lock.trianglebadge.exclamationmark")
+                        .foregroundStyle(.orange)
+                    Text("SHA-256: \(fp)")
+                        .font(.caption2)
+                        .monospaced()
+                    Button("Trust this server's certificate") {
+                        Task { await vm.trustCertAndRetry() }
+                    }
+                    .buttonStyle(.bordered)
                 }
             }
         } header: {
             Text("TLS certificate")
         } footer: {
-            Text("Required only for self-signed server certificates.")
+            Text(vm.config.pinnedCertData != nil
+                 ? "Connections are pinned to this certificate."
+                 : "Leave empty to use system certificate validation.")
         }
     }
 
@@ -130,18 +125,7 @@ struct SetupView: View {
                     .foregroundStyle(.green)
             }
 
-            if !vm.isSignedIn {
-                Button {
-                    Task { await vm.login() }
-                } label: {
-                    if vm.isLoading {
-                        ProgressView().frame(maxWidth: .infinity)
-                    } else {
-                        Text("Sign in with passkey").frame(maxWidth: .infinity)
-                    }
-                }
-                .disabled(vm.isLoading || !vm.config.isConfigured)
-            } else {
+            if vm.isSignedIn {
                 HStack {
                     Label("Signed in", systemImage: "person.crop.circle.badge.checkmark")
                         .foregroundStyle(.green)
@@ -160,6 +144,36 @@ struct SetupView: View {
                     }
                 }
                 .disabled(vm.isLoading || vm.pubkeyHex == nil)
+            } else {
+                Button {
+                    Task { await vm.login() }
+                } label: {
+                    Label("Sign in with Passkey", systemImage: "touchid")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(vm.isLoading || !vm.config.isConfigured)
+
+                Button("Register this device…") {
+                    vm.errorMessage = nil
+                    showRegister = true
+                }
+                .disabled(vm.isLoading || !vm.config.isConfigured)
+
+                HStack {
+                    VStack { Divider() }
+                    Text("or").font(.caption).foregroundStyle(.secondary)
+                    VStack { Divider() }
+                }
+
+                Button {
+                    Task { await vm.connectDemo() }
+                } label: {
+                    Label("Try Demo Server", systemImage: "play.circle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(vm.isLoading)
             }
 
             if let success = vm.successMessage {
@@ -171,6 +185,10 @@ struct SetupView: View {
                 Text(error)
                     .foregroundStyle(.red)
                     .font(.caption)
+            }
+
+            if vm.isLoading {
+                ProgressView().frame(maxWidth: .infinity)
             }
         } header: {
             Text("Server registration")
