@@ -4,4 +4,4 @@
 // See CLAUDE.md § Versioning for per-module rules and protocol lockstep requirements.
 // Wire protocol spoken: kWireProtoVersion (src/proto_client_server.hpp)
 // API protocol spoken:  kApiVersion       (src/proto_client_server.hpp)
-inline constexpr char kServerVersion[] = "1.19.1.0";
+inline constexpr char kServerVersion[] = "1.20.0.0";
