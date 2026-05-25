@@ -5,13 +5,13 @@ import XCTest
 
 final class DashboardSnapshotDecodeTests: XCTestCase {
 
-    // MARK: Full v7 snapshot — every documented field present
+    // MARK: Full v8 snapshot — every documented field present
 
-    func testFullV7Snapshot() throws {
+    func testFullV8Snapshot() throws {
         let json = """
         {
-          "api_version": 7,
-          "server_version": "1.18.0",
+          "api_version": 8,
+          "server_version": "1.19.0",
           "server_wire_proto_version": 2,
           "window_start": 1716480000,
           "generated_at": 1716480030,
@@ -63,7 +63,7 @@ final class DashboardSnapshotDecodeTests: XCTestCase {
         """
         let s = try decode(json)
 
-        XCTAssertEqual(s.apiVersion, 7)
+        XCTAssertEqual(s.apiVersion, 8)
         XCTAssertEqual(s.serverVersion, "1.18.0")
         XCTAssertEqual(s.serverWireProtoVersion, 2)
         XCTAssertEqual(s.windowStart, 1716480000)
@@ -246,8 +246,8 @@ final class DashboardSnapshotDecodeTests: XCTestCase {
     func testDemoSnapshot() throws {
         let json = """
         {
-          "api_version": 7,
-          "server_version": "1.15.0",
+          "api_version": 8,
+          "server_version": "1.19.0",
           "demo": true,
           "demo_expires_at": 1716481000,
           "window_start": 1716480000,
@@ -390,7 +390,7 @@ final class DashboardSnapshotDecodeTests: XCTestCase {
     func testMultipleClientsDecoded() throws {
         let json = """
         {
-          "api_version": 7, "server_version": "1.15.0",
+          "api_version": 8, "server_version": "1.19.0",
           "window_start": 0, "generated_at": 0,
           "interfaces": [], "entities": [], "overhead_entities": [],
           "client_health": [
@@ -444,7 +444,7 @@ final class DashboardSnapshotDecodeTests: XCTestCase {
         XCTAssertTrue(s.truncatedLan)
     }
 
-    // MARK: update_manifest (spec § 10, api_version 7)
+    // MARK: update_manifest (spec § 10, api_version 8)
 
     func testUpdateManifestDecodesAllFields() throws {
         let json = """
@@ -656,9 +656,9 @@ final class CertificatePinnerTests: XCTestCase {
 
 final class ProtocolVersionTests: XCTestCase {
 
-    // api-protocol.md § Change log: current API version is 7
-    func testSupportedApiVersionIsSevenPerSpec() {
-        XCTAssertEqual(NTMProtocol.supportedApiVersion, 7)
+    // api-protocol.md § Change log: current API version is 8
+    func testSupportedApiVersionIsEightPerSpec() {
+        XCTAssertEqual(NTMProtocol.supportedApiVersion, 8)
     }
 
     // api-protocol.md § 3: api_version 1 has no /auth/* endpoints
