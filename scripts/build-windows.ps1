@@ -59,9 +59,10 @@ if ($Clean -and (Test-Path $BuildDir)) {
 
 # ── Stale binary cleanup (CLAUDE.md § "Stale binary cleanup") ─────────────────
 # Because the version is baked into the filename, a version bump leaves old
-# binaries behind.  Remove them before configure so the wrong file is never
-# deployed by mistake.
-Remove-Item "$BuildDir\ntm-client-windows-amd64-*.exe" -ErrorAction SilentlyContinue
+# binaries behind.  Remove both the .exe AND its companion .sig so the wrong
+# pair is never deployed by mistake.
+Remove-Item "$BuildDir\ntm-client-windows-amd64-*.exe"     -ErrorAction SilentlyContinue
+Remove-Item "$BuildDir\ntm-client-windows-amd64-*.exe.sig" -ErrorAction SilentlyContinue
 
 # ── Configure ─────────────────────────────────────────────────────────────────
 Write-Host "[configure] Running cmake..." -ForegroundColor Yellow
@@ -113,10 +114,18 @@ $exes = Get-ChildItem -Path $BuildDir -Filter "ntm-client-windows-*.exe" -ErrorA
 if ($exes) {
     foreach ($exe in $exes) {
         $size = [math]::Round($exe.Length / 1MB, 2)
-        Write-Host "  Output: $($exe.FullName)  ($size MB)" -ForegroundColor Green
+        Write-Host "  Binary: $($exe.FullName)  ($size MB)" -ForegroundColor Green
+        $sig = $exe.FullName + ".sig"
+        if (Test-Path $sig) {
+            $sigSize = (Get-Item $sig).Length
+            Write-Host "  Sig:    $sig  ($sigSize bytes)" -ForegroundColor Green
+        } else {
+            Write-Host "  WARNING: Signature file missing: $sig" -ForegroundColor Yellow
+            Write-Host "           Deploy binary without .sig will cause FATAL startup failure." -ForegroundColor Yellow
+        }
     }
 } else {
-    Write-Host "  Output: $BuildDir\ntm-client-windows-amd64-*.exe" -ForegroundColor Green
+    Write-Host "  Output: $BuildDir\ntm-client-windows-amd64-*.exe (+ .sig)" -ForegroundColor Green
 }
 if ($RunTests) {
     Write-Host "  Tests:  $BuildDir\ntm-tests-windows.exe  (all passed)" -ForegroundColor Green
