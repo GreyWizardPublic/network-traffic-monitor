@@ -1,6 +1,6 @@
-# NTM Dashboard API Protocol — Specification v9
+# NTM Dashboard API Protocol — Specification v10
 
-**API version:** 9  
+**API version:** 10  
 **Software version where introduced:** ntm 1.12.0  
 **File owner:** This document is the authoritative specification for the HTTPS
 API between `ntm-server` and any dashboard client (iOS app, web browser, or
@@ -106,6 +106,7 @@ software version (`server_version`).
 
 | Version | Change |
 |---|---|
+| 10 | Added admin hide-entities feature: `GET /api/admin/clients`, `GET /api/admin/hidden`, `POST /api/admin/hidden/client`, `POST /api/admin/hidden/interface`. Hidden clients and (client, iface) pairs are suppressed from `/api/summary` responses (all sections). Persisted across server restarts in `hidden_entities_file`. Enabled when `hidden_entities_file` and WebAuthn are configured (ntm-server 1.22.0). |
 | 9 | Added `GET /api/client/history` — per-client traffic histogram data (in/out bytes and packets per minute or per hour). Returns a fine ring (last N 1-minute buckets) or a coarse ring (hourly aggregation across the full retention window). Requires authenticated session; rate-limited to 30 req/IP/min (ntm-server 1.21.0). |
 | 8 | Added `GET /api/update/download_sig` — download ML-DSA-65 signature file for the client binary. Added `sig_size` field to `/api/update/check` response. Added client push endpoints `GET /admin/client/nonce` and `POST /admin/client/push` — push signed client binaries into `update_dir` via ML-DSA-65 authenticated upload (ntm-server 1.19.0, ntm-client 1.15.0). |
 | 7 | Added auto-update endpoints: `GET /api/update/check`, `GET /api/update/download`, `POST /api/admin/update/scan`, `POST /api/admin/update/force`. Added `client_id` and `platform` fields to each `client_health` entry. Added `update_manifest` array to `/api/summary`. Added admin session endpoints `GET /api/admin/monitors` (ntm-server 1.12.0). |
@@ -330,7 +331,7 @@ recognise. New optional fields may be added at any `api_version` without a bump.
 
 ```json
 {
-  "api_version":              <integer>,  // API contract revision; currently 9
+  "api_version":              <integer>,  // API contract revision; currently 10
   "server_version":           <string>,   // ntm-server module version, e.g. "1.8.1"
   "server_wire_proto_version": <integer>, // wire protocol data-phase version the server speaks
   "window_start":              <integer>, // unix epoch: start of the rolling stats window
@@ -858,9 +859,107 @@ is sorted oldest-first by `t`.
 
 ---
 
-## 16. Stability Contract
+## 16. Admin Hide-Entities Endpoints *(api_version 10+)*
 
-- All fields documented in § 10–15 are **stable at `api_version: 9`**.
+These endpoints allow the operator to hide specific clients or `(client, interface)`
+pairs from the main dashboard `/api/summary` response. Hidden entities are
+excluded from all sections (`interfaces`, `entities`, `entities_internet`,
+`entities_local`, `overhead_entities`, `entities_lan`, `client_health`).
+
+The choice is **persisted** in `hidden_entities_file` (server config key) and
+survives server restarts. It applies regardless of whether the hidden client is
+currently connected.
+
+All four endpoints require an authenticated admin session. Registered only when
+`hidden_entities_file` and `webauthn_rp_id` are both set in server config.
+
+### `GET /api/admin/clients`
+
+Returns all registered clients with their nickname and current connection status.
+
+**Response `200`:**
+```json
+{
+  "clients": [
+    {
+      "client_id":  "<64 hex>",
+      "nickname":   "<display name or empty>",
+      "connected":  true
+    }
+  ]
+}
+```
+
+### `GET /api/admin/hidden`
+
+Returns the current set of hidden clients and hidden interfaces.
+
+**Response `200`:**
+```json
+{
+  "hidden_clients": ["<hex64>", ...],
+  "hidden_interfaces": [
+    {"client_id": "<hex64>", "iface": "eth0"},
+    ...
+  ]
+}
+```
+
+### `POST /api/admin/hidden/client`
+
+Hide or unhide a client entirely.
+
+**Request body** (`Content-Type: application/json`):
+```json
+{
+  "client_id": "<64 lowercase hex>",
+  "action":    "hide" | "unhide"
+}
+```
+
+**Response `200`:**
+```json
+{ "ok": true, "hidden": true }
+```
+
+**Error responses:**
+
+| Status | Reason |
+|---|---|
+| `400` | `client_id` is not 64 lowercase hex chars; or `action` is not `hide`/`unhide` |
+| `500` | Server could not write the `hidden_entities_file` |
+
+### `POST /api/admin/hidden/interface`
+
+Hide or unhide a specific `(client_id, iface)` pair. The client itself remains
+visible in `client_health`; only this interface's traffic rows are suppressed.
+
+**Request body** (`Content-Type: application/json`):
+```json
+{
+  "client_id": "<64 lowercase hex>",
+  "iface":     "<interface name, 1–64 chars>",
+  "action":    "hide" | "unhide"
+}
+```
+
+**Response `200`:**
+```json
+{ "ok": true, "hidden": true }
+```
+
+**Error responses:**
+
+| Status | Reason |
+|---|---|
+| `400` | `client_id` not valid; `iface` empty or > 64 chars; `action` not `hide`/`unhide` |
+| `500` | Server could not write the `hidden_entities_file` |
+
+---
+
+## 17. Stability Contract
+
+- All fields documented in § 10–16 are **stable at `api_version: 10`**.
   No field will be removed or renamed without a version bump.
 - New **optional** fields may be added at any `api_version` without bumping;
   clients must tolerate extra fields.
@@ -879,4 +978,7 @@ is sorted oldest-first by `t`.
   the updater falls back to SHA-256-only verification.
 - Servers at `api_version: 8` (ntm-server < 1.21.0) do not have `/api/client/history`.
   Web dashboard clients must suppress the histogram panel when `api_version < 9`.
+- Servers at `api_version: 9` (ntm-server < 1.22.0) do not have the hide-entities
+  endpoints. The admin UI should gracefully handle `404` from `/api/admin/hidden`
+  by hiding the Hidden Entities panel.
 - The protocol doc is updated **before** the commit that changes either side.

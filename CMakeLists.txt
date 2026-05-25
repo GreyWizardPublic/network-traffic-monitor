@@ -261,6 +261,7 @@ if(NOT WIN32)
         tests/test_client_signing.cpp
         tests/test_client_push.cpp
         tests/test_client_history.cpp
+        tests/test_hidden_entities.cpp
     )
     target_include_directories(ntm-tests PRIVATE src tests)
     # ntm_types.hpp uses POSIX socket headers for isLanIP(); no extra libs needed.
