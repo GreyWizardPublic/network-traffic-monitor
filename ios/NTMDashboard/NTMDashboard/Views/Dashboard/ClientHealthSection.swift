@@ -6,73 +6,67 @@ struct ClientHealthSection: View {
     let rejectedClients: [ProtoRejectedClient]
 
     var body: some View {
-        GlassCard {
-            VStack(alignment: .leading, spacing: 12) {
-                Label("Clients", systemImage: "desktopcomputer")
-                    .font(.headline)
-
-                if !rejectedClients.isEmpty {
-                    HStack(spacing: 6) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(Color.ntmAmber)
-                        Text("\(rejectedClients.count) connection(s) rejected — auth-protocol mismatch")
-                            .font(.caption).foregroundStyle(Color.ntmAmber)
-                    }
-                    .padding(8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.ntmAmber.opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
+        SectionCard(title: "Clients", systemImage: "desktopcomputer") {
+            if !rejectedClients.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(Color.ntmAmber)
+                    Text("\(rejectedClients.count) connection(s) rejected — auth-protocol mismatch")
+                        .font(.caption).foregroundStyle(Color.ntmAmber)
                 }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.ntmAmber.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
 
-                if clients.isEmpty {
-                    Text("No clients connected")
-                        .foregroundStyle(.secondary)
-                        .font(.subheadline)
-                } else {
-                    ForEach(clients) { client in
-                        HStack(alignment: .top) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack(spacing: 6) {
-                                    Circle()
-                                        .fill(client.stale ? Color.ntmAmber : Color.ntmGreen)
-                                        .frame(width: 8, height: 8)
-                                    Text(client.client)
-                                        .font(.subheadline).bold()
-                                    wireProtoBadge(for: client)
-                                }
-                                Text("v\(client.version) · \(lastSeenLabel(client.reportedAt))")
-                                    .font(.caption).foregroundStyle(.secondary)
-                                aggLabel(for: client)
+            if clients.isEmpty {
+                Text("No clients connected")
+                    .foregroundStyle(.secondary)
+                    .font(.subheadline)
+            } else {
+                ForEach(clients) { client in
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(client.stale ? Color.ntmAmber : Color.ntmGreen)
+                                    .frame(width: 8, height: 8)
+                                Text(client.client)
+                                    .font(.subheadline).bold()
+                                wireProtoBadge(for: client)
                             }
-                            Spacer()
-                            StatBadge(
-                                label: "drop",
-                                value: client.pcapDropPct + "%",
-                                color: dropColor(client.pcapDropPct)
-                            )
+                            Text("v\(client.version) · \(lastSeenLabel(client.reportedAt))")
+                                .font(.caption).foregroundStyle(.secondary)
+                            aggLabel(for: client)
                         }
-                        if client.id != clients.last?.id { Divider() }
+                        Spacer()
+                        StatBadge(
+                            label: "drop",
+                            value: client.pcapDropPct + "%",
+                            color: dropColor(client.pcapDropPct)
+                        )
                     }
+                    if client.id != clients.last?.id { Divider() }
                 }
+            }
 
-                if !rejectedClients.isEmpty {
-                    Divider()
-                    Text("Rejected connections")
-                        .font(.caption).bold().foregroundStyle(.secondary)
-                    ForEach(rejectedClients) { r in
-                        HStack {
-                            Text(r.peerIp)
-                                .font(.caption).foregroundStyle(.secondary)
-                            Spacer()
-                            Text("auth v\(r.attemptedAuthVersion)")
-                                .font(.caption).foregroundStyle(Color.ntmRed)
-                            Text(lastSeenLabel(r.at))
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
+            if !rejectedClients.isEmpty {
+                Divider()
+                Text("Rejected connections")
+                    .font(.caption).bold().foregroundStyle(.secondary)
+                ForEach(rejectedClients) { r in
+                    HStack {
+                        Text(r.peerIp)
+                            .font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Text("auth v\(r.attemptedAuthVersion)")
+                            .font(.caption).foregroundStyle(Color.ntmRed)
+                        Text(lastSeenLabel(r.at))
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
             }
-            .padding()
         }
     }
 

@@ -28,6 +28,8 @@
 		9C029F8BCE9FBE3E5E7095D8 /* RegisterDeviceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A28C84A9FAFD2E66259B3B9 /* RegisterDeviceView.swift */; };
 		A5CAE318D2F9ACC241A15574 /* CertificatePinner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 211C120F7F3FAB95364C4930 /* CertificatePinner.swift */; };
 		A6DC3789757BD7F4A0B4AF12 /* ProtocolVersion.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4DD610B34BF286883320588 /* ProtocolVersion.swift */; };
+		A9C7EF53C5E19D5F89B98D2E /* SectionCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53D1261760DC4266421A7B97 /* SectionCard.swift */; };
+		B1F7F14FA25EB3CFD90675A8 /* AppNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA4035AFFE621B90203F451F /* AppNavigation.swift */; };
 		B5330ED8E9D503B32B707D09 /* AdminProof.swift in Sources */ = {isa = PBXBuildFile; fileRef = 804A17A45D0AF55FA4B6DCBC /* AdminProof.swift */; };
 		C53E3A35A37173372D67A39D /* ProtoRejectedClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8514DAA6EF7557EBA0370386 /* ProtoRejectedClient.swift */; };
 		C908F8F4BF3BDFB7E6AC5A61 /* ByteFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C5CAAD94CB10A98C2568456 /* ByteFormatter.swift */; };
@@ -66,6 +68,7 @@
 		39E3B19CB0DD2B03641509F1 /* NTMDashboardApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NTMDashboardApp.swift; sourceTree = "<group>"; };
 		3C5CAAD94CB10A98C2568456 /* ByteFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ByteFormatter.swift; sourceTree = "<group>"; };
 		4D1E5677279246C4C1605702 /* KeychainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainService.swift; sourceTree = "<group>"; };
+		53D1261760DC4266421A7B97 /* SectionCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SectionCard.swift; sourceTree = "<group>"; };
 		58A0EEF5B09B3375446F28A3 /* ByteLabel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ByteLabel.swift; sourceTree = "<group>"; };
 		5AB372E094EFED56458E95BD /* EntityFlowsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntityFlowsSection.swift; sourceTree = "<group>"; };
 		6458FB6A66A07ABA491D7270 /* NTMClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NTMClient.swift; sourceTree = "<group>"; };
@@ -91,6 +94,7 @@
 		EE738CC4D345F46C4C02078B /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
 		EE96CD2C94C0093025B8331A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		EEC74B35B28474BABB90D917 /* InterfaceStat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InterfaceStat.swift; sourceTree = "<group>"; };
+		FA4035AFFE621B90203F451F /* AppNavigation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppNavigation.swift; sourceTree = "<group>"; };
 		FB742ADB09B58A0C223BBED8 /* SettingsViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsViewModel.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -130,6 +134,7 @@
 				0B4B0DCACE152D40FFA4FDFC /* Color+NTM.swift */,
 				1996311C087DD337943D5408 /* ConnectionBar.swift */,
 				17D7EA47DF8FD33E34D5FD50 /* GlassCard.swift */,
+				53D1261760DC4266421A7B97 /* SectionCard.swift */,
 				D330C12EF81AF8FB857D866B /* StatBadge.swift */,
 			);
 			path = Components;
@@ -195,6 +200,7 @@
 		80A38747EB023B3142F7C71F /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				FA4035AFFE621B90203F451F /* AppNavigation.swift */,
 				EE738CC4D345F46C4C02078B /* LoginView.swift */,
 				8A28C84A9FAFD2E66259B3B9 /* RegisterDeviceView.swift */,
 				3CB18BBF752905CE7AB4E735 /* Components */,
@@ -339,6 +345,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				B5330ED8E9D503B32B707D09 /* AdminProof.swift in Sources */,
+				B1F7F14FA25EB3CFD90675A8 /* AppNavigation.swift in Sources */,
 				D056C6A0D8B89CE2EC94C9A3 /* AuthViewModel.swift in Sources */,
 				C908F8F4BF3BDFB7E6AC5A61 /* ByteFormatter.swift in Sources */,
 				19459707933237366C1F8764 /* ByteLabel.swift in Sources */,
@@ -365,6 +372,7 @@
 				A6DC3789757BD7F4A0B4AF12 /* ProtocolVersion.swift in Sources */,
 				9C029F8BCE9FBE3E5E7095D8 /* RegisterDeviceView.swift in Sources */,
 				E84BA355775F2E9FE26B0D75 /* RootView.swift in Sources */,
+				A9C7EF53C5E19D5F89B98D2E /* SectionCard.swift in Sources */,
 				1C7E06BBA00154ABC88F28A6 /* ServerConfig.swift in Sources */,
 				70D5500660FEEA05B228DEDD /* SettingsView.swift in Sources */,
 				E1150CEA5CE76C8881B1AF04 /* SettingsViewModel.swift in Sources */,
@@ -413,7 +421,7 @@
 				CODE_SIGN_ENTITLEMENTS = NTMDashboard/NTMDashboard/NTMDashboard.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 16;
+				CURRENT_PROJECT_VERSION = 17;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = W65LG3MSG6;
 				INFOPLIST_FILE = NTMDashboard/NTMDashboard/Info.plist;
@@ -422,7 +430,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.9.0;
+				MARKETING_VERSION = 1.10.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ntm.NTMDashboard;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -502,7 +510,7 @@
 				CODE_SIGN_ENTITLEMENTS = NTMDashboard/NTMDashboard/NTMDashboard.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 16;
+				CURRENT_PROJECT_VERSION = 17;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = W65LG3MSG6;
 				INFOPLIST_FILE = NTMDashboard/NTMDashboard/Info.plist;
@@ -511,7 +519,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.9.0;
+				MARKETING_VERSION = 1.10.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ntm.NTMDashboard;
 				SDKROOT = iphoneos;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";

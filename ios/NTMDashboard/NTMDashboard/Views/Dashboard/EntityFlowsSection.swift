@@ -51,64 +51,58 @@ struct EntityFlowsSection: View {
     }
 
     var body: some View {
-        GlassCard {
-            VStack(alignment: .leading, spacing: 12) {
-                Label("Top Flows", systemImage: "arrow.left.arrow.right")
-                    .font(.headline)
-
-                Picker("Filter", selection: $filter) {
-                    ForEach(TrafficFilter.allCases, id: \.self) { f in
-                        Text(f.rawValue).tag(f)
-                    }
-                }
-                .pickerStyle(.segmented)
-
-                if filter == .local, let summary = localSummary, summary.bytes > 0 {
-                    HStack(spacing: 6) {
-                        Image(systemName: "network")
-                            .font(.caption2)
-                            .foregroundStyle(Color.ntmBlue)
-                        Text("Local traffic: \(fmtBytes(summary.bytes)) (\(summary.pctOfTotalBytes)%)")
-                            .font(.caption)
-                            .foregroundStyle(Color.ntmBlue)
-                    }
-                }
-
-                if filter == .overhead || filter == .all,
-                   let summary = overheadSummary, summary.bytes > 0 {
-                    HStack(spacing: 6) {
-                        Image(systemName: "antenna.radiowaves.left.and.right")
-                            .font(.caption2)
-                            .foregroundStyle(.orange)
-                        Text("Monitoring overhead: \(fmtBytes(summary.bytes)) (\(summary.pctOfTotalBytes)%)")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                    }
-                }
-
-                if displayFlows.isEmpty {
-                    Text(emptyLabel)
-                        .foregroundStyle(.secondary)
-                        .font(.subheadline)
-                } else {
-                    ForEach(displayFlows) { flow in
-                        HStack(spacing: 8) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(flow.srcEntity)
-                                    .font(.caption).foregroundStyle(.secondary)
-                                Image(systemName: "arrow.down")
-                                    .font(.caption2).foregroundStyle(Color.ntmBlue)
-                                Text(flow.dstEntity)
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            ByteLabel(bytes: flow.bytes)
-                        }
-                        if flow.id != displayFlows.last?.id { Divider() }
-                    }
+        SectionCard(title: "Top Flows", systemImage: "arrow.left.arrow.right") {
+            Picker("Filter", selection: $filter) {
+                ForEach(TrafficFilter.allCases, id: \.self) { f in
+                    Text(f.rawValue).tag(f)
                 }
             }
-            .padding()
+            .pickerStyle(.segmented)
+
+            if filter == .local, let summary = localSummary, summary.bytes > 0 {
+                HStack(spacing: 6) {
+                    Image(systemName: "network")
+                        .font(.caption2)
+                        .foregroundStyle(Color.ntmBlue)
+                    Text("Local traffic: \(fmtBytes(summary.bytes)) (\(summary.pctOfTotalBytes)%)")
+                        .font(.caption)
+                        .foregroundStyle(Color.ntmBlue)
+                }
+            }
+
+            if filter == .overhead || filter == .all,
+               let summary = overheadSummary, summary.bytes > 0 {
+                HStack(spacing: 6) {
+                    Image(systemName: "antenna.radiowaves.left.and.right")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                    Text("Monitoring overhead: \(fmtBytes(summary.bytes)) (\(summary.pctOfTotalBytes)%)")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+
+            if displayFlows.isEmpty {
+                Text(emptyLabel)
+                    .foregroundStyle(.secondary)
+                    .font(.subheadline)
+            } else {
+                ForEach(displayFlows) { flow in
+                    HStack(spacing: 8) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(flow.srcEntity)
+                                .font(.caption).foregroundStyle(.secondary)
+                            Image(systemName: "arrow.down")
+                                .font(.caption2).foregroundStyle(Color.ntmBlue)
+                            Text(flow.dstEntity)
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        ByteLabel(bytes: flow.bytes)
+                    }
+                    if flow.id != displayFlows.last?.id { Divider() }
+                }
+            }
         }
     }
 }
