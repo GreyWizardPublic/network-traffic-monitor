@@ -12,6 +12,8 @@
 #include <ws2tcpip.h>
 #include <iphlpapi.h>
 #include <windows.h>
+#include <aclapi.h>
+#include <sddl.h>
 
 // Npcap / WinPcap forward type (pcap_if_t defined in pcap.h, included only in client_impl)
 #include <pcap/pcap.h>
@@ -305,15 +307,92 @@ bool isLoopbackIface(const pcap_if *dev)
 }
 
 // ---------------------------------------------------------------------------
-// Key file permissions (stub — full Windows ACL check is a future enhancement)
+// Key file permissions — real Windows ACL check
 // ---------------------------------------------------------------------------
+// HARMONIZE-LINUX: this implements the Windows equivalent of the Linux
+// stat()+mode check in src/client_linux.cpp:258-274. The threat model and
+// policy (only owner + SYSTEM/Administrators may read) are intentionally
+// identical; the APIs differ because Windows uses ACLs instead of POSIX modes.
 
-void checkIdentityFilePermissions(const std::string &path, bool /*isDaemon*/, bool /*verbose*/)
+void checkIdentityFilePermissions(const std::string &path, bool isDaemon, bool /*verbose*/)
 {
-    // On Windows, permission checking requires the Security API.
-    // We emit a reminder to protect the file via NTFS permissions manually.
-    std::cerr << "ntm-client: NOTE: ensure identity key is protected via NTFS permissions: "
-              << path << "\n";
+    // Convert to wide string for Windows APIs.
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
+    if (wlen <= 0) return;
+    std::wstring wpath(static_cast<std::size_t>(wlen), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, wpath.data(), wlen);
+
+    PSID               ownerSid  = nullptr;
+    PACL               dacl      = nullptr;
+    PSECURITY_DESCRIPTOR sd      = nullptr;
+    DWORD ret = GetNamedSecurityInfoW(wpath.c_str(), SE_FILE_OBJECT,
+                    DACL_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION,
+                    &ownerSid, nullptr, &dacl, nullptr, &sd);
+    if (ret != ERROR_SUCCESS || !sd) return;  // file may not exist; silent return
+
+    // Build SIDs for broad-access groups that should NOT have read access.
+    struct {
+        WELL_KNOWN_SID_TYPE type;
+        const char *name;
+    } broadSids[] = {
+        { WinWorldSid,               "Everyone"           },
+        { WinAuthenticatedUserSid,   "Authenticated Users" },
+        { WinBuiltinUsersSid,        "BUILTIN\\Users"     },
+        { WinInteractiveSid,         "Interactive"        },
+    };
+
+    auto warn = [&](const std::string &msg) {
+        if (isDaemon) ntmLog(LogLevel::Warn, true, msg);
+        else std::cerr << msg << "\n";
+    };
+
+    for (const auto &s : broadSids) {
+        BYTE   sidBuf[SECURITY_MAX_SID_SIZE]{};
+        DWORD  sidSize = sizeof(sidBuf);
+        if (!CreateWellKnownSid(s.type, nullptr,
+                                reinterpret_cast<PSID>(sidBuf), &sidSize))
+            continue;
+        TRUSTEE_W trustee{};
+        trustee.TrusteeForm = TRUSTEE_IS_SID;
+        trustee.TrusteeType = TRUSTEE_IS_WELL_KNOWN_GROUP;
+        trustee.ptstrName   = reinterpret_cast<LPWCH>(sidBuf);
+        ACCESS_MASK rights  = 0;
+        if (GetEffectiveRightsFromAclW(dacl, &trustee, &rights) != ERROR_SUCCESS)
+            continue;
+        if (rights & (FILE_READ_DATA | GENERIC_READ | FILE_GENERIC_READ)) {
+            warn("ntm-client: WARNING: identity key '" + path +
+                 "' is readable by " + s.name + ".\n"
+                 "  Fix: icacls \"" + path + "\" /inheritance:r /grant:r \"<current-user>:(R)\"");
+        }
+    }
+
+    // Verify owner is the current user, LocalSystem, or Administrators.
+    HANDLE hToken = nullptr;
+    if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken)) {
+        BYTE   tokenBuf[512]{};
+        DWORD  needed = 0;
+        if (GetTokenInformation(hToken, TokenUser, tokenBuf, sizeof(tokenBuf), &needed)) {
+            auto *tu = reinterpret_cast<TOKEN_USER *>(tokenBuf);
+            if (!EqualSid(ownerSid, tu->User.Sid)) {
+                // Also accept LocalSystem (S-1-5-18) and BUILTIN\Administrators (S-1-5-32-544).
+                BYTE localSystem[SECURITY_MAX_SID_SIZE]{};
+                DWORD lsSize = sizeof(localSystem);
+                BYTE admins[SECURITY_MAX_SID_SIZE]{};
+                DWORD adSize = sizeof(admins);
+                CreateWellKnownSid(WinLocalSystemSid,  nullptr,
+                                   reinterpret_cast<PSID>(localSystem), &lsSize);
+                CreateWellKnownSid(WinBuiltinAdministratorsSid, nullptr,
+                                   reinterpret_cast<PSID>(admins), &adSize);
+                if (!EqualSid(ownerSid, reinterpret_cast<PSID>(localSystem)) &&
+                    !EqualSid(ownerSid, reinterpret_cast<PSID>(admins))) {
+                    warn("ntm-client: WARNING: identity key '" + path +
+                         "' is not owned by the current user or SYSTEM/Administrators.");
+                }
+            }
+        }
+        CloseHandle(hToken);
+    }
+    LocalFree(sd);
 }
 
 // ---------------------------------------------------------------------------
