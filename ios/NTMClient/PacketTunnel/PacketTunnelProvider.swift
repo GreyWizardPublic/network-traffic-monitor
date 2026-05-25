@@ -5,22 +5,26 @@ import Network
 @preconcurrency import NetworkExtension
 
 // kClientVersion and kWireProtoVersion come from Shared/ClientVersion.swift.
-private let kHealthIntervalSec = 30
-private let kMaxSessionSec     = 21600   // 6 hours
-private let kMaxBackoffSec     = 60.0
+private let kHealthIntervalSec  = 30
+private let kAggIntervalMs      = 1000    // flow aggregation flush period (ms)
+private let kMaxSessionSec      = 21600   // 6 hours
+private let kMaxBackoffSec      = 60.0
 
 class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private let wireClient    = WireProtocolClient()
+    private let flowAgg       = FlowAggregator()
     private var udpForwarder  = UDPForwarder()
     private var tcpRelay      = TCPRelay()
     private var wireTask:       Task<Void, Never>?
+    private var aggTask:        Task<Void, Never>?
     private var isRunning      = false
 
-    // Packet counter for H-line pcap_recv field.
-    // Accessed from both the packet-read callback and the heartbeat task;
-    // the counter is best-effort — benign races are acceptable for a statistic.
+    // Packet and drop counters — best-effort, benign races acceptable.
     private var packetCount: UInt64 = 0
+    private var bufDropCount: UInt64 = 0
+    // Flow count from the most recent aggregation flush, for the H-line agg_flows field.
+    private var lastAggFlowCount: Int = 0
 
     // MARK: - NEPacketTunnelProvider lifecycle
 
@@ -37,7 +41,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     host: config.host,
                     port: UInt16(config.wirePort),
                     pinnedCertData: config.pinnedCertData,
-                    privateKey: privateKey
+                    privateKey: privateKey,
+                    useWebSocket: config.useWebSocket
                 )
 
                 // 3. Configure the virtual tunnel interface.
@@ -58,7 +63,12 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     await self?.wireSessionLoop(config: config, privateKey: privateKey)
                 }
 
-                // 6. Start the packet read loop.
+                // 6. Start the flow aggregation flush loop.
+                aggTask = Task { [weak self] in
+                    await self?.aggFlushLoop()
+                }
+
+                // 7. Start the packet read loop.
                 readPackets()
 
             } catch {
@@ -70,8 +80,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     override func stopTunnel(with reason: NEProviderStopReason,
                              completionHandler: @escaping () -> Void) {
         isRunning = false
-        wireTask?.cancel()
-        wireTask = nil
+        wireTask?.cancel(); wireTask = nil
+        aggTask?.cancel();  aggTask  = nil
         Task {
             await wireClient.disconnect()
             await udpForwarder.cancelAll()
@@ -89,27 +99,42 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
             for (data, afNum) in zip(packets, protocols) {
                 guard let pkt = IPPacket.parse(data, af: afNum.int32Value) else { continue }
-                self.packetCount &+= 1   // wrapping add — counter is best-effort
-
-                // Send D-line observation.
-                Task { try? await self.wireClient.sendLine(pkt.dLine) }
+                self.packetCount &+= 1
+                self.flowAgg.observe(pkt)   // synchronous, no Task spawn
 
                 let flow = self.packetFlow
 
-                // Forward UDP (IPv4 and IPv6, including DNS).
                 if pkt.proto == IPPacket.protoUDP,
                    let payload = pkt.udpPayload(in: data) {
                     Task { await self.udpForwarder.forward(packet: pkt, rawPayload: payload, into: flow) }
                 }
 
-                // Relay TCP (IPv4 and IPv6) through per-flow NWConnection.
                 if pkt.proto == 6,
                    let tcp = pkt.parseTCP(in: data) {
                     Task { await self.tcpRelay.handlePacket(pkt: pkt, tcp: tcp, rawData: data, packetFlow: flow) }
                 }
             }
 
-            self.readPackets()  // continue
+            self.readPackets()
+        }
+    }
+
+    // MARK: - Flow aggregation flush loop
+
+    private func aggFlushLoop() async {
+        while !Task.isCancelled, isRunning {
+            try? await Task.sleep(for: .milliseconds(kAggIntervalMs))
+            guard !Task.isCancelled, isRunning else { break }
+
+            let (lines, flowCount) = flowAgg.drain()
+            lastAggFlowCount = flowCount
+            for line in lines {
+                do {
+                    try await wireClient.sendLine(line)
+                } catch {
+                    bufDropCount &+= 1
+                }
+            }
         }
     }
 
@@ -127,7 +152,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                         host: config.host,
                         port: UInt16(config.wirePort),
                         pinnedCertData: config.pinnedCertData,
-                        privateKey: privateKey
+                        privateKey: privateKey,
+                        useWebSocket: config.useWebSocket
                     )
                     backoff = 2
                 }
@@ -146,7 +172,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                         break  // reconnect before the server's 6-hour session limit
                     }
                     try await wireClient.sendLine(
-                        "H pcap_recv=\(packetCount) pcap_drop=0 buf_drop=0 ver=\(kClientVersion) wire_proto=\(kWireProtoVersion)"
+                        "H pcap_recv=\(packetCount) pcap_drop=0 buf_drop=\(bufDropCount)"
+                            + " ver=\(kClientVersion) wire_proto=\(kWireProtoVersion)"
+                            + " agg_interval_ms=\(kAggIntervalMs) agg_flows=\(lastAggFlowCount)"
                     )
                     // Sleep in small chunks for responsive cancellation.
                     for _ in 0..<(kHealthIntervalSec * 4) {
@@ -169,19 +197,16 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private func makeTunnelSettings() -> NEPacketTunnelNetworkSettings {
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "192.0.2.1")
 
-        // IPv4: capture all traffic.
         let ipv4 = NEIPv4Settings(addresses: ["10.99.0.1"], subnetMasks: ["255.255.255.252"])
         ipv4.includedRoutes = [NEIPv4Route.default()]
         ipv4.excludedRoutes = []
         settings.ipv4Settings = ipv4
 
-        // IPv6: capture all traffic. UDP and TCP are relayed; D-lines sent for all packets.
         let ipv6 = NEIPv6Settings(addresses: ["fd99::1"], networkPrefixLengths: [128])
         ipv6.includedRoutes = [NEIPv6Route.default()]
         ipv6.excludedRoutes = []
         settings.ipv6Settings = ipv6
 
-        // DNS: fixed resolvers. Custom DNS is not preserved while capture is active.
         settings.dnsSettings = NEDNSSettings(servers: ["8.8.8.8", "1.1.1.1"])
 
         return settings

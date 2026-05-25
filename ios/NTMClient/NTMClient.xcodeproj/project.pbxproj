@@ -17,6 +17,7 @@
 		2F0B2823D41CF9F5C208C0D5 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 63D11CD11AA78B9AA4F5DC04 /* Assets.xcassets */; };
 		393FBCD4C750D6E0CE7C685A /* TunnelManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 633D6EA2B5070A85323C6F61 /* TunnelManager.swift */; };
 		400BAC27FC7BCA2CB2176554 /* PacketTunnelProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A7315F3D2FCBA954166BC61 /* PacketTunnelProvider.swift */; };
+		47D95AA926E07F3913EA237D /* FlowAggregator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 172DE67C742A52A18C8C2896 /* FlowAggregator.swift */; };
 		4CC20BEF12D33E70322B0DD4 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B45A5D45672FDFC63010AD1E /* RootView.swift */; };
 		4D1AB3B3F47F40B6FF1AE438 /* StatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F7D736FD24DC22081F6F728 /* StatusView.swift */; };
 		5A62D63675389F2E2451A514 /* UDPForwarder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 371B2AA559B3CF9DF352590E /* UDPForwarder.swift */; };
@@ -30,6 +31,7 @@
 		DBBD047E6A1826F605DA9DBD /* SetupViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC25E5332094B398085467EF /* SetupViewModel.swift */; };
 		E4ADDE4DB1FDC6510BBBE746 /* NTMClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C63BB6B23F15446BFE11E5AC /* NTMClientTests.swift */; };
 		E7D53D2038BDF40D68682C27 /* ServerConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6103464000751A4CE291334 /* ServerConfig.swift */; };
+		F0DF2FF14A2A665896C1AD9B /* FlowAggregator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 172DE67C742A52A18C8C2896 /* FlowAggregator.swift */; };
 		F2249A7DFFBFDBF676F5CA1C /* WireProtocolClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0430B986E974E6856E781512 /* WireProtocolClient.swift */; };
 		FCFFC55CC9C7D2ACE7549B8E /* CertificatePinner.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDF125D466B3D5464853390A /* CertificatePinner.swift */; };
 /* End PBXBuildFile section */
@@ -69,6 +71,7 @@
 		0430B986E974E6856E781512 /* WireProtocolClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WireProtocolClient.swift; sourceTree = "<group>"; };
 		1354E1ED5BF7FF8BA33D1908 /* NTMClient.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = NTMClient.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1502DD76A1978559FD70FD5D /* PasskeyService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasskeyService.swift; sourceTree = "<group>"; };
+		172DE67C742A52A18C8C2896 /* FlowAggregator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlowAggregator.swift; sourceTree = "<group>"; };
 		1ACFA8082A112D7A76556ED9 /* SetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupView.swift; sourceTree = "<group>"; };
 		1BA865620EA5D81471A09635 /* IPPacket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IPPacket.swift; sourceTree = "<group>"; };
 		371B2AA559B3CF9DF352590E /* UDPForwarder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UDPForwarder.swift; sourceTree = "<group>"; };
@@ -169,6 +172,7 @@
 			isa = PBXGroup;
 			children = (
 				CA318856E531FBB48D918BE2 /* ClientVersion.swift */,
+				172DE67C742A52A18C8C2896 /* FlowAggregator.swift */,
 				1BA865620EA5D81471A09635 /* IPPacket.swift */,
 				E6103464000751A4CE291334 /* ServerConfig.swift */,
 				0430B986E974E6856E781512 /* WireProtocolClient.swift */,
@@ -349,6 +353,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				7D819DE1B0CE1E0B29B417EF /* ClientVersion.swift in Sources */,
+				47D95AA926E07F3913EA237D /* FlowAggregator.swift in Sources */,
 				27211026A6788523A05774DD /* IPPacket.swift in Sources */,
 				400BAC27FC7BCA2CB2176554 /* PacketTunnelProvider.swift in Sources */,
 				1B9816F189C8F5F0CFEBFC47 /* ServerConfig.swift in Sources */,
@@ -364,6 +369,7 @@
 			files = (
 				FCFFC55CC9C7D2ACE7549B8E /* CertificatePinner.swift in Sources */,
 				01806CC685453BAE31599053 /* ClientVersion.swift in Sources */,
+				F0DF2FF14A2A665896C1AD9B /* FlowAggregator.swift in Sources */,
 				C6087370CECDBBC2F2DAED7A /* IPPacket.swift in Sources */,
 				BD64D3CCB51545FC33FE1736 /* KeychainService.swift in Sources */,
 				0CDBF095DF3B549EDAF9050B /* NTMClientApp.swift in Sources */,
@@ -404,7 +410,7 @@
 				CODE_SIGN_ENTITLEMENTS = NTMClient/NTMClient.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = W65LG3MSG6;
 				INFOPLIST_FILE = NTMClient/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
@@ -412,7 +418,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.2.0;
+				MARKETING_VERSION = 1.2.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ntm.NTMClient;
 				PROVISIONING_PROFILE_SPECIFIER = "NTMClient AppStore";
 				SDKROOT = iphoneos;
@@ -547,7 +553,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = PacketTunnel/PacketTunnel.entitlements;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = W65LG3MSG6;
 				INFOPLIST_FILE = PacketTunnel/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
@@ -556,7 +562,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.2.0;
+				MARKETING_VERSION = 1.2.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ntm.NTMClient.PacketTunnel;
 				SDKROOT = iphoneos;
 				SWIFT_STRICT_CONCURRENCY = minimal;
@@ -571,7 +577,7 @@
 				CODE_SIGN_ENTITLEMENTS = PacketTunnel/PacketTunnel.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Distribution";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = W65LG3MSG6;
 				INFOPLIST_FILE = PacketTunnel/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
@@ -580,7 +586,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.2.0;
+				MARKETING_VERSION = 1.2.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ntm.NTMClient.PacketTunnel;
 				PROVISIONING_PROFILE_SPECIFIER = "NTMClient PacketTunnel AppStore";
 				SDKROOT = iphoneos;
@@ -597,7 +603,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = NTMClient/NTMClient.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
 				DEVELOPMENT_TEAM = W65LG3MSG6;
 				INFOPLIST_FILE = NTMClient/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
@@ -605,7 +611,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.2.0;
+				MARKETING_VERSION = 1.2.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ntm.NTMClient;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
