@@ -1128,3 +1128,124 @@ final class NTMErrorTests: XCTestCase {
         XCTAssertEqual(NTMError.httpError(404).errorDescription, "HTTP 404")
     }
 }
+
+// MARK: - Admin model decode tests
+
+final class AdminMonitorsDecodeTests: XCTestCase {
+
+    func testDecodeMonitorsWithActiveDashboardClient() throws {
+        let json = """
+        {
+          "wire_agents": [],
+          "dashboard_clients": [
+            {"ip": "192.168.1.10", "last_seen": 1716480000, "active": true},
+            {"ip": "10.0.0.5", "last_seen": 1716479900, "active": false}
+          ]
+        }
+        """.data(using: .utf8)!
+        let monitors = try JSONDecoder().decode(AdminMonitors.self, from: json)
+        XCTAssertEqual(monitors.wireAgents.count, 0)
+        XCTAssertEqual(monitors.dashboardClients.count, 2)
+        XCTAssertEqual(monitors.dashboardClients[0].ip, "192.168.1.10")
+        XCTAssertEqual(monitors.dashboardClients[0].lastSeen, 1716480000)
+        XCTAssertTrue(monitors.dashboardClients[0].active)
+        XCTAssertFalse(monitors.dashboardClients[1].active)
+    }
+
+    func testDecodeMonitorsEmpty() throws {
+        let json = """
+        {"wire_agents": [], "dashboard_clients": []}
+        """.data(using: .utf8)!
+        let monitors = try JSONDecoder().decode(AdminMonitors.self, from: json)
+        XCTAssertTrue(monitors.wireAgents.isEmpty)
+        XCTAssertTrue(monitors.dashboardClients.isEmpty)
+    }
+
+    func testDashboardClientIdIsIpColonLastSeen() throws {
+        let json = """
+        {"wire_agents":[],"dashboard_clients":[{"ip":"1.2.3.4","last_seen":999,"active":true}]}
+        """.data(using: .utf8)!
+        let monitors = try JSONDecoder().decode(AdminMonitors.self, from: json)
+        XCTAssertEqual(monitors.dashboardClients[0].id, "1.2.3.4:999")
+    }
+}
+
+final class HiddenEntitiesDecodeTests: XCTestCase {
+
+    func testDecodeHiddenEntitiesWithBothSections() throws {
+        let json = """
+        {
+          "hidden_clients": ["aabbccdd1122334455667788aabbccdd1122334455667788aabbccdd11223344"],
+          "hidden_interfaces": [
+            {"client_id": "aabbccdd1122334455667788aabbccdd1122334455667788aabbccdd11223344", "iface": "eth0"}
+          ]
+        }
+        """.data(using: .utf8)!
+        let entities = try JSONDecoder().decode(HiddenEntities.self, from: json)
+        XCTAssertEqual(entities.hiddenClients.count, 1)
+        XCTAssertEqual(entities.hiddenClients[0],
+                       "aabbccdd1122334455667788aabbccdd1122334455667788aabbccdd11223344")
+        XCTAssertEqual(entities.hiddenInterfaces.count, 1)
+        XCTAssertEqual(entities.hiddenInterfaces[0].iface, "eth0")
+    }
+
+    func testDecodeHiddenEntitiesEmpty() throws {
+        let json = """
+        {"hidden_clients": [], "hidden_interfaces": []}
+        """.data(using: .utf8)!
+        let entities = try JSONDecoder().decode(HiddenEntities.self, from: json)
+        XCTAssertTrue(entities.hiddenClients.isEmpty)
+        XCTAssertTrue(entities.hiddenInterfaces.isEmpty)
+    }
+
+    func testHiddenInterfaceIdIsCombined() throws {
+        let json = """
+        {
+          "hidden_clients": [],
+          "hidden_interfaces": [{"client_id": "abc123", "iface": "wlan0"}]
+        }
+        """.data(using: .utf8)!
+        let entities = try JSONDecoder().decode(HiddenEntities.self, from: json)
+        XCTAssertEqual(entities.hiddenInterfaces[0].id, "abc123:wlan0")
+    }
+}
+
+final class KnownClientDecodeTests: XCTestCase {
+
+    func testDecodeKnownClientsResponse() throws {
+        let json = """
+        {
+          "clients": [
+            {"client_id": "deadbeef1234deadbeef1234deadbeef1234deadbeef1234deadbeef12345678",
+             "nickname": "home-pi", "connected": true},
+            {"client_id": "aaaa1111bbbb2222cccc3333dddd4444eeee5555ffff6666aaaa1111bbbb2222",
+             "nickname": "", "connected": false}
+          ]
+        }
+        """.data(using: .utf8)!
+        let response = try JSONDecoder().decode(KnownClientsResponse.self, from: json)
+        XCTAssertEqual(response.clients.count, 2)
+        XCTAssertEqual(response.clients[0].nickname, "home-pi")
+        XCTAssertTrue(response.clients[0].connected)
+        XCTAssertFalse(response.clients[1].connected)
+    }
+
+    func testKnownClientIdIsClientId() throws {
+        let json = """
+        {"clients":[{"client_id":"abc","nickname":"x","connected":false}]}
+        """.data(using: .utf8)!
+        let response = try JSONDecoder().decode(KnownClientsResponse.self, from: json)
+        XCTAssertEqual(response.clients[0].id, "abc")
+    }
+}
+
+// MARK: - AdminClient auth TTL tests
+
+final class AdminClientTTLTests: XCTestCase {
+
+    func testIsAdminAuthenticatedFalseInitially() async {
+        let client = AdminClient(config: .default)
+        let authenticated = await client.isAdminAuthenticated
+        XCTAssertFalse(authenticated)
+    }
+}

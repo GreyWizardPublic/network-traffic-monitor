@@ -5,6 +5,7 @@ struct NTMDashboardApp: App {
     @State private var dashboardVM = DashboardViewModel()
     @State private var settingsVM = SettingsViewModel()
     @State private var authVM = AuthViewModel()
+    @State private var adminVM = AdminViewModel()
 
     var body: some Scene {
         WindowGroup {
@@ -12,6 +13,7 @@ struct NTMDashboardApp: App {
                 .environment(dashboardVM)
                 .environment(settingsVM)
                 .environment(authVM)
+                .environment(adminVM)
         }
     }
 }
