@@ -349,19 +349,20 @@ Options:
 
 ## 2. Windows Install the Binary
 
-Copy `ntm-client.exe` to a permanent location:
+The recommended production layout is the **hardened 4-directory structure** created by
+`install-service-windows.ps1` (see [Section 8](#8-running-as-a-background-service)).
+For a quick manual install without service mode:
 
 ```
-C:\Program Files\ntm-client\ntm-client.exe
-```
+C:\Program Files\ntm-client\
+    ntm-client.exe
 
-Create a configuration directory:
-
-```
-C:\ProgramData\ntmclient\
+C:\ProgramData\ntm-client\
     ntm-client.conf
-    client_private.pem
-    server_cert.pem
+    server_cert.pem           ← optional pinned server certificate
+
+C:\ProgramData\ntm-client\secrets\
+    client_private.pem        ← Ed25519 identity key (restrict ACL — see Section 4)
 ```
 
 Using PowerShell (run as Administrator):
@@ -370,7 +371,8 @@ Using PowerShell (run as Administrator):
 New-Item -ItemType Directory -Path "C:\Program Files\ntm-client"
 Copy-Item ntm-client.exe "C:\Program Files\ntm-client\"
 
-New-Item -ItemType Directory -Path "C:\ProgramData\ntmclient"
+New-Item -ItemType Directory -Path "C:\ProgramData\ntm-client"
+New-Item -ItemType Directory -Path "C:\ProgramData\ntm-client\secrets"
 ```
 
 ---
@@ -388,12 +390,16 @@ To launch from an elevated Command Prompt:
 
 Or right-click the executable and choose **Run as administrator**.
 
-> When running as a Windows Service via Task Scheduler (see Section 8), the task is
-> configured to run with the SYSTEM account which has the necessary privileges.
+> When installed as a Windows SCM service (see [Section 8](#8-running-as-a-background-service)),
+> the service runs as the `NT SERVICE\ntm-client` virtual account which has the necessary
+> Npcap privileges.
 
 ---
 
 ## 4. Ed25519 Identity Key (Windows)
+
+Place the key in `C:\ProgramData\ntm-client\secrets\` — the hardened install layout
+restricts this directory to the service identity and Administrators (see Section 8).
 
 ### Using Git Bash (recommended)
 
@@ -403,34 +409,36 @@ Open **Git Bash** and run:
 openssl genpkey -algorithm ED25519 -out client_private.pem
 ```
 
-Move the key to the config directory:
+Move the key to the secrets directory:
 
 ```bash
-mv client_private.pem /c/ProgramData/ntmclient/client_private.pem
+mv client_private.pem /c/ProgramData/ntm-client/secrets/client_private.pem
 ```
 
 ### Using WSL
 
 ```bash
-openssl genpkey -algorithm ED25519 -out /mnt/c/ProgramData/ntmclient/client_private.pem
+openssl genpkey -algorithm ED25519 \
+  -out /mnt/c/ProgramData/ntm-client/secrets/client_private.pem
 ```
 
 ### Derive the public key for the server allowlist
 
 ```bash
-openssl pkey -in /c/ProgramData/ntmclient/client_private.pem -pubout -outform DER \
-  | tail -c 32 | xxd -p -c 0
+openssl pkey -in /c/ProgramData/ntm-client/secrets/client_private.pem \
+    -pubout -outform DER | tail -c 32 | xxd -p -c 0
 ```
 
 Copy the 64-character hex output to the server's `allowed_clients.txt`.
 
 ### Protect the key file
 
-Set NTFS permissions so only the SYSTEM account and Administrators can read the key.
-Using PowerShell (run as Administrator):
+If you used `install-service-windows.ps1`, the `secrets\` directory ACL is set
+automatically (service: read-only; `BUILTIN\Users`: denied). For a manual install,
+set permissions with PowerShell (run as Administrator):
 
 ```powershell
-$path = "C:\ProgramData\ntmclient\client_private.pem"
+$path = "C:\ProgramData\ntm-client\secrets\client_private.pem"
 $acl  = Get-Acl $path
 
 # Remove inherited permissions and existing entries
@@ -446,8 +454,8 @@ $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRul
 Set-Acl $path $acl
 ```
 
-> `ntm-client.exe` will print a reminder to protect the key file at startup. Restricting
-> the permissions via the ACL above silences this reminder in future versions.
+> `ntm-client.exe` will print a warning to protect the key file at startup if it
+> detects that non-owner accounts have read access.
 
 ---
 
@@ -458,7 +466,7 @@ Same two modes as Linux — configure one in the config file using Windows paths
 ### Mode A — CA bundle verification
 
 ```ini
-ca = C:\ProgramData\ntmclient\server_cert.pem
+ca = C:\ProgramData\ntm-client\server_cert.pem
 ```
 
 ### Mode B — Certificate pinning (recommended for self-signed certs)
@@ -466,26 +474,26 @@ ca = C:\ProgramData\ntmclient\server_cert.pem
 Copy the server certificate to the client machine:
 
 ```powershell
-Copy-Item server_cert.pem "C:\ProgramData\ntmclient\server_cert.pem"
+Copy-Item server_cert.pem "C:\ProgramData\ntm-client\server_cert.pem"
 ```
 
 ```ini
-server_cert = C:\ProgramData\ntmclient\server_cert.pem
+server_cert = C:\ProgramData\ntm-client\server_cert.pem
 ```
 
 ---
 
 ## 6. Windows Configuration File
 
-Create `C:\ProgramData\ntmclient\ntm-client.conf`:
+Create `C:\ProgramData\ntm-client\ntm-client.conf`:
 
 ```ini
 # ntm-client.conf — Windows paths use backslash or forward slash (both work)
 
 server               = 192.168.1.10
 port                 = 5555
-identity             = C:\ProgramData\ntmclient\client_private.pem
-server_cert          = C:\ProgramData\ntmclient\server_cert.pem
+identity             = C:\ProgramData\ntm-client\secrets\client_private.pem
+server_cert          = C:\ProgramData\ntm-client\server_cert.pem
 send_buffer_bytes    = 524288
 transport            = tcp
 ```
@@ -504,14 +512,14 @@ Open a **Command Prompt as Administrator** and run:
 
 ```cmd
 "C:\Program Files\ntm-client\ntm-client.exe" ^
-    --config "C:\ProgramData\ntmclient\ntm-client.conf" ^
+    --config "C:\ProgramData\ntm-client\ntm-client.conf" ^
     --verbose
 ```
 
 Expected output on the console:
 
 ```
-ntm-client: loaded config from C:\ProgramData\ntmclient\ntm-client.conf (...)
+ntm-client: loaded config from C:\ProgramData\ntm-client\ntm-client.conf (...)
 ntm-client: connecting to 192.168.1.10:5555 (identity=..., ...)
 ntm-client: connected to 192.168.1.10:5555 (TLS, session max 6h)
 ```
@@ -631,19 +639,14 @@ Register-ScheduledTask -TaskName "ntm-client" -Action $action `
 
 ## 9. Windows Security Hardening Checklist
 
-- [ ] Npcap installed (required for packet capture)
-- [ ] Service installed via `install-service-windows.ps1` (hardened layout and ACLs applied)
+- [ ] Npcap installed (required for packet capture); kept up to date
+- [ ] Service installed via `install-service-windows.ps1` (hardened layout, ACLs, and failure-action restart applied)
 - [ ] TLS configured: `server_cert` or `ca` set (server rejects plain TCP)
 - [ ] Ed25519 identity configured: `identity` set and public key in server's `allowed_clients.txt`
 - [ ] `client_private.pem` placed in `C:\ProgramData\ntm-client\secrets\` — verify ACL:
-  `icacls "C:\ProgramData\ntm-client\secrets\client_private.pem"`
+  `icacls "C:\ProgramData\ntm-client\secrets\client_private.pem"` shows only `SYSTEM` and `Administrators`; `BUILTIN\Users` denied
 - [ ] Server certificate renewed before expiry if using pinning (redeploy to each client)
-- [ ] Service configured to restart on failure (handled by `install-service-windows.ps1`)
-- [ ] Npcap kept up to date (security fixes are released regularly)
-- [ ] Service installed via `install-service-windows.ps1` (sets correct ACLs for auto-update)
-- [ ] Binary Authenticode code-signing optional but recommended (see [Windows code-signing requirement](#windows-code-signing-requirement))
-- [ ] **Server firewall (v1.15.0+):** only **one** inbound TCP rule needed (port `5555`);
-  the HTTPS dashboard now shares this port via TLS ALPN — remove any separate `8443` rule
+- [ ] Binary Authenticode code-signing optional but recommended when you have a code-signing certificate (see [Windows code-signing requirement](#windows-code-signing-requirement))
 
 ---
 
@@ -785,27 +788,21 @@ sudo chown ntmclient:ntmclient /opt/ntm/bin /opt/ntm/bin/ntm-client
 
 The `ntmclient` service user must own **both** the binary and the containing directory.
 
-**Windows — recommended path:** `C:\ProgramData\ntm\bin\ntm-client.exe`
+**Windows — recommended path:** `C:\Program Files\ntm-client\ntm-client.exe`
 
-```powershell
-New-Item -ItemType Directory -Path "C:\ProgramData\ntm\bin" -Force
-Copy-Item ntm-client.exe "C:\ProgramData\ntm\bin\ntm-client.exe"
-icacls "C:\ProgramData\ntm\bin" /grant "SYSTEM:(OI)(CI)F" /inheritance:r
-icacls "C:\ProgramData\ntm\bin" /grant "Administrators:(OI)(CI)F"
-```
+Use `install-service-windows.ps1` (see [Section 8 of Windows Deployment](#8-running-as-a-background-service)).
+The script creates the full hardened 4-directory layout and sets the ACLs that allow
+the `NT SERVICE\ntm-client` virtual account to rename the exe during auto-update without
+requiring write access to the rest of `Program Files`.
 
-Update the Task Scheduler task action to reference the new path.
+The key points of the hardened layout for auto-update:
+- The binary lives in `C:\Program Files\ntm-client\` with `(OI)(CI)M` (modify/rename rights) for the service SID — enough for `MoveFileExW(MOVEFILE_REPLACE_EXISTING)`.
+- Pending downloads land in `C:\ProgramData\ntm-client\staging\` (full access for the service), keeping the download phase out of the install directory.
+- `MOVEFILE_COPY_ALLOWED` is passed so cross-volume moves (if `ProgramData` and `Program Files` are on different drives) fall back to a copy+delete.
 
-> **WARNING — `C:\Program Files\` is incompatible with auto-update for non-Administrator
-> service accounts.** Windows restricts writes to `C:\Program Files\` to Administrators.
-> The auto-update rename requires the service account to have write access to the binary
-> directory. If you install there and run as a non-admin account, updates will silently
-> fail with `MoveFile failed`. Use `C:\ProgramData\ntm\bin\` or a dedicated service
-> account with explicit write rights on the install directory.
->
-> A hardened 4-directory install layout with full ACL recommendations (including support
-> for `NT SERVICE\ntm-client` virtual accounts) is documented in
-> [Section 11: Hardened Windows Install Layout](#11-hardened-windows-install-layout).
+> **NOTE:** Installing `ntm-client.exe` in a directory where the service account lacks
+> rename rights will cause auto-update to fail silently with `MoveFile failed`.
+> Always use `install-service-windows.ps1` or apply equivalent ACLs manually.
 
 See also:
 - Linux security hardening: [Section 10](#10-linux-security-hardening-checklist)
@@ -823,7 +820,7 @@ Sign the binary before placing it in the server's `update_dir`:
 ```powershell
 signtool sign /tr http://timestamp.digicert.com /td sha256 /fd sha256 `
     /n "Your Organization Name" `
-    ntm-client-windows-amd64-1.14.0.exe
+    ntm-client-windows-amd64-<version>.exe
 ```
 
 ## Troubleshooting auto-update
@@ -834,7 +831,8 @@ signtool sign /tr http://timestamp.digicert.com /td sha256 /fd sha256 `
   `ntm-client-linux-amd64-<version>` or `ntm-client-windows-amd64-<version>.exe`.
 - Confirm a manifest scan was run on the server after placing the binary.
 - Confirm the binary version in the filename is higher than the client's current version.
-- On Windows, verify the binary is Authenticode code-signed.
+- On Windows: if your build uses `-DNTM_REQUIRE_AUTHENTICODE=ON`, verify the binary is
+  Authenticode code-signed. Standard builds do not enforce Authenticode (off by default).
 
 **Stale pending file (Linux)**
 A `.pending` file in the binary directory indicates an interrupted update. The client removes
@@ -953,6 +951,8 @@ All keys are set in the config file (`key = value`) or overridden by CLI flags.
 | `external_ip_timeout_ms` | — | `5000` | Timeout for external IP check (500–30000 ms) |
 | `reconnect_attempts` | `--reconnect-attempts` | `10` | Max consecutive reconnect failures before exit (1–1000) |
 | `reconnect_interval_sec` | `--reconnect-interval` | `60` | Seconds between reconnect attempts (1–3600) |
+| `transport` | `--transport` | `tcp` | Connection transport: `tcp` (raw TLS, default) or `websocket` (WebSocket over TLS, for Cloudflare tunnels and HTTP proxies) |
+| `compress` | `--no-compress` (inverse) | `true` | Enable zlib compression on the data phase. Set `compress=false` or pass `--no-compress` to disable. Linux client only — Windows always sends uncompressed regardless of this setting. |
 | `auto_update` | — | `false` | Enable daily binary self-update check (opt-in) |
 | `web_port` | — | `8443` | *(Deprecated — server v1.15.0+)* HTTPS port used by auto-update to reach `/api/update/check`. Before server v1.15.0 this matched `web_port` in the server config (default `8443`). From server v1.15.0+ the dashboard shares the data-ingestion `port` via ALPN — remove this key from the config when connecting to a v1.15.0+ server. |
 | `verbose` | `--verbose` | `false` | Enable verbose logging |
