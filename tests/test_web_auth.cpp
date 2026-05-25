@@ -188,6 +188,16 @@ TEST_CASE("isAuthExemptPath: update endpoints are exempt")
 {
     REQUIRE(ntm::isAuthExemptPath("/api/update/check"));
     REQUIRE(ntm::isAuthExemptPath("/api/update/download"));
+    REQUIRE(ntm::isAuthExemptPath("/api/update/download_sig"));
+}
+
+TEST_CASE("isAuthExemptPath: upgrade and client-push admin endpoints are exempt")
+{
+    // These endpoints use ML-DSA-65 auth proof internally — not WebAuthn sessions.
+    REQUIRE(ntm::isAuthExemptPath("/admin/upgrade/nonce"));
+    REQUIRE(ntm::isAuthExemptPath("/admin/upgrade/push"));
+    REQUIRE(ntm::isAuthExemptPath("/admin/client/nonce"));
+    REQUIRE(ntm::isAuthExemptPath("/admin/client/push"));
 }
 
 TEST_CASE("isAuthExemptPath: / (dashboard root) requires session")
