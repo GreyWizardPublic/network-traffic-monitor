@@ -128,10 +128,58 @@ TEST_CASE("parseSemver: invalid version strings")
     REQUIRE(!ntm::upgrade::parseSemver("").valid);
     REQUIRE(!ntm::upgrade::parseSemver("1").valid);
     REQUIRE(!ntm::upgrade::parseSemver("1.2").valid);
-    REQUIRE(!ntm::upgrade::parseSemver("1.2.3.4").valid);
     REQUIRE(!ntm::upgrade::parseSemver("a.b.c").valid);
     REQUIRE(!ntm::upgrade::parseSemver("1.2.").valid);
     REQUIRE(!ntm::upgrade::parseSemver(".1.2").valid);
+    REQUIRE(!ntm::upgrade::parseSemver("1.2.3.4.5").valid);
+}
+
+TEST_CASE("parseSemver: 4-part version strings")
+{
+    auto v = ntm::upgrade::parseSemver("1.18.0.0");
+    REQUIRE(v.valid);
+    REQUIRE_EQ(v.major, 1u);
+    REQUIRE_EQ(v.minor, 18u);
+    REQUIRE_EQ(v.patch, 0u);
+    REQUIRE_EQ(v.revision, 0u);
+
+    auto v2 = ntm::upgrade::parseSemver("2.0.0.1");
+    REQUIRE(v2.valid);
+    REQUIRE_EQ(v2.revision, 1u);
+
+    // 3-part still valid (revision = 0)
+    auto v3 = ntm::upgrade::parseSemver("1.17.0");
+    REQUIRE(v3.valid);
+    REQUIRE_EQ(v3.revision, 0u);
+
+    // 5-part invalid
+    REQUIRE(!ntm::upgrade::parseSemver("1.2.3.4.5").valid);
+}
+
+TEST_CASE("Semver: 4-part comparison operators")
+{
+    using ntm::upgrade::parseSemver;
+    auto v1000 = parseSemver("1.0.0.0");
+    auto v1001 = parseSemver("1.0.0.1");
+    auto v1010 = parseSemver("1.0.1.0");
+
+    REQUIRE(v1000 < v1001);
+    REQUIRE(v1001 < v1010);
+    REQUIRE(v1010 > v1001);
+    REQUIRE(v1000 == parseSemver("1.0.0.0"));
+    REQUIRE(v1001 != v1000);
+
+    // 3-part "1.0.0" equals 4-part "1.0.0.0"
+    REQUIRE(parseSemver("1.0.0") == parseSemver("1.0.0.0"));
+}
+
+TEST_CASE("Semver::str returns 4-part string")
+{
+    auto v = ntm::upgrade::parseSemver("1.18.0.0");
+    REQUIRE_EQ(v.str(), std::string("1.18.0.0"));
+
+    auto v2 = ntm::upgrade::parseSemver("1.17.0");
+    REQUIRE_EQ(v2.str(), std::string("1.17.0.0")); // 3-part gets .0 appended
 }
 
 // ---------------------------------------------------------------------------
@@ -162,7 +210,7 @@ TEST_CASE("Semver: comparison operators")
 TEST_CASE("Semver: str() round-trip")
 {
     auto v = ntm::upgrade::parseSemver("1.17.3");
-    REQUIRE_EQ(v.str(), std::string("1.17.3"));
+    REQUIRE_EQ(v.str(), std::string("1.17.3.0")); // 3-part input → 4-part output (revision=0)
 }
 
 // ---------------------------------------------------------------------------

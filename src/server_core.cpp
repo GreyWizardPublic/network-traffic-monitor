@@ -2599,6 +2599,16 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                 }
             }
 
+            // Client push nonce store — enabled when update_dir is set and WebAuthn configured
+            if (!config.webauthn_rp_id.empty() && !config.update_dir.empty())
+            {
+                auto cpns = std::make_shared<ntm::upgrade::NonceStore>();
+                webCfg.client_push_nonce_store = cpns;
+                serverLog(LogLevel::Warn,
+                          "ntm-server: client push endpoint enabled (update_dir: %s)",
+                          config.update_dir.c_str());
+            }
+
             if (!webAuthnRP || !webAuthnRP->enabled())
             {
                 serverLog(LogLevel::Warn,

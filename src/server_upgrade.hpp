@@ -41,17 +41,20 @@ struct Semver
     unsigned major{0};
     unsigned minor{0};
     unsigned patch{0};
+    unsigned revision{0};
     bool     valid{false};
 
     bool operator>(const Semver &o) const noexcept
     {
-        if (major != o.major) return major > o.major;
-        if (minor != o.minor) return minor > o.minor;
-        return patch > o.patch;
+        if (major    != o.major)    return major    > o.major;
+        if (minor    != o.minor)    return minor    > o.minor;
+        if (patch    != o.patch)    return patch    > o.patch;
+        return revision > o.revision;
     }
     bool operator==(const Semver &o) const noexcept
     {
-        return major == o.major && minor == o.minor && patch == o.patch;
+        return major == o.major && minor == o.minor
+            && patch == o.patch && revision == o.revision;
     }
     bool operator<(const Semver &o) const noexcept  { return o > *this; }
     bool operator>=(const Semver &o) const noexcept { return !(*this < o); }
@@ -62,23 +65,27 @@ struct Semver
     {
         return std::to_string(major) + "."
              + std::to_string(minor) + "."
-             + std::to_string(patch);
+             + std::to_string(patch) + "."
+             + std::to_string(revision);
     }
 };
 
-// Parse "MAJOR.MINOR.PATCH".  Sets result.valid = false on any parse error.
+// Parse "MAJOR.MINOR.PATCH" or "MAJOR.MINOR.PATCH.REVISION".
+// Accepts 3-part (revision defaults to 0) or 4-part; rejects everything else.
+// Sets result.valid = false on any parse error.
 inline Semver parseSemver(const std::string &s)
 {
     Semver v;
     if (s.empty()) return v;
 
-    // Expect exactly two '.' separators
     auto d1 = s.find('.');
     if (d1 == std::string::npos) return v;
     auto d2 = s.find('.', d1 + 1);
     if (d2 == std::string::npos) return v;
-    // No third '.' allowed
-    if (s.find('.', d2 + 1) != std::string::npos) return v;
+    auto d3 = s.find('.', d2 + 1);
+    // d3 == npos  → 3-part version  (revision = 0)
+    // d3 != npos  → must be 4-part (no 5th dot allowed)
+    if (d3 != std::string::npos && s.find('.', d3 + 1) != std::string::npos) return v;
 
     try
     {
@@ -87,9 +94,23 @@ inline Semver parseSemver(const std::string &s)
         if (pos != d1) return v;
         unsigned min = static_cast<unsigned>(std::stoul(s.substr(d1 + 1, d2 - d1 - 1), &pos));
         if (pos != d2 - d1 - 1) return v;
-        unsigned pat = static_cast<unsigned>(std::stoul(s.substr(d2 + 1), &pos));
-        if (pos != s.size() - d2 - 1) return v;
-        v.major = maj; v.minor = min; v.patch = pat; v.valid = true;
+
+        if (d3 == std::string::npos)
+        {
+            // 3-part
+            unsigned pat = static_cast<unsigned>(std::stoul(s.substr(d2 + 1), &pos));
+            if (pos != s.size() - d2 - 1) return v;
+            v.major = maj; v.minor = min; v.patch = pat; v.revision = 0; v.valid = true;
+        }
+        else
+        {
+            // 4-part
+            unsigned pat = static_cast<unsigned>(std::stoul(s.substr(d2 + 1, d3 - d2 - 1), &pos));
+            if (pos != d3 - d2 - 1) return v;
+            unsigned rev = static_cast<unsigned>(std::stoul(s.substr(d3 + 1), &pos));
+            if (pos != s.size() - d3 - 1) return v;
+            v.major = maj; v.minor = min; v.patch = pat; v.revision = rev; v.valid = true;
+        }
     }
     catch (...) {}
     return v;

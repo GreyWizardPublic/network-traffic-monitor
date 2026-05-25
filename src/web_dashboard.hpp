@@ -65,6 +65,11 @@ struct WebConfig
     std::string           upgrade_server_version;
     std::function<void()> upgrade_shutdown_cb;
 
+    // ── Client binary push endpoint ──────────────────────────────────────────
+    // Null = client push endpoint disabled.
+    // Enabled when update_dir is set and WebAuthn is configured.
+    std::shared_ptr<void> client_push_nonce_store;  // actually ntm::upgrade::NonceStore*
+
     // IPs of the server itself (enumerated at startup) and dashboard clients
     // (added on each authenticated request). Used to classify entity flows as
     // monitoring overhead vs. regular traffic in /api/summary.

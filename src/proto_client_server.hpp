@@ -20,7 +20,8 @@ inline constexpr unsigned kWireProtoVersion = 2;
 // HTTPS API protocol version (integer). Bump when endpoint schemas change.
 // See docs/api-protocol.md § 5 for change classification rules.
 // Lockstep consumers: ntm-server, NTMDashboard (iOS), embedded web dashboard.
-inline constexpr unsigned kApiVersion = 7;
+// v8: added /api/update/download_sig endpoint; added sig_size field to /api/update/check.
+inline constexpr unsigned kApiVersion = 8;
 
 // Default TCP port — serves both ntm-client data ingestion and the HTTPS
 // dashboard when port consolidation is in use (see docs/wire-protocol.md § 2).

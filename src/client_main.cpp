@@ -1,6 +1,8 @@
 #include "client.hpp"
 #include "client_platform.hpp"
+#include "client_signing.hpp"
 
+#include <cstdio>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -11,6 +13,36 @@
 
 int main(int argc, char *argv[])
 {
+    // Step 0: ML-DSA-65 binary signature verification.
+    // Runs before any other initialisation; refuses to start if the binary
+    // is unsigned, tampered, or the .sig file is missing.
+    {
+        const std::string selfPath = ntm::signing::clientSelfPath();
+        const std::string sigPath  = selfPath + ".sig";
+        std::string sigErr;
+        if (selfPath.empty())
+        {
+            std::fprintf(stderr,
+                "ntm-client: FATAL — cannot resolve own binary path; "
+                "cannot verify signature. Refusing to start.\n");
+            return 1;
+        }
+        if (!ntm::signing::verifyClientSignature(selfPath, sigPath, sigErr))
+        {
+            std::fprintf(stderr,
+                "ntm-client: FATAL — binary signature verification failed.\n"
+                "  Error:     %s\n"
+                "  Binary:    %s\n"
+                "  Signature: %s\n"
+                "  The binary may be tampered, unsigned, or the .sig file is missing.\n"
+                "  Deploy both the binary and its matching .sig file.\n"
+                "  Refusing to start.\n",
+                sigErr.c_str(), selfPath.c_str(), sigPath.c_str());
+            return 1;
+        }
+        std::fprintf(stderr, "ntm-client: binary signature verified OK (ML-DSA-65)\n");
+    }
+
     // Defaults; then overridden by config file (if --config), then by CLI.
     ntm::ClientConfig opts;
     bool loadedConfig = false;

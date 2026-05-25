@@ -5,6 +5,7 @@
 #include "updater.hpp"
 #include "client_core.hpp"
 #include "client_version.hpp"
+#include "client_signing.hpp"
 
 #include <openssl/evp.h>
 #include <openssl/rand.h>
@@ -434,8 +435,10 @@ static std::string pubkeyHexFromPem(const std::string &pemPath)
 
 static bool applyUpdateLinux(const std::string &dir)
 {
-    const std::string pending = dir + "/ntm-client.pending";
-    const std::string target  = dir + "/ntm-client";
+    const std::string pending    = dir + "/ntm-client.pending";
+    const std::string pendingSig = dir + "/ntm-client.pending.sig";
+    const std::string target     = dir + "/ntm-client";
+    const std::string targetSig  = dir + "/ntm-client.sig";
 
     // Make executable.
     std::error_code ec;
@@ -446,15 +449,24 @@ static bool applyUpdateLinux(const std::string &dir)
 
     // Atomic rename: replaces target path; running process keeps old inode.
     if (std::rename(pending.c_str(), target.c_str()) != 0) return false;
+
+    // Move sig file (best-effort; if missing, startup verification will fail but
+    // the binary update succeeded)
+    if (fs::exists(pendingSig, ec) && !ec)
+        std::rename(pendingSig.c_str(), targetSig.c_str());
+
     return true;
 }
 
 #ifdef _WIN32
 static bool applyUpdateWindows(const std::string &dir)
 {
-    const std::string pending = dir + "/ntm-client-pending.exe";
-    const std::string target  = dir + "/ntm-client.exe";
-    const std::string old_    = dir + "/ntm-client.exe.old";
+    const std::string pending    = dir + "/ntm-client-pending.exe";
+    const std::string pendingSig = dir + "/ntm-client-pending.exe.sig";
+    const std::string target     = dir + "/ntm-client.exe";
+    const std::string targetSig  = dir + "/ntm-client.exe.sig";
+    const std::string old_       = dir + "/ntm-client.exe.old";
+    const std::string oldSig_    = dir + "/ntm-client.exe.sig.old";
 
     // Rename running exe to .old (allowed while running on NTFS Vista+).
     const std::wstring wtarget(target.begin(), target.end());
@@ -471,6 +483,17 @@ static bool applyUpdateWindows(const std::string &dir)
         // Attempt to restore old name on failure.
         MoveFileW(wold.c_str(), wtarget.c_str());
         return false;
+    }
+
+    // Move sig file (best-effort)
+    std::error_code ec;
+    if (fs::exists(pendingSig, ec) && !ec)
+    {
+        const std::wstring wsigTarget(targetSig.begin(), targetSig.end());
+        const std::wstring wsigOld(oldSig_.begin(), oldSig_.end());
+        const std::wstring wsigPending(pendingSig.begin(), pendingSig.end());
+        MoveFileW(wsigTarget.c_str(), wsigOld.c_str()); // rename old sig out of way
+        MoveFileW(wsigPending.c_str(), wsigTarget.c_str());
     }
     return true;
 }
@@ -609,6 +632,69 @@ static void runUpdater(ClientConfig config)
         }
 
         std::cerr << "ntm-client: updater: verified " << newVer << " (SHA-256 OK)\n";
+
+        // Download signature file.
+        const std::string pendingSigPath = pendingPath + ".sig";
+        {
+            std::error_code ec2;
+            fs::remove(pendingSigPath, ec2);
+        }
+
+        std::string sigDlPath = "/api/update/download_sig?platform=";
+        sigDlPath += kClientPlatform;
+        sigDlPath += "&pubkey=";
+        sigDlPath += pubkeyHex;
+
+        const std::int64_t expectedSigSize = jsonInt(body, "sig_size", 0);
+        int sigStatus = httpsGetToFile(config.server, config.port, sigDlPath,
+                                       config.tlsCaPath, config.tlsServerCertPath,
+                                       pendingSigPath,
+                                       expectedSigSize > 0 ? expectedSigSize : 10 * 1024 * 1024,
+                                       config.verbose);
+        if (sigStatus != 200)
+        {
+            std::cerr << "ntm-client: updater: signature download failed (HTTP " << sigStatus
+                      << ") — discarding update\n";
+            fs::remove(pendingPath, ec);
+            fs::remove(pendingSigPath, ec);
+            continue;
+        }
+
+        // Verify ML-DSA-65 signature before applying.
+        {
+            // Read both files into memory for in-memory verification.
+            std::vector<std::uint8_t> binData, sigData;
+            auto readVec = [](const std::string &path, std::vector<std::uint8_t> &out) -> bool {
+                FILE *f = std::fopen(path.c_str(), "rb");
+                if (!f) return false;
+                std::fseek(f, 0, SEEK_END);
+                long sz = std::ftell(f); std::rewind(f);
+                if (sz <= 0) { std::fclose(f); return false; }
+                out.resize(static_cast<std::size_t>(sz));
+                bool ok = std::fread(out.data(), 1, out.size(), f) == out.size();
+                std::fclose(f);
+                return ok;
+            };
+
+            if (!readVec(pendingPath, binData) || !readVec(pendingSigPath, sigData))
+            {
+                std::cerr << "ntm-client: updater: cannot read pending files for verification\n";
+                fs::remove(pendingPath, ec);
+                fs::remove(pendingSigPath, ec);
+                continue;
+            }
+
+            std::string sigVerErr;
+            if (!ntm::signing::verifyClientSignatureBytes(binData, sigData, sigVerErr))
+            {
+                std::cerr << "ntm-client: updater: ML-DSA-65 verification FAILED — "
+                             "discarding update (" << sigVerErr << ")\n";
+                fs::remove(pendingPath, ec);
+                fs::remove(pendingSigPath, ec);
+                continue;
+            }
+            std::cerr << "ntm-client: updater: ML-DSA-65 signature verified OK\n";
+        }
 
         // Apply.
 #ifdef _WIN32
