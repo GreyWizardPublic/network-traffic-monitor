@@ -59,9 +59,19 @@ if (-not (Test-Path $BinaryPath)) {
     exit 1
 }
 
+$SigPath = $BinaryPath + ".sig"
+if (-not (Test-Path $SigPath)) {
+    Write-Host "ERROR: Signature file not found: $SigPath" -ForegroundColor Red
+    Write-Host "  ntm-client verifies its own ML-DSA-65 signature at startup and" -ForegroundColor Red
+    Write-Host "  refuses to start if the .sig file is missing." -ForegroundColor Red
+    Write-Host "  Both the binary and its companion .sig file must be deployed together." -ForegroundColor Red
+    exit 1
+}
+
 Write-Host ""
 Write-Host "=== ntm-client Service Installer ===" -ForegroundColor Cyan
 Write-Host "  Binary  : $BinaryPath"
+Write-Host "  Sig     : $SigPath"
 Write-Host "  Install : $ServiceExe"
 Write-Host "  Config  : $ConfigPath"
 Write-Host ""
@@ -87,9 +97,12 @@ foreach ($dir in @($InstallDir, $DataDir, $StagingDir, $SecretsDir)) {
     }
 }
 
-# ── Copy binary ────────────────────────────────────────────────────────────────
-Write-Host "[setup] Installing binary..." -ForegroundColor Yellow
+# ── Copy binary + signature ───────────────────────────────────────────────────
+# Both files are REQUIRED: ntm-client verifies its own ML-DSA-65 signature at
+# Step 0 of startup and refuses to start (FATAL) if ntm-client.exe.sig is absent.
+Write-Host "[setup] Installing binary and signature..." -ForegroundColor Yellow
 Copy-Item -Path $BinaryPath -Destination $ServiceExe -Force
+Copy-Item -Path $SigPath    -Destination ($ServiceExe + ".sig") -Force
 
 # ── Apply hardened ACLs ────────────────────────────────────────────────────────
 # Service SID: NT SERVICE\ntm-client (created when the service is registered)

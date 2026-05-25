@@ -356,6 +356,7 @@ For a quick manual install without service mode:
 ```
 C:\Program Files\ntm-client\
     ntm-client.exe
+    ntm-client.exe.sig        ← ML-DSA-65 signature — MUST be deployed with the binary
 
 C:\ProgramData\ntm-client\
     ntm-client.conf
@@ -365,15 +366,25 @@ C:\ProgramData\ntm-client\secrets\
     client_private.pem        ← Ed25519 identity key (restrict ACL — see Section 4)
 ```
 
+> **The `.sig` file is mandatory.** `ntm-client.exe` verifies its own ML-DSA-65
+> signature at every startup (before any other initialisation) and **refuses to
+> start with a FATAL error** if `ntm-client.exe.sig` is absent or invalid. Always
+> deploy the binary and its `.sig` file as a pair.
+
 Using PowerShell (run as Administrator):
 
 ```powershell
 New-Item -ItemType Directory -Path "C:\Program Files\ntm-client"
-Copy-Item ntm-client.exe "C:\Program Files\ntm-client\"
+# Rename versioned binary and sig to the install names
+Copy-Item ntm-client-windows-amd64-<version>.exe     "C:\Program Files\ntm-client\ntm-client.exe"
+Copy-Item ntm-client-windows-amd64-<version>.exe.sig "C:\Program Files\ntm-client\ntm-client.exe.sig"
 
 New-Item -ItemType Directory -Path "C:\ProgramData\ntm-client"
 New-Item -ItemType Directory -Path "C:\ProgramData\ntm-client\secrets"
 ```
+
+> If using `install-service-windows.ps1`, the script copies both files automatically
+> and will error if the `.sig` is missing.
 
 ---
 
@@ -527,6 +538,9 @@ ntm-client: connected to 192.168.1.10:5555 (TLS, session max 6h)
 - All log output goes to **stderr** (the console window). There is no syslog on Windows.
 - Press `Ctrl+C` to stop cleanly.
 - The `--daemon` flag is **not supported** on Windows and will print a warning.
+- If the process exits immediately with `FATAL — binary signature verification failed`, the
+  `ntm-client.exe.sig` file is missing from the same directory as the binary. Copy it there
+  (see [Section 2](#2-windows-install-the-binary)).
 
 ### Interface names
 
@@ -591,8 +605,9 @@ Restart-Service ntm-client
 ### Hardened install layout
 
 ```
-C:\Program Files\ntm-client\           ← exe (service: rename + execute rights)
+C:\Program Files\ntm-client\           ← exe + sig (service: rename + execute rights)
     ntm-client.exe
+    ntm-client.exe.sig                 ← ML-DSA-65 signature (deployed with binary; replaced by auto-update)
     ntm-client.exe.old                 ← leftover after auto-update (cleaned on restart)
 
 C:\ProgramData\ntm-client\             ← per-machine config and state (service: read-only)
@@ -651,6 +666,14 @@ Register-ScheduledTask -TaskName "ntm-client" -Action $action `
 ---
 
 ## 10. Troubleshooting (Windows)
+
+**`FATAL — binary signature verification failed` (exits immediately)**
+- `ntm-client.exe.sig` is missing from the same directory as the binary, or
+  does not match the binary (e.g. the binary was replaced without its `.sig`).
+- Both files must be deployed together — copy the matching `.sig` file alongside
+  the `.exe` (see [Section 2](#2-windows-install-the-binary)).
+- If using `install-service-windows.ps1`, it will fail at startup if the `.sig`
+  was not found next to the source binary in `build-windows\`.
 
 **`pcap_findalldevs failed` or no interfaces captured**
 - Npcap is not installed, or the process is not running as Administrator.
