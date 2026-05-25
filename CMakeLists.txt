@@ -125,6 +125,14 @@ if(WIN32)
     # Needed for Npcap's wpcap.dll (load-time linked)
     target_compile_definitions(ntm-client PRIVATE HAVE_REMOTE)
 
+    # POST_BUILD: sign the Windows client binary with ML-DSA-65.
+    add_custom_command(TARGET ntm-client POST_BUILD
+        COMMAND "${CMAKE_SOURCE_DIR}/scripts/sign-client.sh"
+                "$<TARGET_FILE:ntm-client>"
+        COMMENT "Signing ntm-client (Windows) with ML-DSA-65 (scripts/sign-client.sh)"
+        VERBATIM
+    )
+
     # ---------------------------------------------------------------------------
     # ntm-tests-windows — Windows unit test binary
     # ---------------------------------------------------------------------------
@@ -145,6 +153,8 @@ if(WIN32)
         tests/test_client_http_util.cpp     # pure logic, no POSIX deps — shared with Linux suite
         tests/test_client_websocket.cpp     # pure logic, no POSIX deps — shared with Linux suite
         tests/test_client_config.cpp        # pure logic, no POSIX deps — shared with Linux suite
+        tests/test_client_signing.cpp
+        tests/test_client_push.cpp
         src/client_core.cpp
         src/client_windows.cpp
     )
@@ -184,6 +194,22 @@ else()
             ${PCAP_LIBRARY}
             ZLIB::ZLIB        # zlib stream compression on the data phase
             Threads::Threads
+    )
+
+    # POST_BUILD: sign the client binary with ML-DSA-65.
+    if(NOT EXISTS "$ENV{HOME}/.ntm/privatebuildkey.secret")
+        message(WARNING
+            "\n*** ntm-client signing key NOT FOUND at ~/.ntm/privatebuildkey.secret ***\n"
+            "    The build will FAIL at the signing step.\n"
+            "    Run:  ./scripts/manage-build-keys.sh\n"
+            "    Then re-run cmake --build.\n")
+    endif()
+
+    add_custom_command(TARGET ntm-client POST_BUILD
+        COMMAND "${CMAKE_SOURCE_DIR}/scripts/sign-client.sh"
+                "$<TARGET_FILE:ntm-client>"
+        COMMENT "Signing ntm-client with ML-DSA-65 (scripts/sign-client.sh)"
+        VERBATIM
     )
 endif()
 
@@ -232,6 +258,8 @@ if(NOT WIN32)
         tests/test_client_config.cpp
         tests/test_server_signing.cpp
         tests/test_server_upgrade.cpp
+        tests/test_client_signing.cpp
+        tests/test_client_push.cpp
     )
     target_include_directories(ntm-tests PRIVATE src tests)
     # ntm_types.hpp uses POSIX socket headers for isLanIP(); no extra libs needed.

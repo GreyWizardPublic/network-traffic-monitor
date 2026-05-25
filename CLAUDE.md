@@ -348,7 +348,7 @@ Both protocol version constants live in `src/proto_client_server.hpp`:
 | Constant | Current value | Protocol |
 |---|---|---|
 | `kWireProtoVersion` | `2` | Wire (data-phase line format) |
-| `kApiVersion` | `7` | HTTPS API (endpoint schemas) |
+| `kApiVersion` | `8` | HTTPS API (endpoint schemas) |
 
 ### Protocol lockstep rule
 
@@ -418,6 +418,25 @@ rm -f build-linux/ntm-server-linux-amd64-*
 Remove-Item build-windows\ntm-client-windows-amd64-*.exe -ErrorAction SilentlyContinue
 ```
 
+### Binary signing (all platforms)
+
+Every ntm-server and ntm-client binary is **ML-DSA-65 signed at build time** as a
+mandatory POST_BUILD step. An unsigned binary is never produced — if the private
+key (`~/.ntm/privatebuildkey.secret`) is absent the build fails immediately.
+
+| Script | Signs |
+|---|---|
+| `scripts/sign-server.sh` | ntm-server (called by CMake POST_BUILD, Linux only) |
+| `scripts/sign-client.sh` | ntm-client (called by CMake POST_BUILD, Linux + Windows cross-compile) |
+
+Both scripts use the same key pair. The public key is embedded at compile time in
+`src/build_pubkey.hpp` (committed to the repo). The private key is never in the repo.
+
+To generate or regenerate the key pair:
+```bash
+./scripts/manage-build-keys.sh
+```
+
 ### Linux client + server
 *(Arch Linux Agent)*
 
@@ -429,6 +448,7 @@ cmake --build build-linux -j$(nproc)
 # build-linux/ntm-server-linux-amd64-<MAJOR.MINOR.PATCH.REVISION>
 # build-linux/ntm-server-linux-amd64-<MAJOR.MINOR.PATCH.REVISION>.sig  (POST_BUILD signing)
 # build-linux/ntm-client-linux-amd64-<MAJOR.MINOR.PATCH.REVISION>
+# build-linux/ntm-client-linux-amd64-<MAJOR.MINOR.PATCH.REVISION>.sig  (POST_BUILD signing)
 ```
 
 ### Windows client (native Windows)
@@ -447,6 +467,7 @@ cmake --build build-linux -j$(nproc)
 .\scripts\build-windows.ps1 -RunTests         # build + run unit tests
 .\scripts\build-windows.ps1 -Clean -RunTests  # clean build + tests
 # outputs: build-windows/ntm-client-windows-amd64-<MAJOR.MINOR.PATCH.REVISION>.exe
+#          build-windows/ntm-client-windows-amd64-<MAJOR.MINOR.PATCH.REVISION>.exe.sig  (POST_BUILD signing)
 #          build-windows/ntm-tests-windows.exe
 ```
 
@@ -532,4 +553,87 @@ Any of these checks failing causes an immediate error — no partial push.
 3. If new version ≤ current version → logs warning, returns 409 Conflict, discards
 4. Atomically replaces the binary at its current path (same filename → systemd compatibility)
 5. Returns HTTP 200 and schedules a graceful restart after 30 s connection drain
+
+---
+
+## Client Binary Push
+
+The `scripts/push-client.sh` script pushes a signed ntm-client binary into the
+server's `update_dir` via the `/admin/client/push` endpoint. Connected clients
+then receive it automatically on their next update check.
+
+### Critical policy — agents MUST NOT push autonomously
+
+> **Agents MUST NEVER call `push-client.sh --confirm` on their own initiative.**
+> The `--confirm` flag must only be supplied when a human explicitly instructs the
+> push in that conversation turn.  Dry-run (`push-client.sh <binary>`, no flag)
+> is permitted at any time for pre-flight validation.
+
+### Prerequisites
+
+| File | Location | Purpose |
+|---|---|---|
+| `ntmserver.info` | `~/.ntm/ntmserver.info` | `server=<host>` and `port=<port>` lines |
+| Private build key | `~/.ntm/privatebuildkey.secret` | ML-DSA-65 key; mode 600; never in repo |
+
+### Push workflow
+
+```bash
+# 1. Build and sign (on main branch, clean working tree):
+rm -f build-linux/ntm-client-linux-amd64-*
+cmake -B build-linux -DCMAKE_BUILD_TYPE=Release
+cmake --build build-linux -j$(nproc)
+# Produces: build-linux/ntm-client-linux-amd64-<MAJOR.MINOR.PATCH.REVISION>
+#           build-linux/ntm-client-linux-amd64-<MAJOR.MINOR.PATCH.REVISION>.sig
+
+# 2. Dry-run (always do this first):
+./scripts/push-client.sh build-linux/ntm-client-linux-amd64-<MAJOR.MINOR.PATCH.REVISION>
+
+# 3. Push (ONLY when human explicitly requests it):
+./scripts/push-client.sh build-linux/ntm-client-linux-amd64-<MAJOR.MINOR.PATCH.REVISION> --confirm
+```
+
+For Windows client binaries (cross-compiled on Linux):
+```bash
+./scripts/push-client.sh build-linux/ntm-client-windows-amd64-<MAJOR.MINOR.PATCH.REVISION>.exe --confirm
+```
+
+### Branch safety (enforced by the script)
+
+Same as server push: branch must be `main`, working tree clean, matches origin/main.
+
+### Server-side behaviour on receiving a push
+
+1. Verifies ML-DSA-65 auth proof (nonce + binary hash, signed with build key)
+2. Validates filename format and platform
+3. Verifies ML-DSA-65 binary signature (embedded build public key)
+4. If pushed version ≤ current version for that platform → returns 409 Conflict, discards
+5. Writes binary + sig atomically to `update_dir`
+6. Triggers `update_dir` housekeeping (see below)
+
+### `update_dir` housekeeping
+
+The server automatically keeps `update_dir` clean on every scan (startup, manual
+rescan, and after each successful client push). The rules are:
+
+- **Valid pair**: binary matching `ntm-client-<platform>-<version>[.exe]` AND a
+  matching `.sig` file that verifies with the embedded build public key.
+- **Keep**: the highest-version valid pair per platform.
+- **Delete**: everything else — orphan `.sig` files, binaries without a valid `.sig`,
+  pairs where signature verification fails, older versions, and unrecognised files.
+
+**Deployment rule**: always copy the `.sig` file before or simultaneously with the
+binary. A binary without its `.sig` is deleted on the next scan.
+
+### Binary integrity on client side
+
+Every ntm-client binary verifies its own ML-DSA-65 signature at startup (Step 0
+of `main()`). If the `.sig` file is missing or the signature fails, the client
+refuses to start with a FATAL error. Both the binary and its `.sig` must be
+deployed together.
+
+The auto-updater (`updater.cpp`) also downloads the `.sig` alongside the new
+binary and verifies it before applying the update. An update that fails
+ML-DSA-65 verification is discarded without touching the filesystem.
+
 

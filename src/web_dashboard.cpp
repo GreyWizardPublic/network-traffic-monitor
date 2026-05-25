@@ -8,6 +8,7 @@
 #include "server_version.hpp"
 #include "server_upgrade.hpp"
 #include "server_signing.hpp"
+#include "client_push.hpp"
 #include "ip_range_resolver.hpp"   // IPDataUpdater::get() for overhead entity resolution
 
 #include <algorithm>
@@ -119,6 +120,7 @@ struct UpdateManifestEntry {
     std::string version;    // e.g. "1.9.0"
     std::string filename;   // bare filename, no path
     std::string sha256hex;  // 64 lowercase hex digits
+    std::size_t sigSize{0}; // size of companion .sig file in bytes
 };
 static std::mutex g_manifestMtx;
 static std::vector<UpdateManifestEntry> g_manifest;
@@ -134,17 +136,17 @@ static std::unordered_set<std::string> g_forceUpdateClients;
 
 static int semverCmp(const std::string &a, const std::string &b)
 {
-    auto parse = [](const std::string &v) -> std::array<int,3> {
-        std::array<int,3> r{0,0,0};
+    auto parse = [](const std::string &v) -> std::array<int,4> {
+        std::array<int,4> r{0,0,0,0};
         int part = 0;
         for (unsigned char c : v) {
-            if (c == '.' && part < 2) { ++part; }
+            if (c == '.' && part < 3) { ++part; }
             else if (c >= '0' && c <= '9') { r[part] = r[part] * 10 + (c - '0'); }
         }
         return r;
     };
     auto pa = parse(a), pb = parse(b);
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < 4; ++i) {
         if (pa[i] < pb[i]) return -1;
         if (pa[i] > pb[i]) return  1;
     }
@@ -196,57 +198,139 @@ static std::string hexToRaw32(const std::string &hex)
     return raw;
 }
 
-// Scan update_dir for ntm-client binaries, compute SHA-256, update g_manifest.
-// Keeps only the highest version per platform.
+// Scan update_dir for ntm-client binaries, verify ML-DSA-65 signatures,
+// keep only the highest signed version per platform, and delete the rest.
 static std::size_t scanUpdateDir(const std::string &dir)
 {
     namespace fs = std::filesystem;
-    std::vector<UpdateManifestEntry> entries;
+
+    // ── Pass 1: enumerate all files and classify them ──────────────────────
+    struct BinaryCandidate {
+        std::string name;
+        std::string platform;
+        std::string version;
+        std::string sha256hex;
+        std::size_t sigSize{0};
+    };
+
+    std::vector<BinaryCandidate> candidates;
+    std::unordered_set<std::string> candidateNames; // binary names that passed validation
+
     std::error_code ec;
+    // First pass: find valid binary+sig pairs
     for (auto &entry : fs::directory_iterator(dir, ec))
     {
         if (!entry.is_regular_file(ec)) continue;
         std::string name = entry.path().filename().string();
-        const std::string prefix = "ntm-client-";
-        if (name.size() <= prefix.size()) continue;
-        if (name.substr(0, prefix.size()) != prefix) continue;
-        std::string rest = name.substr(prefix.size());
-        // Strip .exe
-        if (rest.size() > 4 && rest.substr(rest.size() - 4) == ".exe")
-            rest = rest.substr(0, rest.size() - 4);
-        // rest = "<platform>-<version>", platform has exactly one '-' (e.g. linux-amd64)
-        // so we have at least two '-' total: split at second-to-last '-'
-        auto lastHyp = rest.rfind('-');
-        if (lastHyp == std::string::npos || lastHyp == 0) continue;
-        std::string plat = rest.substr(0, lastHyp);
-        std::string ver  = rest.substr(lastHyp + 1);
-        if (plat.empty() || ver.empty()) continue;
-        bool validVer = true;
-        for (unsigned char c : ver)
-            if (c != '.' && (c < '0' || c > '9')) { validVer = false; break; }
-        if (!validVer) continue;
+
+        // Skip .sig files in this pass
+        if (name.size() > 4 && name.substr(name.size() - 4) == ".sig") continue;
+
+        auto info = ntm::client::parseClientBinaryFilename(name);
+        if (!info.valid) continue;
+        if (!ntm::client::isKnownClientPlatform(info.platform)) continue;
+
+        // Check for matching .sig file
+        fs::path sigPath = fs::path(dir) / (name + ".sig");
+        if (!fs::exists(sigPath, ec) || ec) continue;
+
+        // Verify ML-DSA-65 signature
+        std::string sigErr;
+        if (!ntm::signing::verifySignatureWithKey(
+                entry.path().string(),
+                sigPath.string(),
+                ntm::signing::kBuildPublicKeyDer.data(),
+                ntm::signing::kBuildPublicKeyDer.size(),
+                sigErr))
+        {
+            serverLog(LogLevel::Warn,
+                "ntm-server: update_dir: signature verification failed for '%s': %s",
+                name.c_str(), sigErr.c_str());
+            continue; // will be cleaned up in pass 3
+        }
+
+        // Compute SHA-256 for manifest
         std::string sha = sha256FileHex(entry.path().string());
         if (sha.empty()) continue;
-        entries.push_back({plat, ver, name, sha});
+
+        // Get sig file size
+        std::error_code szEc;
+        std::size_t sigSize = static_cast<std::size_t>(fs::file_size(sigPath, szEc));
+        if (szEc) sigSize = 0;
+
+        candidates.push_back({name, info.platform, info.version, sha, sigSize});
+        candidateNames.insert(name);
     }
 
-    // Keep highest version per platform.
-    std::vector<UpdateManifestEntry> best;
-    for (auto &e : entries)
+    // ── Pass 2: select highest version per platform ────────────────────────
+    std::vector<BinaryCandidate> keepers;
+    for (auto &c : candidates)
     {
-        auto it = std::find_if(best.begin(), best.end(),
-                               [&](const UpdateManifestEntry &b){ return b.platform == e.platform; });
-        if (it == best.end())
-            best.push_back(e);
-        else if (semverCmp(e.version, it->version) > 0)
-            *it = e;
+        auto it = std::find_if(keepers.begin(), keepers.end(),
+            [&](const BinaryCandidate &k){ return k.platform == c.platform; });
+        if (it == keepers.end())
+            keepers.push_back(c);
+        else if (semverCmp(c.version, it->version) > 0)
+            *it = c;
     }
 
+    // ── Pass 3: delete all non-keeper files ───────────────────────────────
+    // Build set of names to keep (binary + sig for each keeper)
+    std::unordered_set<std::string> keepNames;
+    for (auto &k : keepers)
+    {
+        keepNames.insert(k.name);
+        keepNames.insert(k.name + ".sig");
+    }
+
+    for (auto &entry : fs::directory_iterator(dir, ec))
+    {
+        if (!entry.is_regular_file(ec)) continue;
+        std::string name = entry.path().filename().string();
+        if (keepNames.count(name)) continue;
+
+        // Determine deletion reason for logging
+        std::string reason;
+        if (name.size() > 4 && name.substr(name.size() - 4) == ".sig")
+        {
+            // It's a .sig — is its binary a candidate that got superseded?
+            std::string binName = name.substr(0, name.size() - 4);
+            if (candidateNames.count(binName))
+                reason = "superseded by newer version";
+            else
+                reason = "no matching valid binary";
+        }
+        else
+        {
+            auto info = ntm::client::parseClientBinaryFilename(name);
+            if (!info.valid)
+                reason = "unrecognised file";
+            else if (!candidateNames.count(name))
+                reason = "no valid signature";
+            else
+                reason = "superseded by newer version";
+        }
+
+        std::error_code rmEc;
+        fs::remove(entry.path(), rmEc);
+        if (!rmEc)
+            serverLog(LogLevel::Info,
+                "ntm-server: update_dir: deleted '%s' (%s)", name.c_str(), reason.c_str());
+        else
+            serverLog(LogLevel::Warn,
+                "ntm-server: update_dir: failed to delete '%s': %s",
+                name.c_str(), rmEc.message().c_str());
+    }
+
+    // ── Pass 4: update global manifest ────────────────────────────────────
     {
         std::lock_guard<std::mutex> lk(g_manifestMtx);
-        g_manifest = std::move(best);
-        return g_manifest.size();
+        g_manifest.clear();
+        for (auto &k : keepers)
+            g_manifest.push_back({k.platform, k.version, k.name, k.sha256hex, k.sigSize});
     }
+
+    return keepers.size();
 }
 
 // Schema MUST mirror buildSummaryJson() — update whenever that function changes.
@@ -2685,6 +2769,7 @@ void registerWebHandlers(NtmHttpServer &svr,
                 resp += ",\"version\":\"";  resp += jsonEsc(best.version);  resp += "\"";
                 resp += ",\"sha256\":\"";   resp += jsonEsc(best.sha256hex); resp += "\"";
                 resp += ",\"filename\":\""; resp += jsonEsc(best.filename);  resp += "\"";
+                resp += ",\"sig_size\":";   resp += std::to_string(best.sigSize);
                 resp += "}\n";
                 res.set_content(resp, "application/json");
             });
@@ -2762,6 +2847,81 @@ void registerWebHandlers(NtmHttpServer &svr,
                 res.set_header("Content-Disposition",
                                "attachment; filename=\"" + best.filename + "\"");
                 res.set_content(body, "application/octet-stream");
+            });
+
+        // GET /api/update/download_sig — stream the .sig file for the requested platform.
+        svr.Get("/api/update/download_sig",
+            [&config](const httplib::Request &req, httplib::Response &res)
+            {
+                const std::string pubkeyHex = req.get_param_value("pubkey");
+                const std::string platform  = req.get_param_value("platform");
+
+                if (pubkeyHex.size() != 64)
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"pubkey must be 64 hex characters\"}\n",
+                                    "application/json");
+                    return;
+                }
+                const std::string rawKey = hexToRaw32(pubkeyHex);
+                if (rawKey.empty())
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"pubkey must be valid hex\"}\n",
+                                    "application/json");
+                    return;
+                }
+                {
+                    std::shared_lock<std::shared_mutex> lk(config.clients_store->mu);
+                    if (!config.clients_store->keys.count(rawKey))
+                    {
+                        res.status = 401;
+                        res.set_content("{\"error\":\"unauthorized\"}\n", "application/json");
+                        return;
+                    }
+                }
+
+                UpdateManifestEntry best;
+                bool found = false;
+                {
+                    std::lock_guard<std::mutex> lk(g_manifestMtx);
+                    for (const auto &m : g_manifest)
+                    {
+                        if (m.platform == platform)
+                        {
+                            if (!found || semverCmp(m.version, best.version) > 0)
+                            {
+                                best  = m;
+                                found = true;
+                            }
+                        }
+                    }
+                }
+
+                if (!found)
+                {
+                    res.status = 404;
+                    res.set_content("{\"error\":\"no binary for platform\"}\n", "application/json");
+                    return;
+                }
+
+                namespace fs = std::filesystem;
+                fs::path sigPath = fs::path(config.update_dir) / (best.filename + ".sig");
+                std::ifstream ifs(sigPath, std::ios::binary | std::ios::ate);
+                if (!ifs)
+                {
+                    res.status = 404;
+                    res.set_content("{\"error\":\"signature file not accessible\"}\n",
+                                    "application/json");
+                    return;
+                }
+                auto fileSize = ifs.tellg();
+                ifs.seekg(0);
+                std::string sigBody(static_cast<std::size_t>(fileSize), '\0');
+                ifs.read(sigBody.data(), fileSize);
+                res.set_header("Content-Disposition",
+                               "attachment; filename=\"" + best.filename + ".sig\"");
+                res.set_content(sigBody, "application/octet-stream");
             });
 
         // POST /api/admin/update/scan — (re-)scan update_dir, rebuild manifest.
@@ -3010,6 +3170,259 @@ void registerWebHandlers(NtmHttpServer &svr,
                         cb();
                     }).detach();
                 }
+            });
+    }
+
+    // ── Client push endpoints (/admin/client/nonce, /admin/client/push) ──────
+    // Enabled only when config.client_push_nonce_store is set.
+    // GET  /admin/client/nonce — issue a nonce; rate-limit 5/min
+    // POST /admin/client/push  — receive client binary + sig; rate-limit 1/min
+    if (config.client_push_nonce_store)
+    {
+        auto *cpNonceStore = static_cast<ntm::upgrade::NonceStore *>(
+            config.client_push_nonce_store.get());
+
+        static WebRateLimiter clientNonceLimiter(5);
+        static WebRateLimiter clientPushLimiter(1);
+
+        // GET /admin/client/nonce
+        svr.Get("/admin/client/nonce",
+            [cpNonceStore, config](const httplib::Request &req, httplib::Response &res)
+            {
+                const std::string ip = effectiveClientIP(req, config);
+                if (!clientNonceLimiter.tryAcquire(ip))
+                {
+                    res.status = 429;
+                    res.set_content("{\"error\":\"rate limit exceeded\"}\n",
+                                    "application/json");
+                    return;
+                }
+                std::string nonce = cpNonceStore->generate(300);
+                if (nonce.empty())
+                {
+                    res.status = 500;
+                    res.set_content("{\"error\":\"nonce generation failed\"}\n",
+                                    "application/json");
+                    return;
+                }
+                // Build platform_versions object from current manifest
+                std::string platVers = "{";
+                {
+                    std::lock_guard<std::mutex> lk(g_manifestMtx);
+                    bool first = true;
+                    for (const auto &m : g_manifest)
+                    {
+                        if (!first) platVers += ",";
+                        platVers += "\"" + jsonEsc(m.platform) + "\":\""
+                                  + jsonEsc(m.version) + "\"";
+                        first = false;
+                    }
+                }
+                platVers += "}";
+                res.set_content(
+                    "{\"nonce\":\"" + nonce + "\","
+                    "\"platform_versions\":" + platVers + "}\n",
+                    "application/json");
+            });
+
+        // POST /admin/client/push
+        svr.Post("/admin/client/push",
+            [cpNonceStore, config](const httplib::Request &req, httplib::Response &res)
+            {
+                const std::string ip = effectiveClientIP(req, config);
+                if (!clientPushLimiter.tryAcquire(ip))
+                {
+                    res.status = 429;
+                    res.set_content("{\"error\":\"rate limit exceeded\"}\n",
+                                    "application/json");
+                    return;
+                }
+
+                auto getField = [&](const std::string &name) -> std::string {
+                    auto it = req.files.find(name);
+                    return (it == req.files.end()) ? "" : it->second.content;
+                };
+
+                const std::string platformStr   = getField("platform");
+                const std::string versionStr    = getField("version");
+                const std::string nonceHex      = getField("nonce");
+                const std::string authProofB64  = getField("auth_proof");
+                const std::string binaryStr     = getField("binary");
+                const std::string sigStr        = getField("signature");
+
+                if (platformStr.empty() || versionStr.empty() || nonceHex.empty()
+                    || authProofB64.empty() || binaryStr.empty() || sigStr.empty())
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"missing required field\"}\n",
+                                    "application/json");
+                    return;
+                }
+
+                // (a) Consume nonce
+                if (!cpNonceStore->consume(nonceHex))
+                {
+                    res.status = 403;
+                    res.set_content(
+                        "{\"error\":\"invalid, expired, or already-used nonce\"}\n",
+                        "application/json");
+                    return;
+                }
+
+                const std::vector<std::uint8_t> binaryBytes(binaryStr.begin(), binaryStr.end());
+                const std::vector<std::uint8_t> sigBytes(sigStr.begin(), sigStr.end());
+
+                // (b) Decode nonce and compute SHA3-256(binary) for auth proof
+                const std::vector<std::uint8_t> nonceBytes = ntm::upgrade::hexDecode(nonceHex);
+                const std::vector<std::uint8_t> binaryHash = ntm::upgrade::sha3_256(binaryBytes);
+                const std::vector<std::uint8_t> authProof  = ntm::upgrade::base64Decode(authProofB64);
+
+                if (nonceBytes.empty() || binaryHash.empty() || authProof.empty())
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"malformed nonce, binary, or auth_proof\"}\n",
+                                    "application/json");
+                    return;
+                }
+
+                // (c) Verify ML-DSA-65 auth proof
+                std::string authErr;
+                if (!ntm::upgrade::verifyUpgradeAuth(
+                        nonceBytes, binaryHash, authProof,
+                        ntm::signing::kBuildPublicKeyDer.data(),
+                        ntm::signing::kBuildPublicKeyDer.size(),
+                        authErr))
+                {
+                    res.status = 403;
+                    res.set_content("{\"error\":\"auth proof verification failed\"}\n",
+                                    "application/json");
+                    return;
+                }
+
+                // (d) Validate platform
+                if (!ntm::client::isKnownClientPlatform(platformStr))
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"unknown platform\"}\n",
+                                    "application/json");
+                    return;
+                }
+
+                // (e) Validate version string is parseable
+                const ntm::upgrade::Semver newVer = ntm::upgrade::parseSemver(versionStr);
+                if (!newVer.valid)
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"unparseable version string\"}\n",
+                                    "application/json");
+                    return;
+                }
+
+                // (f) Version check: reject if not strictly newer than current for this platform
+                {
+                    std::lock_guard<std::mutex> lk(g_manifestMtx);
+                    for (const auto &m : g_manifest)
+                    {
+                        if (m.platform == platformStr)
+                        {
+                            const ntm::upgrade::Semver curVer = ntm::upgrade::parseSemver(m.version);
+                            if (curVer.valid && newVer <= curVer)
+                            {
+                                res.status = 409;
+                                res.set_content(
+                                    "{\"error\":\"pushed version " + newVer.str()
+                                    + " is not newer than current " + curVer.str()
+                                    + " for platform " + platformStr + "\"}\n",
+                                    "application/json");
+                                return;
+                            }
+                            break;
+                        }
+                    }
+                }
+
+                // (g) Verify ML-DSA-65 binary signature
+                std::string sigErr;
+                if (!ntm::signing::verifyServerSignatureBytes(binaryBytes, sigBytes, sigErr))
+                {
+                    res.status = 403;
+                    res.set_content("{\"error\":\"binary signature verification failed\"}\n",
+                                    "application/json");
+                    return;
+                }
+
+                // (h) Construct filename and write to update_dir atomically
+                // Determine .exe suffix for Windows
+                bool isWindows = (platformStr.find("windows") != std::string::npos);
+                std::string filename = "ntm-client-" + platformStr + "-" + versionStr
+                                     + (isWindows ? ".exe" : "");
+                namespace fs = std::filesystem;
+                fs::path binTarget = fs::path(config.update_dir) / filename;
+                fs::path sigTarget = fs::path(config.update_dir) / (filename + ".sig");
+                fs::path binTmp    = fs::path(config.update_dir) / (filename + ".upload_tmp");
+                fs::path sigTmp    = fs::path(config.update_dir) / (filename + ".sig.upload_tmp");
+
+                auto cleanup = [&]() {
+                    std::error_code ec2;
+                    fs::remove(binTmp, ec2);
+                    fs::remove(sigTmp, ec2);
+                };
+
+                // Write binary temp
+                {
+                    std::ofstream ofs(binTmp, std::ios::binary);
+                    if (!ofs) { cleanup(); res.status = 500;
+                        res.set_content("{\"error\":\"cannot create temp file\"}\n",
+                                        "application/json"); return; }
+                    ofs.write(binaryStr.data(), static_cast<std::streamsize>(binaryStr.size()));
+                    if (!ofs) { cleanup(); res.status = 500;
+                        res.set_content("{\"error\":\"write failed\"}\n",
+                                        "application/json"); return; }
+                }
+
+                // Set executable permissions
+                std::error_code chmodEc;
+                fs::permissions(binTmp,
+                    fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
+                    fs::perm_options::add, chmodEc);
+                if (chmodEc) { cleanup(); res.status = 500;
+                    res.set_content("{\"error\":\"chmod failed\"}\n",
+                                    "application/json"); return; }
+
+                // Write sig temp
+                {
+                    std::ofstream ofs(sigTmp, std::ios::binary);
+                    if (!ofs) { cleanup(); res.status = 500;
+                        res.set_content("{\"error\":\"cannot create sig temp file\"}\n",
+                                        "application/json"); return; }
+                    ofs.write(sigStr.data(), static_cast<std::streamsize>(sigStr.size()));
+                    if (!ofs) { cleanup(); res.status = 500;
+                        res.set_content("{\"error\":\"sig write failed\"}\n",
+                                        "application/json"); return; }
+                }
+
+                // Atomic rename: sig first, then binary
+                std::error_code renEc;
+                fs::rename(sigTmp, sigTarget, renEc);
+                if (renEc) { cleanup(); res.status = 500;
+                    res.set_content("{\"error\":\"sig rename failed\"}\n",
+                                    "application/json"); return; }
+                fs::rename(binTmp, binTarget, renEc);
+                if (renEc) { res.status = 500;
+                    res.set_content("{\"error\":\"binary rename failed\"}\n",
+                                    "application/json"); return; }
+
+                serverLog(LogLevel::Info,
+                    "ntm-server: client push accepted: %s v%s",
+                    platformStr.c_str(), versionStr.c_str());
+
+                // Trigger rescan and cleanup
+                scanUpdateDir(config.update_dir);
+
+                res.set_content(
+                    "{\"ok\":true,\"platform\":\"" + jsonEsc(platformStr)
+                    + "\",\"version\":\"" + jsonEsc(versionStr) + "\"}\n",
+                    "application/json");
             });
     }
 
