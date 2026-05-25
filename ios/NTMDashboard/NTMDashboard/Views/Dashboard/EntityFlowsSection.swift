@@ -10,7 +10,9 @@ enum TrafficFilter: String, CaseIterable {
 struct EntityFlowsSection: View {
     let flows: [EntityFlow]
     let internetFlows: [EntityFlow]
+    let truncatedInternet: Bool
     let localFlows: [EntityFlow]
+    let truncatedLocal: Bool
     let localSummary: OverheadSummary?
     let overheadFlows: [EntityFlow]
     let overheadSummary: OverheadSummary?
@@ -59,6 +61,14 @@ struct EntityFlowsSection: View {
             }
             .pickerStyle(.segmented)
 
+            if filter == .internet && truncatedInternet {
+                truncationBanner("Internet flows truncated to server limit")
+            }
+
+            if filter == .local && truncatedLocal {
+                truncationBanner("Local flows truncated to server limit")
+            }
+
             if filter == .local, let summary = localSummary, summary.bytes > 0 {
                 HStack(spacing: 6) {
                     Image(systemName: "network")
@@ -103,6 +113,18 @@ struct EntityFlowsSection: View {
                     if flow.id != displayFlows.last?.id { Divider() }
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func truncationBanner(_ message: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.caption2)
+                .foregroundStyle(Color.ntmAmber)
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(Color.ntmAmber)
         }
     }
 }

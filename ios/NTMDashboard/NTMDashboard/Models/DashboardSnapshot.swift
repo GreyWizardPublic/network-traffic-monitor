@@ -25,7 +25,11 @@ struct DashboardSnapshot: Codable, Sendable {
     /// true when the server capped the entities list. Added in api_version 4; defaults false.
     let truncated: Bool
     let entitiesInternet: [EntityFlow]  // api_version 6 addition; may be absent on v7 servers
+    /// true when server capped entities_internet. Added in api_version 6; defaults false.
+    let truncatedInternet: Bool
     let entitiesLocal: [EntityFlow]     // api_version 6 addition; may be absent on v7 servers
+    /// true when server capped entities_local. Added in api_version 6; defaults false.
+    let truncatedLocal: Bool
     let localSummary: OverheadSummary?
     let overheadEntities: [EntityFlow]
     /// true when the server capped the overhead_entities list.
@@ -38,6 +42,8 @@ struct DashboardSnapshot: Codable, Sendable {
     let protoRejectedClients: [ProtoRejectedClient]
     /// Per-platform client binaries in the server's update_dir. Added in api_version 7.
     let updateManifest: [UpdateManifest]
+    /// true when the admin has enabled the demo server. Added in api_version 6; defaults false.
+    let demoServerEnabled: Bool
 
     enum CodingKeys: String, CodingKey {
         case apiVersion             = "api_version"
@@ -51,7 +57,9 @@ struct DashboardSnapshot: Codable, Sendable {
         case entities
         case truncated
         case entitiesInternet       = "entities_internet"
+        case truncatedInternet      = "truncated_internet"
         case entitiesLocal          = "entities_local"
+        case truncatedLocal         = "truncated_local"
         case localSummary           = "local_summary"
         case overheadEntities       = "overhead_entities"
         case truncatedOverhead      = "truncated_overhead"
@@ -61,6 +69,7 @@ struct DashboardSnapshot: Codable, Sendable {
         case clientHealth           = "client_health"
         case protoRejectedClients   = "proto_rejected_clients"
         case updateManifest         = "update_manifest"
+        case demoServerEnabled      = "demo_server_enabled"
     }
 
     init(from decoder: Decoder) throws {
@@ -77,7 +86,9 @@ struct DashboardSnapshot: Codable, Sendable {
         truncated              = try c.decodeIfPresent(Bool.self,   forKey: .truncated) ?? false
         // Added in api_version 6 — absent on older servers, default to empty.
         entitiesInternet       = try c.decodeIfPresent([EntityFlow].self,    forKey: .entitiesInternet) ?? []
+        truncatedInternet      = try c.decodeIfPresent(Bool.self,            forKey: .truncatedInternet) ?? false
         entitiesLocal          = try c.decodeIfPresent([EntityFlow].self,    forKey: .entitiesLocal) ?? []
+        truncatedLocal         = try c.decodeIfPresent(Bool.self,            forKey: .truncatedLocal) ?? false
         localSummary           = try c.decodeIfPresent(OverheadSummary.self, forKey: .localSummary)
         overheadEntities       = try c.decodeIfPresent([EntityFlow].self,    forKey: .overheadEntities) ?? []
         truncatedOverhead      = try c.decodeIfPresent(Bool.self,   forKey: .truncatedOverhead) ?? false
@@ -88,5 +99,7 @@ struct DashboardSnapshot: Codable, Sendable {
         protoRejectedClients   = try c.decodeIfPresent([ProtoRejectedClient].self, forKey: .protoRejectedClients) ?? []
         // Added in api_version 7 — absent on older servers, default to empty.
         updateManifest         = try c.decodeIfPresent([UpdateManifest].self, forKey: .updateManifest) ?? []
+        // Added in api_version 6 — absent on older servers, default false.
+        demoServerEnabled      = try c.decodeIfPresent(Bool.self, forKey: .demoServerEnabled) ?? false
     }
 }

@@ -8,23 +8,29 @@
 
 /* Begin PBXBuildFile section */
 		0207EF25BB05546CCBFEFBB1 /* GlassCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17D7EA47DF8FD33E34D5FD50 /* GlassCard.swift */; };
+		07F9EA28CA34B08A2D801D87 /* LanDevicesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1657FC87DF6B87D3630383B /* LanDevicesView.swift */; };
 		19459707933237366C1F8764 /* ByteLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58A0EEF5B09B3375446F28A3 /* ByteLabel.swift */; };
 		1C7E06BBA00154ABC88F28A6 /* ServerConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBA03BA53FCA19A5FC837A71 /* ServerConfig.swift */; };
 		2EFEA0E26DAE80214ECCFFB1 /* NTMClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6458FB6A66A07ABA491D7270 /* NTMClient.swift */; };
 		4B99D0DAA7D714912CD9473F /* DashboardSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1786AF78B5E75A6D76546E5A /* DashboardSnapshot.swift */; };
 		4D403C078CEAD21BD276FBDA /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE738CC4D345F46C4C02078B /* LoginView.swift */; };
 		4DFE4BB50CF99F090A9A1358 /* Color+NTM.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B4B0DCACE152D40FFA4FDFC /* Color+NTM.swift */; };
+		51A423CBD3673630FDA1271A /* ClientHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52BA461F7C032DE25E33F314 /* ClientHistory.swift */; };
+		54A0DF1AD9BD5FB42DB914DF /* UpdateManifestSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = C617BBBD2118484AFA984179 /* UpdateManifestSection.swift */; };
 		5F64A17A2296ACC9B5EA4AA2 /* NTMDashboardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E773E9F0C9DB0A46025AEA74 /* NTMDashboardTests.swift */; };
 		623DE09577CF622165B294B1 /* KeychainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D1E5677279246C4C1605702 /* KeychainService.swift */; };
 		65B66C2AB9AF202EACF32A69 /* DashboardViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 830D3FF5F84A24DDA5DDD139 /* DashboardViewModel.swift */; };
+		6DF4036F974C46E91F6EECFA /* PerClientHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A415F44E1F81D261F063F3CF /* PerClientHistoryView.swift */; };
 		6E34A2628B2BC76C4F570C75 /* InterfacesSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E4AB6ABFBA6D1D0F5090EB /* InterfacesSection.swift */; };
 		70D5500660FEEA05B228DEDD /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEF034F7A2B67BC03C614565 /* SettingsView.swift */; };
 		72790598B0FF0170EF68352F /* PasskeyService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2209ECC4A2BC27EDB6F141C6 /* PasskeyService.swift */; };
 		7B91896C02B41E67C75E213C /* LanDevice.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DC19E4E0E4229D577684AAC /* LanDevice.swift */; };
+		803EF108D5B6732EC4F13BE5 /* ClientHistoryClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = C36B4420C355C12E6508F842 /* ClientHistoryClient.swift */; };
 		8170C0447D586E7C3AB8C218 /* EntityFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C6C15169CB5FC9E7CBBDA95 /* EntityFlow.swift */; };
 		89D1CF18AC87CA02A3B688B5 /* EntityFlowsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AB372E094EFED56458E95BD /* EntityFlowsSection.swift */; };
 		8F722091EAB8FDFB2A84A997 /* NTMDashboardApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39E3B19CB0DD2B03641509F1 /* NTMDashboardApp.swift */; };
 		95F73691B23CD8B27906FD24 /* UpdateManifest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 157633DE3976373B39528F5D /* UpdateManifest.swift */; };
+		96602BC5101612853F021129 /* ServerInfoFooter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FCB77167E16554118A01C98 /* ServerInfoFooter.swift */; };
 		9C029F8BCE9FBE3E5E7095D8 /* RegisterDeviceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A28C84A9FAFD2E66259B3B9 /* RegisterDeviceView.swift */; };
 		A5CAE318D2F9ACC241A15574 /* CertificatePinner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 211C120F7F3FAB95364C4930 /* CertificatePinner.swift */; };
 		A6DC3789757BD7F4A0B4AF12 /* ProtocolVersion.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4DD610B34BF286883320588 /* ProtocolVersion.swift */; };
@@ -33,6 +39,7 @@
 		B5330ED8E9D503B32B707D09 /* AdminProof.swift in Sources */ = {isa = PBXBuildFile; fileRef = 804A17A45D0AF55FA4B6DCBC /* AdminProof.swift */; };
 		C53E3A35A37173372D67A39D /* ProtoRejectedClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8514DAA6EF7557EBA0370386 /* ProtoRejectedClient.swift */; };
 		C908F8F4BF3BDFB7E6AC5A61 /* ByteFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C5CAAD94CB10A98C2568456 /* ByteFormatter.swift */; };
+		CC47CAE2E4A949747D67AEFD /* ClientFilterPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC6735C968505F17A0247019 /* ClientFilterPicker.swift */; };
 		D056C6A0D8B89CE2EC94C9A3 /* AuthViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBAEA321AE693A8B343F6D00 /* AuthViewModel.swift */; };
 		D7B1527B74C4E45243BB5DDC /* ClientHealthSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2CC62CA763A7CB87C6A9285 /* ClientHealthSection.swift */; };
 		DC09DBE27FA6174CE4997737 /* ConnectionBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1996311C087DD337943D5408 /* ConnectionBar.swift */; };
@@ -65,9 +72,11 @@
 		211C120F7F3FAB95364C4930 /* CertificatePinner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CertificatePinner.swift; sourceTree = "<group>"; };
 		2209ECC4A2BC27EDB6F141C6 /* PasskeyService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasskeyService.swift; sourceTree = "<group>"; };
 		2DC19E4E0E4229D577684AAC /* LanDevice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanDevice.swift; sourceTree = "<group>"; };
+		2FCB77167E16554118A01C98 /* ServerInfoFooter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerInfoFooter.swift; sourceTree = "<group>"; };
 		39E3B19CB0DD2B03641509F1 /* NTMDashboardApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NTMDashboardApp.swift; sourceTree = "<group>"; };
 		3C5CAAD94CB10A98C2568456 /* ByteFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ByteFormatter.swift; sourceTree = "<group>"; };
 		4D1E5677279246C4C1605702 /* KeychainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainService.swift; sourceTree = "<group>"; };
+		52BA461F7C032DE25E33F314 /* ClientHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientHistory.swift; sourceTree = "<group>"; };
 		53D1261760DC4266421A7B97 /* SectionCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SectionCard.swift; sourceTree = "<group>"; };
 		58A0EEF5B09B3375446F28A3 /* ByteLabel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ByteLabel.swift; sourceTree = "<group>"; };
 		5AB372E094EFED56458E95BD /* EntityFlowsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntityFlowsSection.swift; sourceTree = "<group>"; };
@@ -79,11 +88,16 @@
 		8A28C84A9FAFD2E66259B3B9 /* RegisterDeviceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RegisterDeviceView.swift; sourceTree = "<group>"; };
 		9B76070D52526C2759667B63 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		9C6C15169CB5FC9E7CBBDA95 /* EntityFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntityFlow.swift; sourceTree = "<group>"; };
+		A415F44E1F81D261F063F3CF /* PerClientHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerClientHistoryView.swift; sourceTree = "<group>"; };
+		AC6735C968505F17A0247019 /* ClientFilterPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientFilterPicker.swift; sourceTree = "<group>"; };
 		AEAF32526D974799FE55C85A /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
+		B1657FC87DF6B87D3630383B /* LanDevicesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanDevicesView.swift; sourceTree = "<group>"; };
 		B4DD610B34BF286883320588 /* ProtocolVersion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtocolVersion.swift; sourceTree = "<group>"; };
 		BBAEA321AE693A8B343F6D00 /* AuthViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthViewModel.swift; sourceTree = "<group>"; };
 		BD248C46D564AD739F94AEFB /* NTMDashboardTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = NTMDashboardTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		BEF034F7A2B67BC03C614565 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		C36B4420C355C12E6508F842 /* ClientHistoryClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientHistoryClient.swift; sourceTree = "<group>"; };
+		C617BBBD2118484AFA984179 /* UpdateManifestSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateManifestSection.swift; sourceTree = "<group>"; };
 		D2CC62CA763A7CB87C6A9285 /* ClientHealthSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientHealthSection.swift; sourceTree = "<group>"; };
 		D330C12EF81AF8FB857D866B /* StatBadge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatBadge.swift; sourceTree = "<group>"; };
 		D4E4AB6ABFBA6D1D0F5090EB /* InterfacesSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InterfacesSection.swift; sourceTree = "<group>"; };
@@ -118,10 +132,14 @@
 		3031EDB83F71264E5AC3CD62 /* Dashboard */ = {
 			isa = PBXGroup;
 			children = (
+				AC6735C968505F17A0247019 /* ClientFilterPicker.swift */,
 				D2CC62CA763A7CB87C6A9285 /* ClientHealthSection.swift */,
 				AEAF32526D974799FE55C85A /* DashboardView.swift */,
 				5AB372E094EFED56458E95BD /* EntityFlowsSection.swift */,
 				D4E4AB6ABFBA6D1D0F5090EB /* InterfacesSection.swift */,
+				B1657FC87DF6B87D3630383B /* LanDevicesView.swift */,
+				A415F44E1F81D261F063F3CF /* PerClientHistoryView.swift */,
+				C617BBBD2118484AFA984179 /* UpdateManifestSection.swift */,
 			);
 			path = Dashboard;
 			sourceTree = "<group>";
@@ -135,6 +153,7 @@
 				1996311C087DD337943D5408 /* ConnectionBar.swift */,
 				17D7EA47DF8FD33E34D5FD50 /* GlassCard.swift */,
 				53D1261760DC4266421A7B97 /* SectionCard.swift */,
+				2FCB77167E16554118A01C98 /* ServerInfoFooter.swift */,
 				D330C12EF81AF8FB857D866B /* StatBadge.swift */,
 			);
 			path = Components;
@@ -188,6 +207,7 @@
 			children = (
 				804A17A45D0AF55FA4B6DCBC /* AdminProof.swift */,
 				211C120F7F3FAB95364C4930 /* CertificatePinner.swift */,
+				C36B4420C355C12E6508F842 /* ClientHistoryClient.swift */,
 				4D1E5677279246C4C1605702 /* KeychainService.swift */,
 				6458FB6A66A07ABA491D7270 /* NTMClient.swift */,
 				2209ECC4A2BC27EDB6F141C6 /* PasskeyService.swift */,
@@ -233,6 +253,7 @@
 			isa = PBXGroup;
 			children = (
 				14B5DDB449A2E0FBF1884AB5 /* ClientHealth.swift */,
+				52BA461F7C032DE25E33F314 /* ClientHistory.swift */,
 				1786AF78B5E75A6D76546E5A /* DashboardSnapshot.swift */,
 				9C6C15169CB5FC9E7CBBDA95 /* EntityFlow.swift */,
 				EEC74B35B28474BABB90D917 /* InterfaceStat.swift */,
@@ -350,8 +371,11 @@
 				C908F8F4BF3BDFB7E6AC5A61 /* ByteFormatter.swift in Sources */,
 				19459707933237366C1F8764 /* ByteLabel.swift in Sources */,
 				A5CAE318D2F9ACC241A15574 /* CertificatePinner.swift in Sources */,
+				CC47CAE2E4A949747D67AEFD /* ClientFilterPicker.swift in Sources */,
 				E5A205EF1A0B6AF3C8343095 /* ClientHealth.swift in Sources */,
 				D7B1527B74C4E45243BB5DDC /* ClientHealthSection.swift in Sources */,
+				51A423CBD3673630FDA1271A /* ClientHistory.swift in Sources */,
+				803EF108D5B6732EC4F13BE5 /* ClientHistoryClient.swift in Sources */,
 				4DFE4BB50CF99F090A9A1358 /* Color+NTM.swift in Sources */,
 				DC09DBE27FA6174CE4997737 /* ConnectionBar.swift in Sources */,
 				4B99D0DAA7D714912CD9473F /* DashboardSnapshot.swift in Sources */,
@@ -364,20 +388,24 @@
 				6E34A2628B2BC76C4F570C75 /* InterfacesSection.swift in Sources */,
 				623DE09577CF622165B294B1 /* KeychainService.swift in Sources */,
 				7B91896C02B41E67C75E213C /* LanDevice.swift in Sources */,
+				07F9EA28CA34B08A2D801D87 /* LanDevicesView.swift in Sources */,
 				4D403C078CEAD21BD276FBDA /* LoginView.swift in Sources */,
 				2EFEA0E26DAE80214ECCFFB1 /* NTMClient.swift in Sources */,
 				8F722091EAB8FDFB2A84A997 /* NTMDashboardApp.swift in Sources */,
 				72790598B0FF0170EF68352F /* PasskeyService.swift in Sources */,
+				6DF4036F974C46E91F6EECFA /* PerClientHistoryView.swift in Sources */,
 				C53E3A35A37173372D67A39D /* ProtoRejectedClient.swift in Sources */,
 				A6DC3789757BD7F4A0B4AF12 /* ProtocolVersion.swift in Sources */,
 				9C029F8BCE9FBE3E5E7095D8 /* RegisterDeviceView.swift in Sources */,
 				E84BA355775F2E9FE26B0D75 /* RootView.swift in Sources */,
 				A9C7EF53C5E19D5F89B98D2E /* SectionCard.swift in Sources */,
 				1C7E06BBA00154ABC88F28A6 /* ServerConfig.swift in Sources */,
+				96602BC5101612853F021129 /* ServerInfoFooter.swift in Sources */,
 				70D5500660FEEA05B228DEDD /* SettingsView.swift in Sources */,
 				E1150CEA5CE76C8881B1AF04 /* SettingsViewModel.swift in Sources */,
 				FC204BDFFB2287D1EC0A694F /* StatBadge.swift in Sources */,
 				95F73691B23CD8B27906FD24 /* UpdateManifest.swift in Sources */,
+				54A0DF1AD9BD5FB42DB914DF /* UpdateManifestSection.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -421,7 +449,7 @@
 				CODE_SIGN_ENTITLEMENTS = NTMDashboard/NTMDashboard/NTMDashboard.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 17;
+				CURRENT_PROJECT_VERSION = 18;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = W65LG3MSG6;
 				INFOPLIST_FILE = NTMDashboard/NTMDashboard/Info.plist;
@@ -430,7 +458,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.10.0;
+				MARKETING_VERSION = 1.11.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ntm.NTMDashboard;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -510,7 +538,7 @@
 				CODE_SIGN_ENTITLEMENTS = NTMDashboard/NTMDashboard/NTMDashboard.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 17;
+				CURRENT_PROJECT_VERSION = 18;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = W65LG3MSG6;
 				INFOPLIST_FILE = NTMDashboard/NTMDashboard/Info.plist;
@@ -519,7 +547,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.10.0;
+				MARKETING_VERSION = 1.11.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ntm.NTMDashboard;
 				SDKROOT = iphoneos;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
