@@ -40,9 +40,12 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
+#include <aclapi.h>
+
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -483,20 +486,124 @@ TEST_CASE("platform: inet_pton works after initPlatform (WSA sanity)")
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 8. checkIdentityFilePermissions stub (Windows: print-only, no crash)
+// 8. checkIdentityFilePermissions — real Windows ACL check
 // ═══════════════════════════════════════════════════════════════════════════
+
+// Helper: create a temp file and return its path, or "" on failure.
+static std::string makeTempFile()
+{
+    char tmpDir[MAX_PATH];
+    if (!GetTempPathA(MAX_PATH, tmpDir)) return {};
+    std::string path = std::string(tmpDir) + "ntm_acl_test_tmp.pem";
+    HANDLE h = CreateFileA(path.c_str(), GENERIC_READ | GENERIC_WRITE,
+                           0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return {};
+    CloseHandle(h);
+    return path;
+}
+
+// Helper: set the DACL on a file to grant Everyone GENERIC_READ.
+static bool setEveryoneRead(const std::string &path)
+{
+    EXPLICIT_ACCESS_W ea{};
+    ea.grfAccessPermissions = FILE_GENERIC_READ;
+    ea.grfAccessMode        = GRANT_ACCESS;
+    ea.grfInheritance       = NO_INHERITANCE;
+    ea.Trustee.TrusteeForm  = TRUSTEE_IS_NAME;
+    ea.Trustee.TrusteeType  = TRUSTEE_IS_WELL_KNOWN_GROUP;
+    ea.Trustee.ptstrName    = const_cast<LPWSTR>(L"Everyone");
+
+    PACL newAcl = nullptr;
+    if (SetEntriesInAclW(1, &ea, nullptr, &newAcl) != ERROR_SUCCESS) return false;
+    std::wstring wpath(path.begin(), path.end());
+    DWORD ret = SetNamedSecurityInfoW(
+        const_cast<LPWSTR>(wpath.c_str()), SE_FILE_OBJECT,
+        DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+        nullptr, nullptr, newAcl, nullptr);
+    LocalFree(newAcl);
+    return ret == ERROR_SUCCESS;
+}
+
+// Helper: restrict a file to the current user only (no inheritance).
+static bool setCurrentUserOnly(const std::string &path)
+{
+    // Get current user SID.
+    HANDLE hToken = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken)) return false;
+    BYTE  tokenBuf[512]{};
+    DWORD needed = 0;
+    if (!GetTokenInformation(hToken, TokenUser, tokenBuf, sizeof(tokenBuf), &needed)) {
+        CloseHandle(hToken);
+        return false;
+    }
+    CloseHandle(hToken);
+
+    auto *tu = reinterpret_cast<TOKEN_USER *>(tokenBuf);
+    EXPLICIT_ACCESS_W ea{};
+    ea.grfAccessPermissions = GENERIC_READ;
+    ea.grfAccessMode        = GRANT_ACCESS;
+    ea.grfInheritance       = NO_INHERITANCE;
+    ea.Trustee.TrusteeForm  = TRUSTEE_IS_SID;
+    ea.Trustee.TrusteeType  = TRUSTEE_IS_USER;
+    ea.Trustee.ptstrName    = reinterpret_cast<LPWSTR>(tu->User.Sid);
+
+    PACL newAcl = nullptr;
+    if (SetEntriesInAclW(1, &ea, nullptr, &newAcl) != ERROR_SUCCESS) return false;
+    std::wstring wpath(path.begin(), path.end());
+    DWORD ret = SetNamedSecurityInfoW(
+        const_cast<LPWSTR>(wpath.c_str()), SE_FILE_OBJECT,
+        DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+        nullptr, nullptr, newAcl, nullptr);
+    LocalFree(newAcl);
+    return ret == ERROR_SUCCESS;
+}
 
 TEST_CASE("checkIdentityFilePermissions: non-existent path does not crash")
 {
     ntm::platform::checkIdentityFilePermissions(
-        "C:\\nonexistent\\identity.key", false, false);
-    // No assertion — just must not throw or crash.
+        "C:\\nonexistent\\ntm_no_such_file_83749.key", false, false);
+    // Must not throw or crash regardless of missing file.
 }
 
-TEST_CASE("checkIdentityFilePermissions: daemon+verbose flags do not crash")
+TEST_CASE("checkIdentityFilePermissions: file with Everyone-Read triggers warning")
 {
-    ntm::platform::checkIdentityFilePermissions(
-        "C:\\some\\path\\id.key", true, true);
+    std::string path = makeTempFile();
+    if (path.empty()) return; // skip if temp dir unavailable (some CI)
+
+    bool acl_ok = setEveryoneRead(path);
+    if (!acl_ok) {
+        DeleteFileA(path.c_str());
+        return; // skip if no privilege to modify DACL
+    }
+
+    // Capture stderr to verify the warning is emitted.
+    std::ostringstream captured;
+    std::streambuf *saved = std::cerr.rdbuf(captured.rdbuf());
+    ntm::platform::checkIdentityFilePermissions(path, false, false);
+    std::cerr.rdbuf(saved);
+    DeleteFileA(path.c_str());
+
+    REQUIRE(captured.str().find("WARNING") != std::string::npos);
+}
+
+TEST_CASE("checkIdentityFilePermissions: file readable only by current user is silent")
+{
+    std::string path = makeTempFile();
+    if (path.empty()) return;
+
+    bool acl_ok = setCurrentUserOnly(path);
+    if (!acl_ok) {
+        DeleteFileA(path.c_str());
+        return;
+    }
+
+    std::ostringstream captured;
+    std::streambuf *saved = std::cerr.rdbuf(captured.rdbuf());
+    ntm::platform::checkIdentityFilePermissions(path, false, false);
+    std::cerr.rdbuf(saved);
+    DeleteFileA(path.c_str());
+
+    REQUIRE(captured.str().find("WARNING") == std::string::npos);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
