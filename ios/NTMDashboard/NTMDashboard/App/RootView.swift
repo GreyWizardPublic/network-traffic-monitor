@@ -3,6 +3,7 @@ import SwiftUI
 struct RootView: View {
     @Environment(DashboardViewModel.self) private var dashboardVM
     @Environment(AuthViewModel.self) private var authVM
+    @Environment(AdminViewModel.self) private var adminVM
     @Environment(\.horizontalSizeClass) private var sizeClass
 
     @SceneStorage("sidebarSelection") private var selectionRaw = AppDestination.overview.rawValue
@@ -36,6 +37,9 @@ struct RootView: View {
         TabView {
             NavigationStack { DashboardView() }
                 .tabItem { Label("Dashboard", systemImage: "chart.bar.fill") }
+            NavigationStack { AdminRootView() }
+                .tabItem { Label("Admin", systemImage: "shield.fill") }
+                .environment(adminVM)
             NavigationStack { SettingsView() }
                 .tabItem { Label("Settings", systemImage: "gear") }
         }
@@ -62,11 +66,8 @@ struct RootView: View {
             case .lan:
                 NavigationStack { LanDevicesView() }
             case .admin:
-                ContentUnavailableView(
-                    "Admin",
-                    systemImage: "shield.fill",
-                    description: Text("Coming in a future update")
-                )
+                NavigationStack { AdminRootView() }
+                    .environment(adminVM)
             }
         }
     }
