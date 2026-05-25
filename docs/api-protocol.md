@@ -106,6 +106,7 @@ software version (`server_version`).
 
 | Version | Change |
 |---|---|
+| 8 | Added `GET /api/update/download_sig` — download ML-DSA-65 signature file for the client binary. Added `sig_size` field to `/api/update/check` response. Added client push endpoints `GET /admin/client/nonce` and `POST /admin/client/push` — push signed client binaries into `update_dir` via ML-DSA-65 authenticated upload (ntm-server 1.19.0, ntm-client 1.15.0). |
 | 7 | Added auto-update endpoints: `GET /api/update/check`, `GET /api/update/download`, `POST /api/admin/update/scan`, `POST /api/admin/update/force`. Added `client_id` and `platform` fields to each `client_health` entry. Added `update_manifest` array to `/api/summary`. Added admin session endpoints `GET /api/admin/monitors` (ntm-server 1.12.0). |
 | 6 | Added Internet/Local traffic split: `entities_internet`, `truncated_internet`, `entities_local`, `truncated_local`, `local_summary` to `/api/summary`. Added `GET /api/admin/monitors`, `POST /api/admin/demo`. Admin session token support (30 min TTL) for legacy password mode. NTMDashboard 1.3.0, ntm-server 1.11.0. |
 | 5 | Added `POST /api/demo/begin` — unauthenticated demo session endpoint on the main web server port. Returns a short-lived `demo_…` bearer token when demo mode is enabled by the operator. `/api/summary` returns `buildDemoSummaryJson()` mock data for demo tokens. Replaces the separate port-12345 demo server for iOS clients (ntm-server 1.10.0, NTMDashboard 1.2.0). |
@@ -557,12 +558,16 @@ Check whether a newer binary is available for this client.
 ```json
 {
   "update_available": true,
-  "force":   false,
-  "version": "1.9.1",
-  "sha256":  "<64 hex>",
-  "filename": "ntm-client-linux-amd64-1.9.1"
+  "force":    false,
+  "version":  "1.15.0.0",
+  "sha256":   "<64 hex>",
+  "filename": "ntm-client-linux-amd64-1.15.0.0",
+  "sig_size": 3309
 }
 ```
+`sig_size` is the byte length of the `.sig` file for this binary (added in api_version 8).
+Clients that support ML-DSA-65 verification should use this as a sanity-check on
+the `/api/update/download_sig` response size.
 
 `force: true` is returned (and the flag is cleared) when an operator has called
 `POST /api/admin/update/force` for this client. When `force: true`, the client
@@ -615,6 +620,32 @@ binaries in the directory. Also runs automatically at server startup.
 ```
 `count` is the number of distinct platform binaries detected.
 
+### `GET /api/update/download_sig` *(api_version 8+)*
+
+Download the ML-DSA-65 signature file (`.sig`) for the current binary of the
+requested platform. The client must verify this signature over the binary bytes
+before applying the update.
+
+**Query parameters:**
+
+| Name | Required | Description |
+|---|---|---|
+| `pubkey` | yes | 64 lowercase hex chars |
+| `platform` | yes | e.g. `linux-amd64` |
+
+**Success response `200`:**
+- `Content-Type: application/octet-stream`
+- `Content-Disposition: attachment; filename="ntm-client-linux-amd64-1.15.0.0.sig"`
+- Body: raw ML-DSA-65 signature bytes (3309 bytes for ML-DSA-65)
+
+**Error responses:**
+
+| Status | Reason |
+|---|---|
+| `400` | Invalid pubkey format |
+| `401` | pubkey not in AllowedClientsStore |
+| `404` | No binary / signature for the requested platform |
+
 ### `POST /api/admin/update/force`
 
 Flag a specific client for immediate update on its next daily check. The force
@@ -643,9 +674,128 @@ to force a reinstall.
 
 ---
 
-## 13. Stability Contract
+## 13. Server Auto-Upgrade Endpoints
 
-- All fields documented in § 10–12 are **stable at `api_version: 7`**.
+These endpoints allow the Arch Linux build agent to push a new signed ntm-server
+binary directly to the live server. They are authenticated via ML-DSA-65
+challenge-response (same build key pair used for binary signing) and are only
+registered when WebAuthn is configured (`webauthn_rp_id` set).
+
+**Agents MUST NOT call these endpoints autonomously.** The push script
+(`scripts/push-upgrade.sh`) requires `--confirm` which must only be supplied
+when a human explicitly instructs the push.
+
+### `GET /admin/upgrade/nonce`
+
+Issue a single-use 5-minute nonce for the auth challenge.
+Rate-limited to 5 requests/minute per IP.
+
+**Response `200`:**
+```json
+{ "nonce": "<64 lowercase hex>", "server_version": "1.19.0.0" }
+```
+
+**Error responses:** `429` rate limit exceeded; `500` nonce generation failed.
+
+### `POST /admin/upgrade/push`
+
+Push a new signed ntm-server binary. Multipart form upload.
+Rate-limited to 1 request/minute per IP.
+
+**Form fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `version` | string | New server version, e.g. `1.19.0.0` |
+| `nonce` | string | 64-hex nonce from `/admin/upgrade/nonce` |
+| `auth_proof` | string | Base64 ML-DSA-65 signature over `nonce_bytes \|\| SHA3-256(binary)` |
+| `binary` | file | Raw server binary bytes |
+| `signature` | file | ML-DSA-65 `.sig` file for the binary |
+
+**Server-side validation:**
+1. Nonce consumed (single-use, 5-minute TTL)
+2. Auth proof verified against embedded build public key
+3. Binary ML-DSA-65 signature verified
+4. Version must be strictly newer than running version (409 if not)
+5. Binary + sig atomically replace the running binary
+6. Graceful restart scheduled (30 s drain, then `exit(0)` for systemd)
+
+**Response `200`:**
+```json
+{ "ok": true, "upgraded_to": "1.19.0.0" }
+```
+
+**Error responses:** `400` missing field / bad version; `403` auth or sig failure; `409` version not newer; `429` rate limit; `500` write failure.
+
+---
+
+## 14. Client Binary Push Endpoints *(api_version 8+)*
+
+These endpoints allow the Arch Linux build agent to push signed ntm-client
+binaries into the server's `update_dir`. Connected clients then receive them
+automatically on their next update check. Registered only when both `update_dir`
+and `webauthn_rp_id` are configured.
+
+**Agents MUST NOT call these endpoints autonomously.** The push script
+(`scripts/push-client.sh`) requires `--confirm` which must only be supplied
+when a human explicitly instructs the push.
+
+### `GET /admin/client/nonce`
+
+Issue a single-use 5-minute nonce for the auth challenge.
+Rate-limited to 5 requests/minute per IP.
+
+**Response `200`:**
+```json
+{
+  "nonce": "<64 lowercase hex>",
+  "platform_versions": {
+    "linux-amd64":   "1.15.0.0",
+    "windows-amd64": "1.15.0.0"
+  }
+}
+```
+`platform_versions` reflects what is currently in `update_dir`. An absent platform
+means no binary is present for it yet.
+
+### `POST /admin/client/push`
+
+Push a new signed ntm-client binary into `update_dir`. Multipart form upload.
+Rate-limited to 1 request/minute per IP.
+
+**Form fields:**
+
+| Field | Type | Description |
+|---|---|---|
+| `platform` | string | e.g. `linux-amd64` or `windows-amd64` |
+| `version` | string | New client version, e.g. `1.15.0.0` |
+| `nonce` | string | 64-hex nonce from `/admin/client/nonce` |
+| `auth_proof` | string | Base64 ML-DSA-65 signature over `nonce_bytes \|\| SHA3-256(binary)` |
+| `binary` | file | Raw client binary bytes |
+| `signature` | file | ML-DSA-65 `.sig` file for the binary |
+
+**Server-side validation:**
+1. Nonce consumed (single-use, 5-minute TTL)
+2. Auth proof verified against embedded build public key
+3. Platform validated (`linux-amd64` or `windows-amd64`)
+4. Version string parseable
+5. Version must be strictly newer than current in `update_dir` for this platform (409 if not)
+6. Binary ML-DSA-65 signature verified
+7. Binary + sig written atomically to `update_dir` as `ntm-client-<platform>-<version>[.exe]` + `.sig`
+8. `update_dir` housekeeping triggered (old versions and invalid files deleted)
+
+**Response `200`:**
+```json
+{ "ok": true, "platform": "linux-amd64", "version": "1.15.0.0" }
+```
+
+**Error responses:** `400` missing/invalid field; `403` auth or sig failure; `409` version not newer; `429` rate limit; `500` write failure.
+
+---
+
+## 15. Stability Contract
+
+- All fields documented in § 10–14 are **stable at `api_version: 8`**.
   No field will be removed or renamed without a version bump.
 - New **optional** fields may be added at any `api_version` without bumping;
   clients must tolerate extra fields.
@@ -659,4 +809,7 @@ to force a reinstall.
 - Servers at `api_version: 6` (ntm < 1.12.0) do not have auto-update endpoints.
   Clients with `auto_update=true` pointing at such a server will receive a 404
   on `/api/update/check` and disable further checks for that session.
+- Servers at `api_version: 7` (ntm-server < 1.19.0) do not have `/api/update/download_sig`
+  or the client push endpoints. Clients must not call `download_sig` on such servers;
+  the updater falls back to SHA-256-only verification.
 - The protocol doc is updated **before** the commit that changes either side.
