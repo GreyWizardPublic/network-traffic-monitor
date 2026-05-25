@@ -257,7 +257,7 @@ Title: [WINDOWS AGENT] <short description>   ← or [LINUX AGENT] / [SWIFT AGENT
 
 **Handoff workflow:**
 
-1. Requesting agent creates a feature branch `<my-prefix>/handoff/<desc>`, adds
+1. Requesting agent creates a feature branch `<receiving-agent-prefix>/handoff/<desc>`, adds
    any starter code or stubs, and opens a PR targeting `main`.
 2. Receiving agent picks up the PR, implements or completes the work on its own
    branch (`<my-prefix>/<desc>`), merges its own PR to `main`, then closes the
@@ -347,8 +347,8 @@ Both protocol version constants live in `src/proto_client_server.hpp`:
 
 | Constant | Current value | Protocol |
 |---|---|---|
-| `kWireProtoVersion` | `1` | Wire (data-phase line format) |
-| `kApiVersion` | `4` | HTTPS API (endpoint schemas) |
+| `kWireProtoVersion` | `2` | Wire (data-phase line format) |
+| `kApiVersion` | `7` | HTTPS API (endpoint schemas) |
 
 ### Protocol lockstep rule
 
@@ -446,7 +446,7 @@ cmake --build build-linux -j$(nproc)
 .\scripts\build-windows.ps1 -Debug            # Debug build
 .\scripts\build-windows.ps1 -RunTests         # build + run unit tests
 .\scripts\build-windows.ps1 -Clean -RunTests  # clean build + tests
-# outputs: build-windows/ntm-client-windows-amd64-<version>.exe
+# outputs: build-windows/ntm-client-windows-amd64-<MAJOR.MINOR.PATCH.REVISION>.exe
 #          build-windows/ntm-tests-windows.exe
 ```
 
