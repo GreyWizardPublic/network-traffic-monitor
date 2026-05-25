@@ -2,6 +2,9 @@
 #include "client_platform.hpp"
 #include "client_signing.hpp"
 #include "client_version.hpp"
+#ifdef _WIN32
+#  include "client_windows_service.hpp"
+#endif
 
 #include <cstdio>
 #include <iostream>
@@ -78,7 +81,14 @@ int main(int argc, char *argv[])
                          "                  [--identity PEM_PATH] [--ca CA_FILE] [--server-cert SERVER_PEM]\n"
                          "                  [--reconnect-attempts N] [--reconnect-interval SECS]\n"
                          "                  [--no-compress] [--transport tcp|websocket]\n"
+#ifdef _WIN32
+                         "                  [--service] [--version]\n"
+#endif
                          "  --daemon                  run as background daemon\n"
+#ifdef _WIN32
+                         "  --service                 run as a Windows SCM service (managed by sc/install script)\n"
+                         "  --version                 print version and exit\n"
+#endif
                          "  --verbose                 print detailed connection and authentication diagnostics\n"
                          "  --server HOST             server hostname or IP (default: 127.0.0.1)\n"
                          "  --port N                  server port (default: 5555)\n"
@@ -96,6 +106,9 @@ int main(int argc, char *argv[])
     }
 
     bool daemonMode = false;
+#ifdef _WIN32
+    bool serviceMode = false;
+#endif
     std::string host = opts.server;
     std::uint16_t port = opts.port;
     std::string identityPath = opts.identityPath;
@@ -105,6 +118,13 @@ int main(int argc, char *argv[])
     for (int i = 1; i < argc; ++i)
     {
         std::string arg(argv[i]);
+#ifdef _WIN32
+        if (arg == "--service")
+        {
+            serviceMode = true;
+            continue;
+        }
+#endif
         if (arg == "--daemon")
             daemonMode = true;
         else if (arg == "--server" && i + 1 < argc)
@@ -233,6 +253,12 @@ int main(int argc, char *argv[])
     opts.identityPath      = identityPath;
     opts.tlsCaPath         = tlsCaPath;
     opts.tlsServerCertPath = tlsServerCertPath;
+
+#ifdef _WIN32
+    if (serviceMode)
+        return ntm::service::runAsService(opts, argc, argv);
+#endif
+
     return ntm::runClient(daemonMode, opts, argv);
 }
 
