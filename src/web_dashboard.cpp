@@ -721,7 +721,7 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
                     {
                         if (isLanIP(key)) continue;  // LAN IPs matched via "@[scope]:ip" parsing
                         const std::string entity = resolver->entityFor(key);
-                        if (entity != IPRangeResolver::kUnknownEntity)
+                        if (!IPRangeResolver::isUnknownEntity(entity))
                             toAdd.push_back(entity);
                     }
                     for (auto &e : toAdd) set.insert(std::move(e));
@@ -1439,6 +1439,9 @@ tr:hover td{background:#171726}
 .flt{background:#111118;color:#666;border:1px solid #252535;padding:2px 10px;font-family:monospace;font-size:0.78em;border-radius:3px;cursor:pointer;outline:none}
 .flt.active{color:#7af;border-color:#4a4a7a;background:#0e0e14}
 .ovhd-bar{font-size:0.75em;color:#c84;margin-bottom:4px;padding:3px 6px;background:#1a1008;border-left:2px solid #c84}
+.cli-row{display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:0.82em}
+.cli-row label{color:#888}
+.cli-sel{background:#111118;color:#ccc;border:1px solid #252535;padding:2px 8px;font-family:monospace;font-size:0.82em;border-radius:3px;outline:none;min-width:160px}
 </style>
 </head>
 <body>
@@ -1455,6 +1458,13 @@ tr:hover td{background:#171726}
   Window start: <span id="win">&#8212;</span> &nbsp;|&nbsp;
   Updated: <span id="gen">&#8212;</span> &nbsp;|&nbsp;
   Auto-refresh: 30 s
+</div>
+
+<div class="cli-row">
+  <label for="clientSel">Client:</label>
+  <select id="clientSel" class="cli-sel" onchange="onClientChange()">
+    <option value="">All clients</option>
+  </select>
 </div>
 
 <div class="section">Interfaces</div>
@@ -1493,11 +1503,13 @@ async function doLogout(){
   window.location.href='/login';
 }
 const POLL_MS=30000;
+let lastSnap=null;
 let allEntities=[];
 let internetEntities=[];
 let localEntities=[];
 let overheadEntities=[];
 let filterMode='internet';
+let selClient='';
 function fmtB(b){
   if(b<1024)return b+'B';
   if(b<1048576)return(b/1024).toFixed(1)+'K';
@@ -1509,6 +1521,8 @@ function esc(s){
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 function row(cells){return'<tr>'+cells.map(c=>'<td>'+esc(c)+'</td>').join('')+'</tr>';}
+function clientName(x){return x.client||'(ip-auth)';}
+function byClient(arr){return selClient?arr.filter(x=>clientName(x)===selClient):arr;}
 function showTab(name){
   ['summary','lan'].forEach(function(t){
     document.getElementById('tab-'+t).className='tab'+(t===name?' active':'');
@@ -1523,37 +1537,75 @@ function setFilter(mode){
   renderEntities();
 }
 function renderEntities(){
-  let ents;
-  if(filterMode==='overhead') ents=overheadEntities;
-  else if(filterMode==='local') ents=localEntities;
-  else if(filterMode==='internet') ents=internetEntities;
+  let pool;
+  if(filterMode==='overhead') pool=overheadEntities;
+  else if(filterMode==='local') pool=localEntities;
+  else if(filterMode==='internet') pool=internetEntities;
   else if(filterMode==='all'){
-    ents=[...allEntities,...overheadEntities].sort(function(a,b){return b.bytes-a.bytes;});
-  }else ents=internetEntities;
+    pool=[...allEntities,...overheadEntities].sort(function(a,b){return b.bytes-a.bytes;});
+  }else pool=internetEntities;
+  const ents=byClient(pool);
   document.getElementById('entity_body').innerHTML=
-    ents.length?ents.map(x=>row([x.client||'(ip-auth)',x.iface,
+    ents.length?ents.map(x=>row([clientName(x),x.iface,
       x.src_entity,x.dst_entity,x.packets.toLocaleString(),fmtB(x.bytes)])).join('')
     :'<tr><td colspan="6" style="color:#555">No data</td></tr>';
+}
+function onClientChange(){
+  selClient=document.getElementById('clientSel').value;
+  renderAll();
+}
+function renderAll(){
+  if(!lastSnap)return;
+  const d=lastSnap;
+  const ifaces=byClient(d.interfaces||[]);
+  document.getElementById('iface_body').innerHTML=
+    ifaces.length?ifaces.map(x=>row([clientName(x),x.iface,
+      x.packets.toLocaleString(),fmtB(x.bytes)])).join('')
+    :'<tr><td colspan="4" style="color:#555">No data yet</td></tr>';
+  allEntities=d.entities||[];
+  internetEntities=d.entities_internet||allEntities;
+  localEntities=d.entities_local||[];
+  overheadEntities=d.overhead_entities||[];
+  renderEntities();
+  const lans=selClient
+    ?(d.entities_lan||[]).filter(x=>(x.reported_by||'')=== selClient)
+    :(d.entities_lan||[]);
+  document.getElementById('lan_body').innerHTML=
+    lans.length?lans.map(x=>row([x.ip,x.reported_by||'—',
+      x.out_packets.toLocaleString(),fmtB(x.out_bytes),
+      x.in_packets.toLocaleString(),fmtB(x.in_bytes)])).join('')
+    :'<tr><td colspan="6" style="color:#555">No unidentified LAN devices detected</td></tr>';
+  document.getElementById('lan_note').textContent=
+    d.truncated_lan?'Results truncated to server limit.':'';
+}
+function updateClientSel(d){
+  const sel=document.getElementById('clientSel');
+  const prev=sel.value;
+  const names=new Set();
+  (d.interfaces||[]).forEach(x=>{if(x.client)names.add(x.client);});
+  (d.entities||[]).concat(d.entities_internet||[]).forEach(x=>{if(x.client)names.add(x.client);});
+  (d.client_health||[]).forEach(x=>{if(x.client)names.add(x.client);});
+  const sorted=[...names].sort();
+  while(sel.options.length>1)sel.remove(1);
+  sorted.forEach(function(n){
+    const o=document.createElement('option');
+    o.value=n;o.textContent=n;
+    sel.appendChild(o);
+  });
+  if(sorted.includes(prev))sel.value=prev;
+  else{sel.value='';selClient='';}
 }
 async function refresh(){
   try{
     const r=await fetch('/api/summary',{cache:'no-store'});
     if(!r.ok)throw new Error('HTTP '+r.status);
     const d=await r.json();
-    const sv=d.server_version||'?';
-    document.getElementById('sver').textContent='v'+sv;
+    lastSnap=d;
+    document.getElementById('sver').textContent='v'+(d.server_version||'?');
     document.getElementById('win').textContent=fmtT(d.window_start);
     document.getElementById('gen').textContent=fmtT(d.generated_at);
-    const ifaces=d.interfaces||[];
-    document.getElementById('iface_body').innerHTML=
-      ifaces.length?ifaces.map(x=>row([x.client||'(ip-auth)',x.iface,
-        x.packets.toLocaleString(),fmtB(x.bytes)])).join('')
-      :'<tr><td colspan="4" style="color:#555">No data yet</td></tr>';
-    allEntities=d.entities||[];
-    internetEntities=d.entities_internet||allEntities;
-    localEntities=d.entities_local||[];
-    overheadEntities=d.overhead_entities||[];
-    renderEntities();
+    updateClientSel(d);
+    renderAll();
     document.getElementById('entity_note').textContent=
       (d.truncated||d.truncated_overhead||d.truncated_internet||d.truncated_local)?'Some results truncated to server limit.':'';
     const ls=d.local_summary;
@@ -1568,14 +1620,6 @@ async function refresh(){
       bar.textContent='Monitoring overhead: '+fmtB(os.bytes)+' ('+os.pct_of_total_bytes+'% of all traffic)';
       bar.style.display='';
     }else{bar.style.display='none';}
-    const lans=d.entities_lan||[];
-    document.getElementById('lan_body').innerHTML=
-      lans.length?lans.map(x=>row([x.ip,x.reported_by||'—',
-        x.out_packets.toLocaleString(),fmtB(x.out_bytes),
-        x.in_packets.toLocaleString(),fmtB(x.in_bytes)])).join('')
-      :'<tr><td colspan="6" style="color:#555">No unidentified LAN devices detected</td></tr>';
-    document.getElementById('lan_note').textContent=
-      d.truncated_lan?'Results truncated to server limit.':'';
     setS(true,'OK — '+new Date().toLocaleTimeString());
   }catch(e){setS(false,'Error: '+e.message);}
 }

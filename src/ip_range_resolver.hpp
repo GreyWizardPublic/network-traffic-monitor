@@ -63,6 +63,12 @@ public:
     static constexpr const char *kUnknownCountry = "??";
     static constexpr const char *kUnknownEntity  = "AS??";
 
+    // Returns true for "AS??" (no IP) or "AS?? <ip>" (valid IP, no ASN found).
+    static bool isUnknownEntity(const std::string &e)
+    {
+        return e.size() >= 4 && e[0]=='A' && e[1]=='S' && e[2]=='?' && e[3]=='?';
+    }
+
     struct V4Range
     {
         std::uint32_t start{0};
@@ -116,7 +122,8 @@ public:
         return std::string(r->country.data(), 2);
     }
 
-    // Returns "AS<num> <desc>" or "AS<num>" or "AS??".
+    // Returns "AS<num> <desc>", "AS<num>", or "AS?? <ip>" (valid IP, no ASN found),
+    // or "AS??" for unparseable input.
     std::string entityFor(const std::string &ip) const
     {
         IpKey k;
@@ -127,14 +134,14 @@ public:
         if (k.is_v4)
         {
             const V4Range *r = lookupV4(k.v4);
-            if (!r || r->asn == 0) return kUnknownEntity;
+            if (!r || r->asn == 0) return std::string(kUnknownEntity) + " " + ip;
             asn = r->asn;
             desc = &r->as_desc;
         }
         else
         {
             const V6Range *r = lookupV6(k.v6);
-            if (!r || r->asn == 0) return kUnknownEntity;
+            if (!r || r->asn == 0) return std::string(kUnknownEntity) + " " + ip;
             asn = r->asn;
             desc = &r->as_desc;
         }
