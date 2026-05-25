@@ -185,7 +185,7 @@ info "Server nonce: $NONCE"
 # Step 2: Build auth proof
 # ---------------------------------------------------------------------------
 info "Computing binary SHA3-256 ..."
-BINARY_HASH=$(openssl dgst -sha3-256 -binary "$BINARY" | xxd -p -c 256 | tr -d '\n')
+BINARY_HASH=$(openssl dgst -sha3-256 -binary "$BINARY" | xxd -p -c 256 | tr -d '\r\n')
 info "Binary SHA3-256: $BINARY_HASH"
 
 AUTH_MSG_FILE=$(mktemp /tmp/ntm_client_push_authmsg.XXXXXX)
@@ -203,12 +203,26 @@ openssl pkeyutl -sign \
     -rawin \
     || die "failed to sign auth message"
 
-AUTH_PROOF_B64=$(openssl base64 -in "$AUTH_PROOF_FILE" | tr -d '\n')
+# Strip both \r and \n: on MSYS2/MinGW, openssl base64 emits CRLF line endings;
+# tr -d '\n' alone leaves stray \r chars that produce invalid base64 (length mod 4 != 0).
+AUTH_PROOF_B64=$(openssl base64 -in "$AUTH_PROOF_FILE" | tr -d '\r\n')
 info "Auth proof ready (${#AUTH_PROOF_B64} b64 chars)"
 
 # ---------------------------------------------------------------------------
 # Step 3: Push binary + signature + auth proof to server
 # ---------------------------------------------------------------------------
+# On Windows/MSYS2, MinGW curl misparses POSIX paths (/c/Users/...) when a
+# ;type= suffix is appended to -F @file fields (curl error 26). Converting to
+# Windows mixed paths (C:/Users/...) via cygpath -m avoids the issue.
+# On Linux, cygpath is absent and BINARY_FOR_CURL == BINARY.
+if command -v cygpath >/dev/null 2>&1; then
+    BINARY_FOR_CURL=$(cygpath -m "$BINARY")
+    SIG_FOR_CURL=$(cygpath -m "$SIG_FILE")
+else
+    BINARY_FOR_CURL="$BINARY"
+    SIG_FOR_CURL="$SIG_FILE"
+fi
+
 info "Uploading binary and signature to $BASE_URL/admin/client/push ..."
 PUSH_RESP=$(curl --silent --show-error --fail \
     --insecure \
@@ -216,8 +230,8 @@ PUSH_RESP=$(curl --silent --show-error --fail \
     -F "version=$VERSION" \
     -F "nonce=$NONCE" \
     -F "auth_proof=$AUTH_PROOF_B64" \
-    -F "binary=@$BINARY;type=application/octet-stream" \
-    -F "signature=@$SIG_FILE;type=application/octet-stream" \
+    -F "binary=@$BINARY_FOR_CURL;type=application/octet-stream" \
+    -F "signature=@$SIG_FOR_CURL;type=application/octet-stream" \
     "$BASE_URL/admin/client/push") \
     || die "server rejected the push (see server logs for details)"
 
