@@ -153,10 +153,13 @@ if(WIN32)
         tests/test_client_http_util.cpp     # pure logic, no POSIX deps — shared with Linux suite
         tests/test_client_websocket.cpp     # pure logic, no POSIX deps — shared with Linux suite
         tests/test_client_config.cpp        # pure logic, no POSIX deps — shared with Linux suite
+        tests/test_alpn.cpp                 # pure logic, no POSIX deps — shared with Linux suite
+        tests/test_zlib_stream.cpp          # uses zlib_stream.hpp → miniz on Windows
         tests/test_client_signing.cpp
         tests/test_client_push.cpp
         src/client_core.cpp
         src/client_windows.cpp
+        src/third_party/miniz/miniz.c       # required by zlib_stream.hpp on Windows
     )
     target_include_directories(ntm-tests-windows PRIVATE src tests "${NPCAP_SDK}/Include")
     target_link_libraries(ntm-tests-windows
@@ -170,6 +173,7 @@ if(WIN32)
             Threads::Threads
     )
     target_compile_definitions(ntm-tests-windows PRIVATE HAVE_REMOTE)
+    target_compile_options(ntm-tests-windows PRIVATE -Wall -Wextra -Wpedantic)
     target_link_options(ntm-tests-windows PRIVATE
         -static
         -static-libgcc

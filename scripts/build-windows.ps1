@@ -57,6 +57,12 @@ if ($Clean -and (Test-Path $BuildDir)) {
     Remove-Item -Recurse -Force $BuildDir
 }
 
+# ── Stale binary cleanup (CLAUDE.md § "Stale binary cleanup") ─────────────────
+# Because the version is baked into the filename, a version bump leaves old
+# binaries behind.  Remove them before configure so the wrong file is never
+# deployed by mistake.
+Remove-Item "$BuildDir\ntm-client-windows-amd64-*.exe" -ErrorAction SilentlyContinue
+
 # ── Configure ─────────────────────────────────────────────────────────────────
 Write-Host "[configure] Running cmake..." -ForegroundColor Yellow
 cmake -B $BuildDir -G Ninja `
@@ -88,7 +94,11 @@ if ($RunTests) {
         Write-Host "ERROR: test binary not found at $testExe" -ForegroundColor Red
         exit 1
     }
-    & $testExe
+    # Redirect stderr to stdout before passing to Write-Host so PowerShell does
+    # not wrap native-exe stderr lines as NativeCommandError objects, which
+    # would set $? = $false and trigger $ErrorActionPreference = "Stop" even
+    # when the test binary actually exits 0 (the false-positive bug).
+    & $testExe 2>&1 | Write-Host
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ERROR: tests failed (exit $LASTEXITCODE)" -ForegroundColor Red
         exit $LASTEXITCODE

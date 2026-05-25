@@ -487,7 +487,12 @@ port                 = 5555
 identity             = C:\ProgramData\ntmclient\client_private.pem
 server_cert          = C:\ProgramData\ntmclient\server_cert.pem
 send_buffer_bytes    = 524288
+transport            = tcp
 ```
+
+| Key | Values | Default | Notes |
+|-----|--------|---------|-------|
+| `transport` | `tcp` \| `websocket` (alias `ws`) | `tcp` | Use `websocket` when a firewall or proxy blocks raw TLS on port 5555. See [`docs/wire-protocol.md`](docs/wire-protocol.md) for transport details. |
 
 > Both `C:\path\to\file` and `C:/path/to/file` are accepted.
 
@@ -700,17 +705,16 @@ automatically.
 ## How it works on Windows
 
 1. Same 23-hour check cycle against `/api/update/check`.
-2. Download written to `.exe.pending` in the binary directory (located via `GetModuleFileName`).
+2. Download written to `ntm-client-pending.exe` in the binary directory (located via
+   `GetModuleFileName`).
 3. SHA-256 verification identical to Linux; failure aborts and deletes the pending file.
 4. `MoveFile` renames the running binary to `.exe.old`, then renames the pending file to
    `ntm-client.exe`.
 5. The client calls `ExitProcess(0)`. Task Scheduler detects the exit and relaunches the
    process within approximately one minute with the new binary.
 
-On startup, any stale `.exe.old` file from a previous update is deleted automatically.
-
-Because the pending file and the running binary are always in the same directory (same
-filesystem), the rename operations are atomic and never require a cross-device copy.
+On startup, any stale `ntm-client-pending.exe` or `.exe.old` file from a previous update
+is deleted automatically.
 
 ## Install path and permissions
 
@@ -738,6 +742,17 @@ icacls "C:\ProgramData\ntm\bin" /grant "Administrators:(OI)(CI)F"
 
 Update the Task Scheduler task action to reference the new path.
 
+> **WARNING — `C:\Program Files\` is incompatible with auto-update for non-Administrator
+> service accounts.** Windows restricts writes to `C:\Program Files\` to Administrators.
+> The auto-update rename requires the service account to have write access to the binary
+> directory. If you install there and run as a non-admin account, updates will silently
+> fail with `MoveFile failed`. Use `C:\ProgramData\ntm\bin\` or a dedicated service
+> account with explicit write rights on the install directory.
+>
+> A hardened 4-directory install layout with full ACL recommendations (including support
+> for `NT SERVICE\ntm-client` virtual accounts) is documented in
+> [Section 11: Hardened Windows Install Layout](#11-hardened-windows-install-layout).
+
 See also:
 - Linux security hardening: [Section 10](#10-linux-security-hardening-checklist)
 - Windows security hardening: [Section 9](#9-windows-security-hardening-checklist)
@@ -754,7 +769,7 @@ Sign the binary before placing it in the server's `update_dir`:
 ```powershell
 signtool sign /tr http://timestamp.digicert.com /td sha256 /fd sha256 `
     /n "Your Organization Name" `
-    ntm-client-windows-amd64-1.9.0.exe
+    ntm-client-windows-amd64-1.14.0.exe
 ```
 
 ## Troubleshooting auto-update
