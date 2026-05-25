@@ -9,6 +9,9 @@ struct IPPacket {
     let dstIP: String
     let totalBytes: Int        // full IP packet size — used as 'bytes' field in D-line
     let ihlBytes: Int          // IPv4 IHL in bytes (0 for IPv6)
+    // Byte offset of the transport-layer header within the original packet Data.
+    // For IPv4: same as ihlBytes. For IPv6: 40 + any extension headers.
+    let transportOffset: Int
     // UDP port fields; zero for non-UDP packets
     let srcPort: UInt16
     let dstPort: UInt16
@@ -63,7 +66,7 @@ struct IPPacket {
         }
 
         return IPPacket(version: 4, proto: proto, srcIP: srcIP, dstIP: dstIP,
-                        totalBytes: totalLen, ihlBytes: ihl,
+                        totalBytes: totalLen, ihlBytes: ihl, transportOffset: ihl,
                         srcPort: srcPort, dstPort: dstPort,
                         udpPayloadRange: udpPayloadRange)
     }
@@ -82,31 +85,62 @@ struct IPPacket {
         let srcIP = formatIPv6(b, offset: 8)
         let dstIP = formatIPv6(b, offset: 24)
 
+        // Walk RFC 8200 extension headers to reach the transport-layer protocol.
+        let (transport, tOff) = walkIPv6ExtHeaders(b, nextHeader: nextHeader, offset: 40)
+
         var srcPort: UInt16 = 0
         var dstPort: UInt16 = 0
         var udpPayloadRange: Range<Int> = 0..<0
 
-        // Simple: no extension header handling — treat nextHeader directly as transport
-        if nextHeader == protoUDP, b.count >= 48 {
-            srcPort = UInt16(b[40]) << 8 | UInt16(b[41])
-            dstPort = UInt16(b[42]) << 8 | UInt16(b[43])
-            let udpLen       = Int(UInt16(b[44]) << 8 | UInt16(b[45]))
-            let payloadStart = 48
+        if transport == protoUDP, b.count >= tOff + 8 {
+            srcPort = UInt16(b[tOff])     << 8 | UInt16(b[tOff + 1])
+            dstPort = UInt16(b[tOff + 2]) << 8 | UInt16(b[tOff + 3])
+            let udpLen       = Int(UInt16(b[tOff + 4]) << 8 | UInt16(b[tOff + 5]))
+            let payloadStart = tOff + 8
             let payloadEnd   = min(payloadStart + max(0, udpLen - 8), b.count)
             if payloadStart < payloadEnd { udpPayloadRange = payloadStart..<payloadEnd }
         }
 
-        return IPPacket(version: 6, proto: nextHeader, srcIP: srcIP, dstIP: dstIP,
-                        totalBytes: totalLen, ihlBytes: 0,
+        return IPPacket(version: 6, proto: transport, srcIP: srcIP, dstIP: dstIP,
+                        totalBytes: totalLen, ihlBytes: 0, transportOffset: tOff,
                         srcPort: srcPort, dstPort: dstPort,
                         udpPayloadRange: udpPayloadRange)
     }
 
     private static func formatIPv6(_ b: [UInt8], offset: Int) -> String {
-        (0..<8).map { i -> String in
-            let w = UInt16(b[offset + i * 2]) << 8 | UInt16(b[offset + i * 2 + 1])
-            return String(w, radix: 16)
-        }.joined(separator: ":")
+        var addr = in6_addr()
+        withUnsafeMutableBytes(of: &addr) { dst in
+            for i in 0..<16 { dst[i] = b[offset + i] }
+        }
+        var buf = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
+        return withUnsafePointer(to: &addr) { ptr in
+            inet_ntop(AF_INET6, ptr, &buf, socklen_t(INET6_ADDRSTRLEN))
+            return String(cString: buf)
+        }
+    }
+
+    // Walk RFC 8200 §4 extension headers and return (transport protocol, transport offset).
+    // Handled extension header types: Hop-by-Hop (0), Routing (43), Fragment (44),
+    // Destination Options (60). Stops at the first unrecognised type.
+    private static func walkIPv6ExtHeaders(_ b: [UInt8], nextHeader: UInt8,
+                                           offset: Int) -> (UInt8, Int) {
+        var nh  = nextHeader
+        var off = offset
+        while true {
+            switch nh {
+            case 0, 43, 60:     // Hop-by-Hop / Routing / Dest Options: variable length
+                guard b.count > off + 1 else { return (nh, off) }
+                let extLen = (Int(b[off + 1]) + 1) * 8
+                nh  = b[off]
+                off += extLen
+            case 44:            // Fragment header: fixed 8 bytes
+                guard b.count > off else { return (nh, off) }
+                nh  = b[off]
+                off += 8
+            default:            // Transport-layer protocol or unrecognised extension
+                return (nh, off)
+            }
+        }
     }
 }
 
@@ -135,7 +169,7 @@ extension IPPacket {
     func parseTCP(in data: Data) -> TCPHeader? {
         guard proto == 6 else { return nil }
         let b = Array(data)
-        let t = version == 4 ? ihlBytes : 40  // IPv6 fixed header is 40 bytes
+        let t = transportOffset
         guard b.count >= t + 20 else { return nil }
 
         let srcPort  = UInt16(b[t])     << 8 | UInt16(b[t +  1])

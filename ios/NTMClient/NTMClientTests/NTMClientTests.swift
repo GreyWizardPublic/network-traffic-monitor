@@ -352,8 +352,8 @@ final class IPPacketParseTests: XCTestCase {
 
         XCTAssertEqual(p.version, 6)
         XCTAssertEqual(p.proto, 6)      // TCP
-        XCTAssertEqual(p.srcIP, "2001:db8:0:0:0:0:0:1")
-        XCTAssertEqual(p.dstIP, "2001:4860:4860:0:0:0:0:8888")
+        XCTAssertEqual(p.srcIP, "2001:db8::1")            // inet_ntop canonical form
+        XCTAssertEqual(p.dstIP, "2001:4860:4860::8888")   // inet_ntop canonical form
         XCTAssertEqual(p.totalBytes, pkt.count)
         XCTAssertEqual(p.ihlBytes, 0)   // IPv6 has no IHL field
     }
@@ -571,8 +571,8 @@ final class PacketBuilderTests: XCTestCase {
                              dstIP: "2001:db8:0:0:0:0:0:2", dstPort: 443,
                              seq: 11, ack: 22, flags: 0x02, window: 4096))
         let p = try XCTUnwrap(IPPacket.parse(pkt, af: AF_INET6))
-        XCTAssertEqual(p.srcIP, "2001:db8:0:0:0:0:0:1")
-        XCTAssertEqual(p.dstIP, "2001:db8:0:0:0:0:0:2")
+        XCTAssertEqual(p.srcIP, "2001:db8::1")   // inet_ntop canonical form
+        XCTAssertEqual(p.dstIP, "2001:db8::2")   // inet_ntop canonical form
         XCTAssertEqual(p.proto, 6)
     }
 
@@ -708,5 +708,69 @@ final class FlowAggregatorTests: XCTestCase {
         agg.observe(makePacket(src: "5.6.7.8", dst: "1.2.3.4", bytes: 60))
         let (_, count) = agg.drain()
         XCTAssertEqual(count, 2, "src→dst and dst→src are distinct flows")
+    }
+}
+
+// MARK: - IPv6 canonical formatting (3.2) and extension header walking (3.1)
+
+final class IPv6CorrectnessTests: XCTestCase {
+
+    // inet_ntop canonical form: consecutive all-zero groups compressed with ::
+    func testIPv6AddressCanonicalCompression() throws {
+        let pkt = try XCTUnwrap(
+            buildTCPv6Packet(srcIP: "2001:db8:0:0:0:0:0:1", srcPort: 80,
+                             dstIP: "2001:db8:0:0:0:0:0:2", dstPort: 443,
+                             seq: 0, ack: 0, flags: 0x02, window: 1024))
+        let p = try XCTUnwrap(IPPacket.parse(pkt, af: AF_INET6))
+        XCTAssertEqual(p.srcIP, "2001:db8::1", "formatIPv6 must produce canonical inet_ntop form")
+        XCTAssertEqual(p.dstIP, "2001:db8::2", "formatIPv6 must produce canonical inet_ntop form")
+    }
+
+    func testIPv6LoopbackCanonical() throws {
+        let pkt = try XCTUnwrap(
+            buildTCPv6Packet(srcIP: "0:0:0:0:0:0:0:1", srcPort: 80,
+                             dstIP: "0:0:0:0:0:0:0:1", dstPort: 443,
+                             seq: 0, ack: 0, flags: 0x02, window: 1024))
+        let p = try XCTUnwrap(IPPacket.parse(pkt, af: AF_INET6))
+        XCTAssertEqual(p.srcIP, "::1")
+    }
+
+    // Packet with Hop-by-Hop extension header (next header 0) before UDP.
+    // Parser must walk past it and report proto=17, not proto=0.
+    func testIPv6HopByHopExtensionHeaderWalked() throws {
+        // IPv6 fixed header (40 B) + HbH ext (8 B) + UDP header (8 B) + payload (4 B)
+        var pkt = [UInt8](repeating: 0, count: 60)
+        // IPv6 header
+        pkt[0]  = 0x60                  // version=6
+        pkt[4]  = 0                     // payload length high
+        pkt[5]  = 20                    // payload length low: HbH(8) + UDP(8) + data(4) = 20
+        pkt[6]  = 0                     // next header: Hop-by-Hop (0)
+        pkt[7]  = 64                    // hop limit
+        // src: 2001:db8::1
+        pkt[8]  = 0x20; pkt[9]  = 0x01
+        pkt[10] = 0x0d; pkt[11] = 0xb8
+        // remaining src bytes zero
+        pkt[23] = 0x01
+        // dst: 2001:db8::2
+        pkt[24] = 0x20; pkt[25] = 0x01
+        pkt[26] = 0x0d; pkt[27] = 0xb8
+        pkt[39] = 0x02
+        // Hop-by-Hop extension header at offset 40
+        pkt[40] = 17                    // next header: UDP
+        pkt[41] = 0                     // hdr ext len = 0 → total 8 bytes
+        // pkt[42..47]: pad (all zero)
+        // UDP header at offset 48
+        pkt[48] = 0x04; pkt[49] = 0x00 // src port = 1024
+        pkt[50] = 0x00; pkt[51] = 0x35 // dst port = 53
+        pkt[52] = 0x00; pkt[53] = 12   // UDP length = 12 (header + 4 B payload)
+        // pkt[54..55]: checksum (zero — parser doesn't verify)
+        // UDP payload at offset 56 (4 bytes)
+        pkt[56] = 0xDE; pkt[57] = 0xAD; pkt[58] = 0xBE; pkt[59] = 0xEF
+
+        let p = try XCTUnwrap(IPPacket.parse(Data(pkt), af: AF_INET6),
+                               "Packet with Hop-by-Hop header must parse successfully")
+        XCTAssertEqual(p.proto, 17, "Protocol must be UDP (17), not the HbH next-header (0)")
+        XCTAssertEqual(p.srcPort, 1024)
+        XCTAssertEqual(p.dstPort, 53)
     }
 }

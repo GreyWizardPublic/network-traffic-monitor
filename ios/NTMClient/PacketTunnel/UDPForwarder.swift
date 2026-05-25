@@ -14,29 +14,43 @@ actor UDPForwarder {
         let dstPort: UInt16
     }
 
-    private var flows: [FlowKey: NWConnection] = [:]
+    private struct FlowEntry {
+        var conn:         NWConnection
+        var lastActivity: Date = .now
+    }
+
+    private var flows: [FlowKey: FlowEntry] = [:]
 
     // Forward a UDP payload toward dstIP:dstPort.
-    // On receipt of a reply the reply is reconstructed as a raw IPv4+UDP packet
-    // and injected back into the tunnel via packetFlow.writePackets.
     func forward(packet: IPPacket, rawPayload: Data, into packetFlow: NEPacketTunnelFlow) {
         let key = FlowKey(srcIP: packet.srcIP, srcPort: packet.srcPort,
                           dstIP: packet.dstIP, dstPort: packet.dstPort)
 
-        let conn: NWConnection
-        if let existing = flows[key], isAlive(existing) {
-            conn = existing
+        if var entry = flows[key], isAlive(entry.conn) {
+            entry.conn.send(content: rawPayload, completion: .contentProcessed { _ in })
+            entry.lastActivity = .now
+            flows[key] = entry
         } else {
-            conn = makeConnection(key: key, packetFlow: packetFlow)
-            flows[key] = conn
+            let conn = makeConnection(key: key, packetFlow: packetFlow)
+            conn.send(content: rawPayload, completion: .contentProcessed { _ in })
+            flows[key] = FlowEntry(conn: conn)
         }
+    }
 
-        conn.send(content: rawPayload, completion: .contentProcessed { _ in })
+    // Remove flows idle for more than idleSecs seconds.
+    // Called periodically by PacketTunnelProvider (every ~30 s).
+    func sweep(idleSecs: TimeInterval = 60) {
+        let cutoff = Date.now.addingTimeInterval(-idleSecs)
+        let stale = flows.filter { $0.value.lastActivity < cutoff }
+        for key in stale.keys {
+            flows[key]?.conn.cancel()
+            flows.removeValue(forKey: key)
+        }
     }
 
     // Cancel all open flows (call from stopTunnel).
     func cancelAll() {
-        flows.values.forEach { $0.cancel() }
+        flows.values.forEach { $0.conn.cancel() }
         flows.removeAll()
     }
 
@@ -63,8 +77,6 @@ actor UDPForwarder {
     private func receiveLoop(conn: NWConnection, key: FlowKey, packetFlow: NEPacketTunnelFlow) {
         conn.receive(minimumIncompleteLength: 1, maximumLength: 65535) { [weak self] data, _, isComplete, error in
             if let data, !data.isEmpty {
-                // Build a reply packet: src = remote server, dst = original sender.
-                // Detect IP version from the address format (IPv6 contains ":").
                 let isIPv6 = key.dstIP.contains(":")
                 let reply: Data?
                 let af: Int32
@@ -84,6 +96,7 @@ actor UDPForwarder {
                 if let reply {
                     packetFlow.writePackets([reply], withProtocols: [NSNumber(value: af)])
                 }
+                Task { await self?.touchFlow(key: key) }
             }
 
             if !isComplete, error == nil {
@@ -92,6 +105,10 @@ actor UDPForwarder {
                 Task { await self?.removeFlow(key: key) }
             }
         }
+    }
+
+    private func touchFlow(key: FlowKey) {
+        flows[key]?.lastActivity = .now
     }
 
     private func removeFlow(key: FlowKey) {

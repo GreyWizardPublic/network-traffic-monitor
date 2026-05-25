@@ -18,6 +18,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var tcpRelay      = TCPRelay()
     private var wireTask:       Task<Void, Never>?
     private var aggTask:        Task<Void, Never>?
+    private var gcTask:         Task<Void, Never>?
+    private var pathMonitor:    NWPathMonitor?
     private var isRunning      = false
 
     // Packet and drop counters — best-effort, benign races acceptable.
@@ -68,7 +70,15 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     await self?.aggFlushLoop()
                 }
 
-                // 7. Start the packet read loop.
+                // 7. Periodic GC for idle UDP/TCP flows (every 30 s).
+                gcTask = Task { [weak self] in
+                    await self?.gcLoop()
+                }
+
+                // 8. Re-announce local addresses when the network path changes.
+                self.startPathMonitor()
+
+                // 9. Start the packet read loop.
                 readPackets()
 
             } catch {
@@ -82,6 +92,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         isRunning = false
         wireTask?.cancel(); wireTask = nil
         aggTask?.cancel();  aggTask  = nil
+        gcTask?.cancel();   gcTask   = nil
+        pathMonitor?.cancel(); pathMonitor = nil
         Task {
             await wireClient.disconnect()
             await udpForwarder.cancelAll()
@@ -136,6 +148,34 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 }
             }
         }
+    }
+
+    // MARK: - Idle flow GC
+
+    private func gcLoop() async {
+        while !Task.isCancelled, isRunning {
+            try? await Task.sleep(for: .seconds(30))
+            guard !Task.isCancelled, isRunning else { break }
+            await udpForwarder.sweep()
+            await tcpRelay.sweep()
+        }
+    }
+
+    // MARK: - Network path monitoring (re-announce on path change)
+
+    private func startPathMonitor() {
+        let monitor = NWPathMonitor()
+        pathMonitor = monitor
+        monitor.pathUpdateHandler = { [weak self] _ in
+            guard let self, self.isRunning else { return }
+            Task {
+                try? await self.wireClient.sendLine("X null")
+                for addr in self.localAddresses() {
+                    try? await self.wireClient.sendLine("A \(addr)")
+                }
+            }
+        }
+        monitor.start(queue: .global(qos: .utility))
     }
 
     // MARK: - Wire session loop (runs for the lifetime of the tunnel)
