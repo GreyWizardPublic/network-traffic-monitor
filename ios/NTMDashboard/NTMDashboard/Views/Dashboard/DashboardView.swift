@@ -72,16 +72,24 @@ struct DashboardView: View {
                             lastUpdated: vm.lastUpdated
                         )
 
+                        // Client filter picker (when multiple clients or a client is selected)
+                        if !snap.clientHealth.isEmpty {
+                            ClientFilterPicker(clients: snap.clientHealth)
+                        }
+
                         // Adaptive grid: 1 column on compact, 2+ on regular (iPad/landscape)
+                        let ifaces = vm.filteredInterfaces ?? snap.interfaces
                         LazyVGrid(
                             columns: [GridItem(.adaptive(minimum: 340))],
                             spacing: 16
                         ) {
-                            InterfacesSection(interfaces: snap.interfaces)
+                            InterfacesSection(interfaces: ifaces)
                             EntityFlowsSection(
                                 flows: snap.entities,
                                 internetFlows: snap.entitiesInternet,
+                                truncatedInternet: snap.truncatedInternet,
                                 localFlows: snap.entitiesLocal,
+                                truncatedLocal: snap.truncatedLocal,
                                 localSummary: snap.localSummary,
                                 overheadFlows: snap.overheadEntities,
                                 overheadSummary: snap.overheadSummary
@@ -92,6 +100,17 @@ struct DashboardView: View {
                                 rejectedClients: snap.protoRejectedClients
                             )
                         }
+
+                        // Update manifest (always full width — primarily operator-visible info)
+                        if !snap.updateManifest.isEmpty {
+                            UpdateManifestSection(manifest: snap.updateManifest)
+                        }
+
+                        ServerInfoFooter(
+                            serverVersion: snap.serverVersion,
+                            windowStart: snap.windowStart,
+                            generatedAt: snap.generatedAt
+                        )
                     }
                     .padding(.horizontal)
                     .padding(.bottom)

@@ -862,6 +862,209 @@ final class DashboardViewModelApiVersionTests: XCTestCase {
     }
 }
 
+// MARK: - ClientHistory JSON decoding
+
+final class ClientHistoryDecodeTests: XCTestCase {
+
+    // Fine ring fixture from api-protocol.md §15
+    func testFineRingDecode() throws {
+        let json = """
+        {
+          "client_id":      "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
+          "bucket_seconds": 60,
+          "window_days":    7,
+          "buckets": [
+            {"t":1716480000,"in_bytes":12345,"out_bytes":67890,"in_packets":42,"out_packets":91},
+            {"t":1716480060,"in_bytes":500,  "out_bytes":2500, "in_packets":5, "out_packets":25}
+          ]
+        }
+        """
+        let h = try JSONDecoder().decode(ClientHistory.self, from: Data(json.utf8))
+        XCTAssertEqual(h.clientId, "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234")
+        XCTAssertEqual(h.bucketSeconds, 60)
+        XCTAssertEqual(h.windowDays, 7)
+        XCTAssertEqual(h.buckets.count, 2)
+
+        let b0 = h.buckets[0]
+        XCTAssertEqual(b0.t, 1716480000)
+        XCTAssertEqual(b0.inBytes, 12345)
+        XCTAssertEqual(b0.outBytes, 67890)
+        XCTAssertEqual(b0.inPackets, 42)
+        XCTAssertEqual(b0.outPackets, 91)
+        XCTAssertEqual(b0.id, b0.t)
+    }
+
+    // Coarse ring: bucket_seconds = 3600
+    func testCoarseRingBucketSeconds() throws {
+        let json = """
+        {"client_id":"aabbccdd","bucket_seconds":3600,"window_days":7,"buckets":[]}
+        """
+        let h = try JSONDecoder().decode(ClientHistory.self, from: Data(json.utf8))
+        XCTAssertEqual(h.bucketSeconds, 3600)
+        XCTAssertTrue(h.buckets.isEmpty)
+    }
+
+    // Empty buckets (no history yet for this client)
+    func testEmptyBucketsIsValid() throws {
+        let json = """
+        {"client_id":"deadbeef","bucket_seconds":60,"window_days":7,"buckets":[]}
+        """
+        let h = try JSONDecoder().decode(ClientHistory.self, from: Data(json.utf8))
+        XCTAssertTrue(h.buckets.isEmpty)
+    }
+
+    // Bucket id is the unix timestamp t
+    func testBucketIdIsTimestamp() throws {
+        let json = """
+        {"client_id":"x","bucket_seconds":60,"window_days":7,"buckets":[
+          {"t":9999,"in_bytes":1,"out_bytes":2,"in_packets":3,"out_packets":4}
+        ]}
+        """
+        let h = try JSONDecoder().decode(ClientHistory.self, from: Data(json.utf8))
+        XCTAssertEqual(h.buckets[0].id, 9999)
+    }
+}
+
+// MARK: - DashboardSnapshot new fields (api_version 6+)
+
+final class DashboardSnapshotNewFieldsTests: XCTestCase {
+
+    // truncated_internet and truncated_local default to false when absent
+    func testTruncatedInternetLocalDefaultFalse() throws {
+        let json = """
+        {"server_version":"1.11.0","window_start":0,"generated_at":0,
+         "interfaces":[],"entities":[],"overhead_entities":[]}
+        """
+        let s = try decode(json)
+        XCTAssertFalse(s.truncatedInternet, "truncated_internet absent → false")
+        XCTAssertFalse(s.truncatedLocal,    "truncated_local absent → false")
+    }
+
+    func testTruncatedInternetTrueWhenPresent() throws {
+        let json = """
+        {"server_version":"1.11.0","window_start":0,"generated_at":0,
+         "interfaces":[],"entities":[],"overhead_entities":[],"truncated_internet":true}
+        """
+        let s = try decode(json)
+        XCTAssertTrue(s.truncatedInternet)
+    }
+
+    func testTruncatedLocalTrueWhenPresent() throws {
+        let json = """
+        {"server_version":"1.11.0","window_start":0,"generated_at":0,
+         "interfaces":[],"entities":[],"overhead_entities":[],"truncated_local":true}
+        """
+        let s = try decode(json)
+        XCTAssertTrue(s.truncatedLocal)
+    }
+
+    // demo_server_enabled defaults to false when absent
+    func testDemoServerEnabledDefaultFalse() throws {
+        let json = """
+        {"server_version":"1.11.0","window_start":0,"generated_at":0,
+         "interfaces":[],"entities":[],"overhead_entities":[]}
+        """
+        let s = try decode(json)
+        XCTAssertFalse(s.demoServerEnabled)
+    }
+
+    func testDemoServerEnabledTrueWhenPresent() throws {
+        let json = """
+        {"server_version":"1.11.0","window_start":0,"generated_at":0,
+         "interfaces":[],"entities":[],"overhead_entities":[],"demo_server_enabled":true}
+        """
+        let s = try decode(json)
+        XCTAssertTrue(s.demoServerEnabled)
+    }
+
+    private func decode(_ json: String) throws -> DashboardSnapshot {
+        try JSONDecoder().decode(DashboardSnapshot.self, from: Data(json.utf8))
+    }
+}
+
+// MARK: - DashboardViewModel client filter
+
+@MainActor
+final class DashboardViewModelFilterTests: XCTestCase {
+
+    func testSelectClientSetsSelectedClientId() async {
+        let vm = DashboardViewModel(fetcher: MockSummaryFetcher(result: .success(makeSnap())))
+        await vm.refresh()
+        XCTAssertNil(vm.selectedClientId, "no client selected initially")
+        vm.selectClient("aabbccdd")
+        XCTAssertEqual(vm.selectedClientId, "aabbccdd")
+    }
+
+    func testSelectNilClearsSelection() async {
+        let vm = DashboardViewModel(fetcher: MockSummaryFetcher(result: .success(makeSnap())))
+        await vm.refresh()
+        vm.selectClient("aabbccdd")
+        vm.selectClient(nil)
+        XCTAssertNil(vm.selectedClientId)
+    }
+
+    func testFilteredInterfacesNilWhenNoClientSelected() async {
+        let vm = DashboardViewModel(fetcher: MockSummaryFetcher(result: .success(makeSnap())))
+        await vm.refresh()
+        XCTAssertNil(vm.filteredInterfaces, "no filter when no client selected")
+    }
+
+    func testFilteredInterfacesFiltersToSelectedClient() async {
+        let vm = DashboardViewModel(fetcher: MockSummaryFetcher(result: .success(makeSnap())))
+        await vm.refresh()
+        // The hex ID matches the clientId in makeSnap()
+        let hex = String(repeating: "a", count: 64)
+        vm.selectClient(hex)
+        let filtered = vm.filteredInterfaces
+        XCTAssertNotNil(filtered)
+        // All returned interfaces should belong to "home-pi"
+        XCTAssertTrue(filtered!.allSatisfy { $0.client == "home-pi" })
+    }
+
+    func testSelectSameClientIsNoOp() async {
+        let vm = DashboardViewModel(fetcher: MockSummaryFetcher(result: .success(makeSnap())))
+        await vm.refresh()
+        vm.selectClient("abc")
+        vm.selectClient("abc")  // second call — guard prevents re-entrancy
+        XCTAssertEqual(vm.selectedClientId, "abc")
+    }
+
+    private func makeSnap() -> DashboardSnapshot {
+        let hex = String(repeating: "a", count: 64)
+        let json = """
+        {"api_version":10,"server_version":"1.19.0","window_start":0,"generated_at":0,
+         "interfaces":[{"client":"home-pi","iface":"eth0","packets":100,"bytes":50000},
+                       {"client":"other-pi","iface":"eth0","packets":50,"bytes":25000}],
+         "entities":[],"overhead_entities":[],
+         "client_health":[{"client":"home-pi","client_id":"\(hex)","version":"1.0.0",
+           "pcap_recv":100,"pcap_drop":0,"pcap_drop_pct":"0.00","buf_drop":0,
+           "reported_at":0,"stale":false}]}
+        """
+        return try! JSONDecoder().decode(DashboardSnapshot.self, from: Data(json.utf8))
+    }
+}
+
+// MARK: - HistoryMode equatability
+
+final class HistoryModeTests: XCTestCase {
+
+    func testFullWindowEquality() {
+        XCTAssertEqual(HistoryMode.fullWindow, HistoryMode.fullWindow)
+    }
+
+    func testRecentEquality() {
+        XCTAssertEqual(HistoryMode.recent(minutes: 60), HistoryMode.recent(minutes: 60))
+    }
+
+    func testRecentInequalityDifferentMinutes() {
+        XCTAssertNotEqual(HistoryMode.recent(minutes: 60), HistoryMode.recent(minutes: 120))
+    }
+
+    func testRecentNotEqualToFullWindow() {
+        XCTAssertNotEqual(HistoryMode.recent(minutes: 60), HistoryMode.fullWindow)
+    }
+}
+
 // MARK: - AppDestination navigation enum
 
 final class AppDestinationTests: XCTestCase {

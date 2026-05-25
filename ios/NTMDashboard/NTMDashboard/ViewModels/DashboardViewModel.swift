@@ -11,22 +11,35 @@ final class DashboardViewModel {
     var isLoading = false
     var lastUpdated: Date?
 
+    // Per-client history state
+    var selectedClientId: String? = nil
+    var historyMode: HistoryMode = .recent(minutes: 60)
+    var clientHistory: ClientHistory? = nil
+    var isLoadingHistory = false
+    var historyError: String? = nil
+
     private var client: any SummaryFetching
+    private var historyClient: ClientHistoryClient
     private var pollingTask: Task<Void, Never>?
+    private var historyPollingTask: Task<Void, Never>?
 
     /// Production init — uses a real NTMClient backed by live ServerConfig.
     init() {
-        client = NTMClient(config: ServerConfig.load())
+        let cfg = ServerConfig.load()
+        client = NTMClient(config: cfg)
+        historyClient = ClientHistoryClient(config: cfg)
     }
 
     /// Testability init — inject a mock fetcher.
     init(fetcher: any SummaryFetching) {
         client = fetcher
+        historyClient = ClientHistoryClient(config: .default)
     }
 
     func startPolling() async {
         let cfg = ServerConfig.load()
         await client.updateConfig(cfg)
+        await historyClient.updateConfig(cfg)
         let interval = max(1, cfg.pollingIntervalSec)
         pollingTask?.cancel()
         pollingTask = Task {
@@ -53,6 +66,77 @@ final class DashboardViewModel {
         isLoading = false
     }
 
+    // MARK: - Per-client history
+
+    func selectClient(_ clientId: String?) {
+        guard clientId != selectedClientId else { return }
+        selectedClientId = clientId
+        historyPollingTask?.cancel()
+        historyPollingTask = nil
+        clientHistory = nil
+        historyError = nil
+
+        guard clientId != nil else { return }
+        historyPollingTask = Task {
+            while !Task.isCancelled {
+                await refreshHistory()
+                try? await Task.sleep(for: .seconds(60))
+            }
+        }
+    }
+
+    func setHistoryMode(_ mode: HistoryMode) {
+        guard mode != historyMode else { return }
+        historyMode = mode
+        Task { await refreshHistory() }
+    }
+
+    func refreshHistory() async {
+        guard let cid = selectedClientId else { return }
+        isLoadingHistory = true
+        historyError = nil
+        do {
+            let mode = historyMode
+            clientHistory = try await historyClient.fetchHistory(clientId: cid, mode: mode)
+        } catch {
+            historyError = error.localizedDescription
+        }
+        isLoadingHistory = false
+    }
+
+    // MARK: - Derived views for client filtering
+
+    /// Interfaces filtered to the selected client; nil means no filter applied.
+    var filteredInterfaces: [InterfaceStat]? {
+        guard let cid = selectedClientId, let snap = snapshot else { return nil }
+        let name = snap.clientHealth.first(where: { $0.id == cid })?.client
+        return name.map { n in snap.interfaces.filter { $0.client == n } }
+    }
+
+    /// Selected client's health entry, or nil if no client selected.
+    var selectedClientHealth: ClientHealth? {
+        guard let cid = selectedClientId else { return nil }
+        return snapshot?.clientHealth.first(where: { $0.id == cid })
+    }
+
+    // MARK: - Config update
+
+    func applyNewConfig(_ cfg: ServerConfig) async {
+        await client.updateConfig(cfg)
+        await historyClient.updateConfig(cfg)
+        pollingTask?.cancel()
+        await startPolling()
+    }
+
+    func stopPolling() {
+        pollingTask?.cancel()
+        pollingTask = nil
+        historyPollingTask?.cancel()
+        historyPollingTask = nil
+    }
+
+    // MARK: - Private
+
     private func checkApiVersion(_ version: Int?) {
         guard let v = version else {
             apiVersionWarning = nil
@@ -69,16 +153,5 @@ final class DashboardViewModel {
             apiVersionBlocking = false
             apiVersionWarning = nil
         }
-    }
-
-    func applyNewConfig(_ cfg: ServerConfig) async {
-        await client.updateConfig(cfg)
-        pollingTask?.cancel()
-        await startPolling()
-    }
-
-    func stopPolling() {
-        pollingTask?.cancel()
-        pollingTask = nil
     }
 }

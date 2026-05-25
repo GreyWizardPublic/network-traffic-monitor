@@ -58,17 +58,9 @@ struct RootView: View {
             case .settings:
                 NavigationStack { SettingsView() }
             case .perClient:
-                ContentUnavailableView(
-                    "Per-Client Traffic",
-                    systemImage: "person.2.fill",
-                    description: Text("Coming in a future update")
-                )
+                NavigationStack { PerClientHistoryView() }
             case .lan:
-                ContentUnavailableView(
-                    "LAN Devices",
-                    systemImage: "network",
-                    description: Text("Coming in a future update")
-                )
+                NavigationStack { LanDevicesView() }
             case .admin:
                 ContentUnavailableView(
                     "Admin",
