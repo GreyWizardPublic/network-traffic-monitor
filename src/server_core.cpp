@@ -1355,7 +1355,7 @@ static void runWireDataLoop(
                             return "@[" + localExternalIp + "]:" + ip;
                         }
                         return resolver ? resolver->entityFor(ip)
-                                       : std::string(IPRangeResolver::kUnknownEntity);
+                                       : (std::string(IPRangeResolver::kUnknownEntity) + " " + ip);
                     };
                     std::string srcEntity = entityForIp(meta.srcIp);
                     std::string dstEntity = entityForIp(meta.dstIp);
@@ -2544,7 +2544,7 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                 {
                     if (isLanIP(entry.ip)) continue;  // LAN IPs handled via "@[scope]:ip" parsing
                     const std::string entity = resolver->entityFor(entry.ip);
-                    if (entity != IPRangeResolver::kUnknownEntity)
+                    if (!IPRangeResolver::isUnknownEntity(entity))
                         serverIpSet->add(entity);
                 }
             }
