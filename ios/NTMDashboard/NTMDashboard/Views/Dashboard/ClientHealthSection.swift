@@ -35,17 +35,36 @@ struct ClientHealthSection: View {
                                 Text(client.client)
                                     .font(.subheadline).bold()
                                 wireProtoBadge(for: client)
+                                if let platform = client.platform, !platform.isEmpty {
+                                    Text(platform)
+                                        .font(.caption2)
+                                        .padding(.horizontal, 5).padding(.vertical, 2)
+                                        .background(Color.ntmBlue.opacity(0.15))
+                                        .foregroundStyle(Color.ntmBlue)
+                                        .clipShape(Capsule())
+                                }
                             }
                             Text("v\(client.version) · \(lastSeenLabel(client.reportedAt))")
                                 .font(.caption).foregroundStyle(.secondary)
+                            if let cid = client.clientId {
+                                Text(String(cid.prefix(8)))
+                                    .font(.caption2).foregroundStyle(.secondary).monospaced()
+                            }
                             aggLabel(for: client)
                         }
                         Spacer()
-                        StatBadge(
-                            label: "drop",
-                            value: client.pcapDropPct + "%",
-                            color: dropColor(client.pcapDropPct)
-                        )
+                        VStack(alignment: .trailing, spacing: 4) {
+                            StatBadge(
+                                label: "pcap",
+                                value: client.pcapDropPct + "%",
+                                color: dropColor(client.pcapDropPct)
+                            )
+                            StatBadge(
+                                label: "buf",
+                                value: client.bufDropPct + "%",
+                                color: dropColor(client.bufDropPct)
+                            )
+                        }
                     }
                     if client.id != clients.last?.id { Divider() }
                 }
