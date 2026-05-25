@@ -106,7 +106,7 @@ SIG_FILE="${BINARY}.sig"
 
 # Extract version from filename (ntm-server-linux-amd64-X.Y.Z)
 BASENAME=$(basename "$BINARY")
-VERSION=$(echo "$BASENAME" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+$') \
+VERSION=$(echo "$BASENAME" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$') \
     || die "cannot extract version from binary filename: $BASENAME"
 info "Binary: $BINARY"
 info "Signature: $SIG_FILE"
@@ -181,7 +181,7 @@ NONCE_RESP=$(curl --silent --show-error --fail \
 # Extract nonce value from JSON: {"nonce":"...","server_version":"..."}
 NONCE=$(echo "$NONCE_RESP" | grep -oE '"nonce"\s*:\s*"[0-9a-f]+"' | grep -oE '[0-9a-f]{64}') \
     || die "could not parse nonce from server response: $NONCE_RESP"
-SERVER_VER=$(echo "$NONCE_RESP" | grep -oE '"server_version"\s*:\s*"[^"]+"' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+') \
+SERVER_VER=$(echo "$NONCE_RESP" | grep -oE '"server_version"\s*:\s*"[^"]+"' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+') \
     || warn "could not parse server_version from response (version check skipped)"
 
 info "Server nonce: $NONCE"
