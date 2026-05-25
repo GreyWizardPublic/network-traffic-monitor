@@ -148,6 +148,21 @@ if(WIN32)
         target_link_libraries(ntm-client PRIVATE wintrust)
     endif()
 
+    # Configure-time key existence check — same policy as the Linux build block below.
+    # cmake is normally invoked from PowerShell on Windows (HOME may not be set);
+    # try USERPROFILE first (native Windows), then HOME (MSYS2 bash invocation).
+    if(DEFINED ENV{USERPROFILE} AND EXISTS "$ENV{USERPROFILE}/.ntm/privatebuildkey.secret")
+        # key found via USERPROFILE
+    elseif(DEFINED ENV{HOME} AND EXISTS "$ENV{HOME}/.ntm/privatebuildkey.secret")
+        # key found via HOME (MSYS2 environment)
+    else()
+        message(WARNING
+            "\n*** ntm-client signing key NOT FOUND at ~/.ntm/privatebuildkey.secret ***\n"
+            "    The build will FAIL at the POST_BUILD signing step.\n"
+            "    Run:  ./scripts/manage-build-keys.sh\n"
+            "    Then re-run cmake --build.\n")
+    endif()
+
     # POST_BUILD: sign the Windows client binary with ML-DSA-65.
     add_custom_command(TARGET ntm-client POST_BUILD
         COMMAND "${CMAKE_SOURCE_DIR}/scripts/sign-client.sh"
