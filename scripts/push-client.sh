@@ -203,7 +203,9 @@ openssl pkeyutl -sign \
     -rawin \
     || die "failed to sign auth message"
 
-AUTH_PROOF_B64=$(openssl base64 -in "$AUTH_PROOF_FILE" | tr -d '\n')
+# Strip both \r and \n: on MSYS2/MinGW, openssl base64 emits CRLF line endings;
+# tr -d '\n' alone leaves stray \r chars that produce invalid base64 (length mod 4 != 0).
+AUTH_PROOF_B64=$(openssl base64 -in "$AUTH_PROOF_FILE" | tr -d '\r\n')
 info "Auth proof ready (${#AUTH_PROOF_B64} b64 chars)"
 
 # ---------------------------------------------------------------------------
