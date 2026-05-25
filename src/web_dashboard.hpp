@@ -71,6 +71,15 @@ struct WebConfig
     // Null = overhead classification disabled (all flows treated as regular).
     std::shared_ptr<MonitoringIpSet> server_ips;
     std::shared_ptr<MonitoringIpSet> dashboard_ips;
+
+    // IP-to-ASN resolver, for resolving non-LAN server IPs to their entity
+    // strings at summary time.  Non-LAN server IPs (public IPs on cloud hosts)
+    // are stored as ASN entity strings in entity flows, not raw IPs, so
+    // isInfraEndpoint() must also check entity strings to detect monitoring
+    // overhead from cloud-hosted servers.
+    // Stored as shared_ptr<void> to avoid including ip_range_resolver.hpp here.
+    // Actually: ntm::IPDataUpdater*  (non-owning; outlived by the server loop).
+    std::shared_ptr<void> ip_data_updater;
 };
 
 // Thin httplib::Server subclass that makes process_request() publicly accessible.
