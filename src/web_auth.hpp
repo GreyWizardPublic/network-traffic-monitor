@@ -103,6 +103,12 @@ inline bool isAuthExemptPath(const std::string &path)
     // Update endpoints authenticate via a pubkey query parameter, not a session.
     if (path == "/api/update/check")                             return true;
     if (path == "/api/update/download")                          return true;
+    if (path == "/api/update/download_sig")                      return true;
+    // Upgrade/push endpoints authenticate via ML-DSA-65 auth proof, not a session.
+    if (path == "/admin/upgrade/nonce")                          return true;
+    if (path == "/admin/upgrade/push")                           return true;
+    if (path == "/admin/client/nonce")                           return true;
+    if (path == "/admin/client/push")                            return true;
     return false;
 }
 
