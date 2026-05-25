@@ -8,6 +8,7 @@
 #include "server_version.hpp"
 #include "server_upgrade.hpp"
 #include "server_signing.hpp"
+#include "ip_range_resolver.hpp"   // IPDataUpdater::get() for overhead entity resolution
 
 #include <algorithm>
 #include <array>
@@ -600,7 +601,8 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
                                     const std::unordered_map<std::string, std::string> &nicknames,
                                     const std::shared_ptr<ClientRegistry> &registry,
                                     const std::shared_ptr<MonitoringIpSet> &serverIps,
-                                    const std::shared_ptr<MonitoringIpSet> &dashboardIps)
+                                    const std::shared_ptr<MonitoringIpSet> &dashboardIps,
+                                    const std::shared_ptr<void> &ipDataUpdater)
 {
     TrafficStats::InterfaceTotals totals;
     TrafficStats::InterfaceFlows flows;
@@ -609,8 +611,42 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
     TrafficStats::TimePoint windowStart;
     stats.snapshot(totals, flows, countryFlows, entityFlows, &windowStart);
 
-    const auto serverIpSnap   = serverIps   ? serverIps->ipSet()   : std::unordered_set<std::string>{};
-    const auto dashboardIpSnap = dashboardIps ? dashboardIps->ipSet() : std::unordered_set<std::string>{};
+    // Raw IP sets from the monitoring IpSets.  For a LAN-hosted server the raw
+    // IPs suffice: entity flows store LAN IPs as "@[scope]:lanIp" and we extract
+    // the lanIp part for comparison.  For a cloud-hosted server the non-LAN IPs
+    // are resolved to ASN entity strings at ingest time, so raw-IP matching fails.
+    // We augment both sets with the entity strings for non-LAN IPs by resolving
+    // them via the current IPDataUpdater resolver at query time.
+    auto serverIpSnap   = serverIps   ? serverIps->ipSet()   : std::unordered_set<std::string>{};
+    auto dashboardIpSnap = dashboardIps ? dashboardIps->ipSet() : std::unordered_set<std::string>{};
+
+    {
+        auto *updPtr = static_cast<IPDataUpdater *>(ipDataUpdater.get());
+        if (updPtr)
+        {
+            if (auto resolver = updPtr->get())
+            {
+                // For every non-LAN raw IP in the server/dashboard sets, also
+                // insert the ASN entity string that ingest would have stored.
+                // This lets isInfraEndpoint() match cloud-server overhead flows.
+                auto addEntityStrings = [&resolver](std::unordered_set<std::string> &set)
+                {
+                    // Collect new entries separately; avoid mutating while iterating.
+                    std::vector<std::string> toAdd;
+                    for (const auto &key : set)
+                    {
+                        if (isLanIP(key)) continue;  // LAN IPs matched via "@[scope]:ip" parsing
+                        const std::string entity = resolver->entityFor(key);
+                        if (entity != IPRangeResolver::kUnknownEntity)
+                            toAdd.push_back(entity);
+                    }
+                    for (auto &e : toAdd) set.insert(std::move(e));
+                };
+                addEntityStrings(serverIpSnap);
+                addEntityStrings(dashboardIpSnap);
+            }
+        }
+    }
 
     // Display name for any stored identifier: 64-char hex pubkey → nickname (or hex);
     // raw LAN IP → "Local Devices" (main tab); ASN entity string → as-is.
@@ -647,9 +683,10 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
     // them would make every packet on the ntm-client machine (regular browsing, downloads, …)
     // appear as overhead, because the client registers its own LAN IP and all its traffic has
     // the hex clientId as one endpoint.  The wire-protocol connection is caught via the server
-    // IP check (server is always the other endpoint).  The only remaining gap is when the
-    // server is reached via an external IP whose entity string is an ASN name rather than a
-    // raw IP; that case is documented as a known limitation for cloud-hosted servers.
+    // IP check (server is always the other endpoint).
+    // For cloud-hosted servers the server's public IP is resolved to an ASN entity string at
+    // ingest time; serverIpSnap is augmented with those entity strings above (via the resolver)
+    // so the check works for both LAN and cloud deployments.
     auto isInfraEndpoint = [&](const std::string &key) -> bool {
         std::string lanIp;
         if (parseReporterScoped(key, nullptr, &lanIp))
@@ -2084,7 +2121,8 @@ void registerWebHandlers(NtmHttpServer &svr,
             }
             res.set_content(buildSummaryJson(stats, config.max_entity_lines,
                                              config.client_nicknames, config.registry,
-                                             config.server_ips, config.dashboard_ips),
+                                             config.server_ips, config.dashboard_ips,
+                                             config.ip_data_updater),
                             "application/json");
         });
 

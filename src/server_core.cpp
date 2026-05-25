@@ -2527,6 +2527,27 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                     ::freeifaddrs(ifap);
                 }
             }
+            // For cloud-hosted servers the server's own IPs are non-LAN (public).
+            // At ingest time, entityForIp() converts non-LAN IPs to ASN entity strings
+            // (e.g. "AS12345 Provider") rather than storing the raw IP.
+            // isInfraEndpoint() in buildSummaryJson then checks entity strings against
+            // serverIpSnap — which only contains raw IPs — so public server IPs never
+            // match and overhead is always reported as 0.
+            //
+            // Fix: resolve each non-LAN server IP to its entity string and add both
+            // the raw IP and the resolved entity string to serverIpSet.  MonitoringIpSet
+            // is just a string→timestamp map; entity strings are valid keys.
+            // ipDataUpdater.loadInitial() was called above, so the resolver may be ready.
+            if (auto resolver = ipDataUpdater.get())
+            {
+                for (const auto &entry : serverIpSet->snapshot())
+                {
+                    if (isLanIP(entry.ip)) continue;  // LAN IPs handled via "@[scope]:ip" parsing
+                    const std::string entity = resolver->entityFor(entry.ip);
+                    if (entity != IPRangeResolver::kUnknownEntity)
+                        serverIpSet->add(entity);
+                }
+            }
             auto dashboardIpSet = std::make_shared<MonitoringIpSet>();
             webCfg.port             = port;               // informational only
             webCfg.bind             = config.client_bind; // informational only
@@ -2540,6 +2561,10 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
             webCfg.dashboard_ips    = dashboardIpSet;
             webCfg.update_dir       = config.update_dir;
             webCfg.trusted_proxy    = config.trusted_proxy;
+            // Non-owning: ipDataUpdater is declared at the same runServer() scope
+            // and outlives all web-handler invocations (web server is stopped before
+            // ipDataUpdater.stop() is called).  No-op deleter prevents double-free.
+            webCfg.ip_data_updater  = std::shared_ptr<void>(&ipDataUpdater, [](void*) {});
 
             // ── Auto-upgrade endpoint ────────────────────────────────────────
             // Enabled only when WebAuthn is configured (upgrade endpoint is
