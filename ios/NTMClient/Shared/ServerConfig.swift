@@ -6,13 +6,17 @@ struct ServerConfig: Codable {
     var wirePort: Int       // wire-protocol TCP port, default 5555
     var pinnedCertData: Data?
     var nickname: String    // device nickname sent in registration and H lines
+    // When true the tunnel connects via wss://<host>:<wirePort>/wire instead of raw TLS.
+    // Required for servers fronted by Cloudflare or other HTTP-only proxies.
+    var useWebSocket: Bool = false
 
     static let `default` = ServerConfig(
         host: "",
         httpsPort: 8443,
         wirePort: 5555,
         pinnedCertData: nil,
-        nickname: ""
+        nickname: "",
+        useWebSocket: false
     )
 
     private static let udKey = "ntm_client_server_config"

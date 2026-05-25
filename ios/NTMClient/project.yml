@@ -51,8 +51,8 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         DEVELOPMENT_TEAM: W65LG3MSG6
-        MARKETING_VERSION: "1.2.0"
-        CURRENT_PROJECT_VERSION: "3"
+        MARKETING_VERSION: "1.2.1"
+        CURRENT_PROJECT_VERSION: "4"
       configs:
         Release:
           CODE_SIGN_STYLE: Manual
@@ -63,6 +63,8 @@ targets:
       properties:
         com.apple.developer.networking.networkextension:
           - packet-tunnel-provider
+        com.apple.developer.associated-domains:
+          - webcredentials:ntm.happyhomelives.me
     dependencies:
       - target: NTMClientPacketTunnel
         embed: true
@@ -111,8 +113,8 @@ targets:
         # sendability errors on completion handlers and NEPacketTunnelFlow captures.
         SWIFT_STRICT_CONCURRENCY: minimal
         DEVELOPMENT_TEAM: W65LG3MSG6
-        MARKETING_VERSION: "1.2.0"
-        CURRENT_PROJECT_VERSION: "3"
+        MARKETING_VERSION: "1.2.1"
+        CURRENT_PROJECT_VERSION: "4"
       configs:
         Release:
           CODE_SIGN_STYLE: Manual
