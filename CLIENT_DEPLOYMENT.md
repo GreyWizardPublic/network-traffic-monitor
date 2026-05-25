@@ -535,77 +535,113 @@ The interface list is fixed at startup; a restart is required if interfaces chan
 
 ## 8. Running as a Background Service
 
-`ntm-client.exe` does not natively register as a Windows Service. The recommended approach
-is **Task Scheduler** with the SYSTEM account.
+`ntm-client` supports native **Windows SCM (Service Control Manager)** service mode via the
+`--service` flag. This is the recommended production deployment method: it integrates with
+`sc.exe`, Event Viewer, and the auto-update restart mechanism.
 
-### Using Task Scheduler (PowerShell, run as Administrator)
+### Install (run as Administrator)
 
 ```powershell
-$action  = New-ScheduledTaskAction `
+.\scripts\install-service-windows.ps1
+```
+
+This script:
+1. Creates the hardened 4-directory layout (see [Hardened install layout](#hardened-install-layout) below).
+2. Copies the latest build from `build-windows\` to `C:\Program Files\ntm-client\ntm-client.exe`.
+3. Registers the service (`sc create ntm-client ...`).
+4. Sets failure-action restart policy (5 s / 5 s / 30 s). The auto-updater calls
+   `ExitProcess(0)` after a successful update; the SCM restart policy relaunches the service
+   with the new binary automatically.
+5. Applies hardened ACLs (see below).
+6. Starts the service.
+
+**Verify:**
+```powershell
+Get-Service ntm-client
+sc.exe query ntm-client
+```
+
+**Edit config then restart:**
+```powershell
+notepad "C:\ProgramData\ntm-client\ntm-client.conf"
+Restart-Service ntm-client
+```
+
+**Uninstall** (preserves config and identity key):
+```powershell
+.\scripts\uninstall-service-windows.ps1
+```
+
+### Manual service control
+
+```powershell
+Start-Service ntm-client
+Stop-Service  ntm-client
+Restart-Service ntm-client
+```
+
+### Hardened install layout
+
+```
+C:\Program Files\ntm-client\           ← exe (service: rename + execute rights)
+    ntm-client.exe
+    ntm-client.exe.old                 ← leftover after auto-update (cleaned on restart)
+
+C:\ProgramData\ntm-client\             ← per-machine config and state (service: read-only)
+    ntm-client.conf
+    server_cert.pem                    ← optional pinned server certificate
+    ntm-client.update-state            ← auto-update timestamp (service: write)
+
+C:\ProgramData\ntm-client\staging\     ← pending update downloads (service: full access)
+    ntm-client-pending.exe             ← in-progress download (cleaned on restart)
+
+C:\ProgramData\ntm-client\secrets\     ← Ed25519 identity key (service: read; Users: denied)
+    client_private.pem
+```
+
+| Directory | Service ACE | Why |
+|---|---|---|
+| `Program Files\ntm-client\` | `(OI)(CI)M` (modify) | `MoveFileExW` needs rename rights to swap the running binary |
+| `ProgramData\ntm-client\` | `(OI)(CI)RX` (read+execute) | Read config and certs; state file write handled per-file |
+| `ProgramData\ntm-client\staging\` | `(OI)(CI)F` (full) | Download area; no exec needed in install dir |
+| `ProgramData\ntm-client\secrets\` | `(OI)(CI)R` (read only) | Identity key must not be writable by the service itself |
+
+`BUILTIN\Users` is explicitly denied on `secrets\`. Run `icacls "C:\ProgramData\ntm-client\secrets"` to verify.
+
+### Appendix: Task Scheduler (legacy / non-service alternative)
+
+If you cannot run the install script or prefer not to use SCM service mode, you can use
+Task Scheduler with the SYSTEM account. This approach does **not** support the auto-update
+restart mechanism (the SCM restart policy is not available).
+
+```powershell
+$action = New-ScheduledTaskAction `
     -Execute  '"C:\Program Files\ntm-client\ntm-client.exe"' `
-    -Argument '--config "C:\ProgramData\ntmclient\ntm-client.conf"'
-
-$trigger = New-ScheduledTaskTrigger -AtStartup
-
-$settings = New-ScheduledTaskSettingsSet `
-    -ExecutionTimeLimit    (New-TimeSpan -Hours 0) `
-    -RestartCount          10 `
-    -RestartInterval       (New-TimeSpan -Minutes 1) `
-    -StartWhenAvailable
-
-$principal = New-ScheduledTaskPrincipal `
-    -UserId    "SYSTEM" `
-    -LogonType ServiceAccount `
-    -RunLevel  Highest
-
-Register-ScheduledTask `
-    -TaskName   "ntm-client" `
-    -Action     $action `
-    -Trigger    $trigger `
-    -Settings   $settings `
-    -Principal  $principal `
-    -Force
+    -Argument '--config "C:\ProgramData\ntm-client\ntm-client.conf"'
+$trigger   = New-ScheduledTaskTrigger -AtStartup
+$settings  = New-ScheduledTaskSettingsSet `
+    -ExecutionTimeLimit (New-TimeSpan -Hours 0) `
+    -RestartCount 10 -RestartInterval (New-TimeSpan -Minutes 1)
+$principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+Register-ScheduledTask -TaskName "ntm-client" -Action $action `
+    -Trigger $trigger -Settings $settings -Principal $principal -Force
 ```
-
-Start immediately without rebooting:
-
-```powershell
-Start-ScheduledTask -TaskName "ntm-client"
-```
-
-Check status:
-
-```powershell
-Get-ScheduledTask -TaskName "ntm-client" | Select-Object TaskName, State
-```
-
-Remove the task:
-
-```powershell
-Unregister-ScheduledTask -TaskName "ntm-client" -Confirm:$false
-```
-
-> Log output is written to **stderr**, which Task Scheduler discards by default.
-> Redirect to a file by changing the action argument to:
-> ```
-> --config "C:\ProgramData\ntmclient\ntm-client.conf" >> "C:\ProgramData\ntmclient\ntm-client.log" 2>&1
-> ```
 
 ---
 
 ## 9. Windows Security Hardening Checklist
 
 - [ ] Npcap installed (required for packet capture)
-- [ ] `ntm-client.exe` runs as SYSTEM or Administrator
+- [ ] Service installed via `install-service-windows.ps1` (hardened layout and ACLs applied)
 - [ ] TLS configured: `server_cert` or `ca` set (server rejects plain TCP)
 - [ ] Ed25519 identity configured: `identity` set and public key in server's `allowed_clients.txt`
-- [ ] `client_private.pem` ACL restricts read access to SYSTEM and Administrators only
-- [ ] Config directory `C:\ProgramData\ntmclient\` is not readable by standard users
+- [ ] `client_private.pem` placed in `C:\ProgramData\ntm-client\secrets\` — verify ACL:
+  `icacls "C:\ProgramData\ntm-client\secrets\client_private.pem"`
 - [ ] Server certificate renewed before expiry if using pinning (redeploy to each client)
-- [ ] Task Scheduler task set to restart on failure (handles network unavailability at boot)
+- [ ] Service configured to restart on failure (handled by `install-service-windows.ps1`)
 - [ ] Npcap kept up to date (security fixes are released regularly)
-- [ ] Binary installed in `C:\ProgramData\ntm\bin\` with service account ACLs (required for auto-update)
-- [ ] Binary is Authenticode code-signed (required for Windows auto-update)
+- [ ] Service installed via `install-service-windows.ps1` (sets correct ACLs for auto-update)
+- [ ] Binary Authenticode code-signing optional but recommended (see [Windows code-signing requirement](#windows-code-signing-requirement))
 - [ ] **Server firewall (v1.15.0+):** only **one** inbound TCP rule needed (port `5555`);
   the HTTPS dashboard now shares this port via TLS ALPN — remove any separate `8443` rule
 
@@ -652,7 +688,8 @@ Unregister-ScheduledTask -TaskName "ntm-client" -Confirm:$false
 
 **`--daemon` flag has no effect**
 - Daemon mode is not supported on Windows. The flag prints a warning and the process
-  continues in the foreground. Use Task Scheduler for background operation.
+  continues in the foreground. Use `--service` with the SCM install script for background
+  operation (see [Section 8](#8-running-as-a-background-service)).
 
 **`ntm-client: config: 'web_port' is deprecated since server v1.15.0`**
 - You have a `web_port = ...` line in your config file left over from a pre-v1.15.0 server.
