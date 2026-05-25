@@ -125,6 +125,27 @@ if(WIN32)
     # Needed for Npcap's wpcap.dll (load-time linked)
     target_compile_definitions(ntm-client PRIVATE HAVE_REMOTE)
 
+    # ---------------------------------------------------------------------------
+    # Optional: Authenticode verification of downloaded update binaries.
+    # Off by default. Enable with:
+    #   cmake -DNTM_REQUIRE_AUTHENTICODE=ON -DNTM_AUTHENTICODE_SUBJECT="CN=Example Inc" ...
+    # When ON, the updater refuses to apply any download whose Authenticode signature
+    # does not verify (or does not match NTM_AUTHENTICODE_SUBJECT once that check lands).
+    # ---------------------------------------------------------------------------
+    option(NTM_REQUIRE_AUTHENTICODE
+        "Verify Authenticode signature on downloaded update binaries (Windows only)" OFF)
+    if(NTM_REQUIRE_AUTHENTICODE)
+        if(NOT NTM_AUTHENTICODE_SUBJECT)
+            message(FATAL_ERROR
+                "NTM_REQUIRE_AUTHENTICODE=ON requires "
+                "-DNTM_AUTHENTICODE_SUBJECT=\"<publisher subject string>\"")
+        endif()
+        target_compile_definitions(ntm-client PRIVATE
+            NTM_REQUIRE_AUTHENTICODE
+            NTM_AUTHENTICODE_SUBJECT="${NTM_AUTHENTICODE_SUBJECT}")
+        target_link_libraries(ntm-client PRIVATE wintrust)
+    endif()
+
     # POST_BUILD: sign the Windows client binary with ML-DSA-65.
     add_custom_command(TARGET ntm-client POST_BUILD
         COMMAND "${CMAKE_SOURCE_DIR}/scripts/sign-client.sh"
