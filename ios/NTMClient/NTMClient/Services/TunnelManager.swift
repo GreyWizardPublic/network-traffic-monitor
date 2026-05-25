@@ -84,7 +84,7 @@ final class TunnelManager {
 
         let proto = NETunnelProviderProtocol()
         proto.providerBundleIdentifier = kProviderBundleID
-        proto.serverAddress            = config.host
+        proto.serverAddress            = config.wireHost ?? ""
         proto.providerConfiguration    = [
             "privateKeyData":   pkRaw.base64EncodedString(),
             "serverConfigData": configData.base64EncodedString()

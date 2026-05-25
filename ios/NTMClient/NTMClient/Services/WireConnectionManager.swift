@@ -71,6 +71,10 @@ final class WireViewModel {
             state = .failed(WireError.noKeyPair.localizedDescription)
             return
         }
+        guard let host = config.wireHost else {
+            state = .failed("Server not configured")
+            return
+        }
 
         var backoff: Double = 2
         var sessionStart: Date = .now
@@ -80,10 +84,11 @@ final class WireViewModel {
 
             do {
                 try await client.connect(
-                    host: config.host,
+                    host: host,
                     port: UInt16(config.wirePort),
                     pinnedCertData: config.pinnedCertData,
-                    privateKey: privateKey
+                    privateKey: privateKey,
+                    useWebSocket: config.useWebSocket
                 )
 
                 state = .connected
