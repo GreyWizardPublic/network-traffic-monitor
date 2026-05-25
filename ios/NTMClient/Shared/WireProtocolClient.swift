@@ -18,6 +18,7 @@ enum WireError: LocalizedError {
     case notConnected
     case connectionClosed
     case authRejected
+    case badURL
 
     var errorDescription: String? {
         switch self {
@@ -25,22 +26,30 @@ enum WireError: LocalizedError {
         case .notConnected:      return "Not connected"
         case .connectionClosed:  return "Connection closed by server"
         case .authRejected:      return "Server rejected key — confirm it is registered"
+        case .badURL:            return "Could not construct wire WebSocket URL"
         }
     }
 }
 
-// Wraps NWConnection: TLS handshake + Ed25519 auth + line-oriented send.
-// All network I/O happens via async/await; the actor serialises access.
-actor WireProtocolClient {
+// MARK: - Transport protocol
+
+// Abstracts the byte-level I/O channel: raw TLS (NWConnection) or WebSocket.
+// Both implementations are actors; the protocol is non-isolated so callers can
+// use it as `any WireTransport` without actor-hopping boilerplate.
+protocol WireTransport: AnyObject, Sendable {
+    func connect(host: String, port: UInt16, pinnedCertData: Data?) async throws
+    func send(_ data: Data) async throws
+    func receive(exactly count: Int) async throws -> Data
+    func cancel() async
+}
+
+// MARK: - NWConnection transport (raw TLS)
+
+actor NWConnectionTransport: WireTransport {
 
     private var connection: NWConnection?
 
-    // MARK: - Public API
-
-    // Connects, completes TLS, performs Ed25519 auth. Throws on any failure.
-    // The caller is responsible for supplying the private key.
-    func connect(host: String, port: UInt16, pinnedCertData: Data?,
-                 privateKey: Curve25519.Signing.PrivateKey) async throws {
+    func connect(host: String, port: UInt16, pinnedCertData: Data?) async throws {
         let endpoint = NWEndpoint.hostPort(
             host: NWEndpoint.Host(host),
             port: NWEndpoint.Port(rawValue: port)!
@@ -48,9 +57,7 @@ actor WireProtocolClient {
         let params = NWParameters(tls: makeTLSOptions(pinnedCertData: pinnedCertData))
         let conn   = NWConnection(to: endpoint, using: params)
 
-        // Wait until the connection reaches .ready (TLS handshake complete).
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            // One-shot flag: NWConnection can fire multiple terminal states.
             let done = OSAllocatedUnfairLock(initialState: false)
             conn.stateUpdateHandler = { state in
                 let alreadyDone = done.withLock { prev in
@@ -73,55 +80,10 @@ actor WireProtocolClient {
 
         conn.stateUpdateHandler = nil
         self.connection = conn
-
-        try await performAuth(conn: conn, privateKey: privateKey)
     }
 
-    // Appends a newline and sends the line to the server.
-    func sendLine(_ line: String) async throws {
+    func send(_ data: Data) async throws {
         guard let conn = connection else { throw WireError.notConnected }
-        var data = Data(line.utf8)
-        data.append(0x0A) // LF
-        try await send(data, on: conn)
-    }
-
-    // Cancels the connection. Safe to call multiple times.
-    func disconnect() {
-        connection?.cancel()
-        connection = nil
-    }
-
-    // MARK: - Auth handshake
-
-    private func performAuth(conn: NWConnection, privateKey: Curve25519.Signing.PrivateKey) async throws {
-        // Step 1: send auth version byte (v3 — capability exchange)
-        try await send(Data([kAuthVersionV3]), on: conn)
-
-        // Step 2: receive 32-byte nonce
-        let nonce = try await receive(exactly: kAuthNonceLen, from: conn)
-
-        // Step 3: sign (prefix ‖ nonce) and send pubkey + signature + capability byte
-        // Signature message format is unchanged from v2 ("NTM-AUTH-v2" || nonce).
-        var message = kAuthSignPrefix
-        message.append(nonce)
-        let signature = try privateKey.signature(for: message)
-        var frame = privateKey.publicKey.rawRepresentation  // 32 bytes
-        frame.append(contentsOf: signature)                 // 64 bytes
-        frame.append(kCapNone)                              //  1 byte — capability flags (no zlib)
-        try await send(frame, on: conn)
-
-        // Step 4: receive 1-byte result
-        let result = try await receive(exactly: 1, from: conn)
-        guard result[0] == kAuthResultOk else { throw WireError.authRejected }
-
-        // Step 5: receive 1-byte negotiated capability flags (only sent on OK in v3)
-        // We sent kCapNone so the server will echo 0x00 — no data-phase changes needed.
-        _ = try await receive(exactly: 1, from: conn)
-    }
-
-    // MARK: - NWConnection helpers
-
-    private func send(_ data: Data, on conn: NWConnection) async throws {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             conn.send(content: data, completion: .contentProcessed { error in
                 if let error { cont.resume(throwing: error) }
@@ -130,8 +92,9 @@ actor WireProtocolClient {
         }
     }
 
-    private func receive(exactly count: Int, from conn: NWConnection) async throws -> Data {
-        try await withCheckedThrowingContinuation { cont in
+    func receive(exactly count: Int) async throws -> Data {
+        guard let conn = connection else { throw WireError.notConnected }
+        return try await withCheckedThrowingContinuation { cont in
             conn.receive(minimumIncompleteLength: count, maximumLength: count) { data, _, _, error in
                 if let error {
                     cont.resume(throwing: error)
@@ -144,22 +107,19 @@ actor WireProtocolClient {
         }
     }
 
-    // MARK: - TLS options
+    func cancel() async {
+        connection?.cancel()
+        connection = nil
+    }
 
     private func makeTLSOptions(pinnedCertData: Data?) -> NWProtocolTLS.Options {
         let opts = NWProtocolTLS.Options()
 
-        // Advertise "ntm-wire" in the TLS ClientHello ALPN extension so
-        // servers with ALPN port unification route this connection to the
-        // data-ingestion handler rather than the HTTPS dashboard handler.
-        // Old servers without an ALPN callback ignore this field entirely.
         sec_protocol_options_add_tls_application_protocol(
             opts.securityProtocolOptions, kAlpnNtmWire)
 
         guard let pinnedData = pinnedCertData else { return opts }
 
-        // Custom verify: accept only if the server's leaf cert DER matches the pinned value.
-        // Mirrors CertificatePinner for URLSession — no system chain check needed.
         sec_protocol_options_set_verify_block(
             opts.securityProtocolOptions,
             { _, trust, complete in
@@ -174,5 +134,154 @@ actor WireProtocolClient {
             .global(qos: .utility)
         )
         return opts
+    }
+}
+
+// MARK: - WebSocket transport (for servers behind Cloudflare / HTTP-only proxies)
+
+// Connects to wss://<host>:<port>/wire and performs byte-stream I/O over binary
+// WebSocket frames.  Incoming frames are buffered so receive(exactly:) can serve
+// the auth handshake's byte-counted reads.
+actor WebSocketTransport: WireTransport {
+
+    private var session: URLSession?
+    private var task: URLSessionWebSocketTask?
+    private var rxBuffer = Data()
+
+    func connect(host: String, port: UInt16, pinnedCertData: Data?) async throws {
+        guard let url = URL(string: "wss://\(host):\(port)/wire") else {
+            throw WireError.badURL
+        }
+        let delegate = WebSocketPinDelegate(pinnedCertData: pinnedCertData)
+        let sess = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+        let t    = sess.webSocketTask(with: url)
+        self.session = sess
+        self.task    = t
+        t.resume()
+
+        // A ping confirms the HTTP Upgrade handshake completed successfully.
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            t.sendPing { error in
+                if let error { cont.resume(throwing: error) }
+                else         { cont.resume() }
+            }
+        }
+    }
+
+    func send(_ data: Data) async throws {
+        guard let task else { throw WireError.notConnected }
+        try await task.send(.data(data))
+    }
+
+    func receive(exactly count: Int) async throws -> Data {
+        guard let task else { throw WireError.notConnected }
+        while rxBuffer.count < count {
+            let msg = try await task.receive()
+            switch msg {
+            case .data(let d):   rxBuffer.append(d)
+            case .string(let s): rxBuffer.append(Data(s.utf8))
+            @unknown default:    throw WireError.connectionClosed
+            }
+        }
+        let result = Data(rxBuffer.prefix(count))
+        rxBuffer.removeFirst(count)
+        return result
+    }
+
+    func cancel() async {
+        task?.cancel(with: .goingAway, reason: nil)
+        session?.invalidateAndCancel()
+        task    = nil
+        session = nil
+        rxBuffer.removeAll()
+    }
+}
+
+// URLSessionDelegate that enforces cert pinning for the WebSocket connection.
+private final class WebSocketPinDelegate: NSObject, URLSessionDelegate, @unchecked Sendable {
+    let pinnedCertData: Data?
+    init(pinnedCertData: Data?) { self.pinnedCertData = pinnedCertData }
+
+    func urlSession(_ session: URLSession,
+                    didReceive challenge: URLAuthenticationChallenge,
+                    completionHandler: @escaping (URLSession.AuthChallengeDisposition,
+                                                  URLCredential?) -> Void) {
+        guard challenge.protectionSpace.authenticationMethod
+              == NSURLAuthenticationMethodServerTrust,
+              let trust = challenge.protectionSpace.serverTrust else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
+        if let pinned = pinnedCertData {
+            guard let chain = SecTrustCopyCertificateChain(trust) as? [SecCertificate],
+                  let leaf  = chain.first,
+                  (SecCertificateCopyData(leaf) as Data) == pinned else {
+                completionHandler(.cancelAuthenticationChallenge, nil)
+                return
+            }
+        }
+        completionHandler(.useCredential, URLCredential(trust: trust))
+    }
+}
+
+// MARK: - WireProtocolClient
+
+// Wraps a WireTransport: performs the Ed25519 auth handshake then exposes sendLine.
+// The transport is chosen at connect time based on the `useWebSocket` flag.
+actor WireProtocolClient {
+
+    private var transport: (any WireTransport)?
+
+    // MARK: - Public API
+
+    func connect(host: String, port: UInt16, pinnedCertData: Data?,
+                 privateKey: Curve25519.Signing.PrivateKey,
+                 useWebSocket: Bool = false) async throws {
+        let t: any WireTransport = useWebSocket
+            ? WebSocketTransport()
+            : NWConnectionTransport()
+        try await t.connect(host: host, port: port, pinnedCertData: pinnedCertData)
+        self.transport = t
+        try await performAuth(privateKey: privateKey)
+    }
+
+    func sendLine(_ line: String) async throws {
+        guard let t = transport else { throw WireError.notConnected }
+        var data = Data(line.utf8)
+        data.append(0x0A) // LF
+        try await t.send(data)
+    }
+
+    func disconnect() async {
+        await transport?.cancel()
+        transport = nil
+    }
+
+    // MARK: - Auth handshake
+
+    private func performAuth(privateKey: Curve25519.Signing.PrivateKey) async throws {
+        guard let t = transport else { throw WireError.notConnected }
+
+        // Step 1: send auth version byte (v3 — capability exchange)
+        try await t.send(Data([kAuthVersionV3]))
+
+        // Step 2: receive 32-byte nonce
+        let nonce = try await t.receive(exactly: kAuthNonceLen)
+
+        // Step 3: sign (prefix ‖ nonce) and send pubkey + signature + capability byte
+        var message = kAuthSignPrefix
+        message.append(nonce)
+        let signature = try privateKey.signature(for: message)
+        var frame = privateKey.publicKey.rawRepresentation  // 32 bytes
+        frame.append(contentsOf: signature)                 // 64 bytes
+        frame.append(kCapNone)                              //  1 byte
+        try await t.send(frame)
+
+        // Step 4: receive 1-byte result
+        let result = try await t.receive(exactly: 1)
+        guard result[0] == kAuthResultOk else { throw WireError.authRejected }
+
+        // Step 5: receive 1-byte negotiated capability flags
+        _ = try await t.receive(exactly: 1)
     }
 }

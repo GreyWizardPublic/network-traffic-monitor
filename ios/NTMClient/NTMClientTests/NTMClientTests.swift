@@ -7,10 +7,10 @@ import XCTest
 
 final class ClientVersionTests: XCTestCase {
 
-    // kClientVersion must be semantic-version X.Y.Z
+    // kClientVersion must be 4-component MAJOR.MINOR.PATCH.REVISION (per CLAUDE.md versioning)
     func testClientVersionIsSemanticVersion() {
         let parts = kClientVersion.split(separator: ".")
-        XCTAssertEqual(parts.count, 3, "kClientVersion must be X.Y.Z — got '\(kClientVersion)'")
+        XCTAssertEqual(parts.count, 4, "kClientVersion must be MAJOR.MINOR.PATCH.REVISION — got '\(kClientVersion)'")
         for part in parts {
             XCTAssertNotNil(Int(part),
                             "Each version component must be an integer — got '\(part)'")
@@ -621,5 +621,80 @@ final class ParseIPv6AddressTests: XCTestCase {
 
     func testEmptyStringReturnsNil() {
         XCTAssertNil(parseIPv6Address(""))
+    }
+}
+
+// MARK: - FlowAggregator
+
+final class FlowAggregatorTests: XCTestCase {
+
+    private func makePacket(src: String, dst: String, bytes: Int) -> IPPacket {
+        // Build a minimal IPv4 TCP packet and then construct IPPacket directly.
+        // We can't call the private init, so build a real packet and parse it.
+        let pkt = buildTCPv4Packet(srcIP: src, srcPort: 1234, dstIP: dst, dstPort: 80,
+                                    seq: 0, ack: 0, flags: 0x10, window: 1024)!
+        // Parse gives us totalBytes == pkt.count; pad to hit the requested byte count
+        // by building a packet with a payload of (bytes - 40) zeros.
+        let payload = Data(repeating: 0, count: max(0, bytes - 40))
+        let padded = buildTCPv4Packet(srcIP: src, srcPort: 1234, dstIP: dst, dstPort: 80,
+                                       seq: 0, ack: 0, flags: 0x10, window: 1024,
+                                       payload: payload)!
+        return IPPacket.parse(padded, af: AF_INET)!
+    }
+
+    func testEmptyDrainReturnsNoLines() {
+        let agg = FlowAggregator()
+        let (lines, count) = agg.drain()
+        XCTAssertTrue(lines.isEmpty)
+        XCTAssertEqual(count, 0)
+    }
+
+    func testSingleFlowProducesOneLine() {
+        let agg = FlowAggregator()
+        agg.observe(makePacket(src: "10.0.0.1", dst: "8.8.8.8", bytes: 100))
+        let (lines, count) = agg.drain()
+        XCTAssertEqual(count, 1)
+        XCTAssertEqual(lines.count, 1)
+        XCTAssertTrue(lines[0].hasPrefix("D utun 10.0.0.1 8.8.8.8 "),
+                      "D-line format mismatch: \(lines[0])")
+    }
+
+    func testSameTupleAccumulatesBytes() {
+        let agg = FlowAggregator()
+        let p1 = makePacket(src: "10.0.0.1", dst: "8.8.8.8", bytes: 60)
+        let p2 = makePacket(src: "10.0.0.1", dst: "8.8.8.8", bytes: 100)
+        agg.observe(p1)
+        agg.observe(p2)
+        let (lines, count) = agg.drain()
+        XCTAssertEqual(count, 1)
+        // bytes field is the 5th token
+        let bytes = lines[0].split(separator: " ").last.flatMap { UInt64($0) }
+        XCTAssertEqual(bytes, UInt64(p1.totalBytes + p2.totalBytes))
+    }
+
+    func testDistinctTuplesProduceSeparateLines() {
+        let agg = FlowAggregator()
+        agg.observe(makePacket(src: "10.0.0.1", dst: "8.8.8.8", bytes: 60))
+        agg.observe(makePacket(src: "10.0.0.2", dst: "8.8.8.8", bytes: 60))
+        let (lines, count) = agg.drain()
+        XCTAssertEqual(count, 2)
+        XCTAssertEqual(lines.count, 2)
+    }
+
+    func testDrainResetsAccumulator() {
+        let agg = FlowAggregator()
+        agg.observe(makePacket(src: "10.0.0.1", dst: "8.8.8.8", bytes: 60))
+        _ = agg.drain()
+        let (lines, count) = agg.drain()
+        XCTAssertTrue(lines.isEmpty)
+        XCTAssertEqual(count, 0)
+    }
+
+    func testReverseDirectionIsSeparateFlow() {
+        let agg = FlowAggregator()
+        agg.observe(makePacket(src: "1.2.3.4", dst: "5.6.7.8", bytes: 60))
+        agg.observe(makePacket(src: "5.6.7.8", dst: "1.2.3.4", bytes: 60))
+        let (_, count) = agg.drain()
+        XCTAssertEqual(count, 2, "src→dst and dst→src are distinct flows")
     }
 }
