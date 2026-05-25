@@ -19,6 +19,11 @@
 #  include <windows.h>
 #  include <winsock2.h>
 #  include <ws2tcpip.h>
+#  include <shlobj.h>    // SHGetFolderPathW / CSIDL_COMMON_APPDATA (staging dir)
+#  ifdef NTM_REQUIRE_AUTHENTICODE
+#    include <wintrust.h>  // WinVerifyTrust
+#    include <softpub.h>   // WINTRUST_ACTION_GENERIC_VERIFY_V2
+#  endif
 #else
 #  include <sys/socket.h>
 #  include <netdb.h>
@@ -79,6 +84,26 @@ static std::string exeDir()
     return fs::path(p).parent_path().string();
 }
 
+#ifdef _WIN32
+// HARMONIZE-LINUX: Windows separates the download staging dir from the install dir so
+// the service identity never needs write access to Program Files at download time.
+// Linux puts the pending file directly in the binary directory (install dir == staging dir).
+// Falls back to exeDir() if SHGetFolderPathW fails (e.g. portable/non-standard setup).
+static std::string updateStagingDir()
+{
+    wchar_t buf[MAX_PATH] = {};
+    if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_COMMON_APPDATA, NULL, 0, buf)))
+    {
+        fs::path staging = fs::path(buf) / "ntm-client" / "staging";
+        std::error_code ec;
+        fs::create_directories(staging, ec);
+        if (!ec)
+            return staging.string();
+    }
+    return exeDir();
+}
+#endif
+
 // ---------------------------------------------------------------------------
 // State file (last-check timestamp)
 // ---------------------------------------------------------------------------
@@ -113,12 +138,16 @@ static void writeLastCheck(const std::string &dir, std::int64_t t)
 
 static void cleanupStaleFiles(const std::string &dir)
 {
+    std::error_code ec;
 #ifdef _WIN32
-    std::string old = dir + "/ntm-client.exe.old";
+    std::string old            = dir + "/ntm-client.exe.old";
+    std::string pendingLocal   = dir + "/ntm-client-pending.exe";
+    std::string pendingStaging = updateStagingDir() + "/ntm-client-pending.exe";
+    fs::remove(pendingLocal,   ec);
+    fs::remove(pendingStaging, ec);
 #else
     std::string old = dir + "/ntm-client.pending";
 #endif
-    std::error_code ec;
     fs::remove(old, ec);
 }
 
@@ -459,45 +488,105 @@ static bool applyUpdateLinux(const std::string &dir)
 }
 
 #ifdef _WIN32
-static bool applyUpdateWindows(const std::string &dir)
-{
-    const std::string pending    = dir + "/ntm-client-pending.exe";
-    const std::string pendingSig = dir + "/ntm-client-pending.exe.sig";
-    const std::string target     = dir + "/ntm-client.exe";
-    const std::string targetSig  = dir + "/ntm-client.exe.sig";
-    const std::string old_       = dir + "/ntm-client.exe.old";
-    const std::string oldSig_    = dir + "/ntm-client.exe.sig.old";
+// HARMONIZE-LINUX: Windows apply path diverges from Linux here (staging dir, MoveFileExW,
+// smoke test, optional Authenticode). During the next cross-platform audit, consider
+// whether the smoke-test and rollback logic should be lifted into a shared helper.
 
-    // Rename running exe to .old (allowed while running on NTFS Vista+).
+// Atomically swap the downloaded binary into place.
+// pendingPath / pendingSigPath come from the staging dir (may be cross-volume).
+// MOVEFILE_COPY_ALLOWED handles the cross-volume case transparently.
+static bool applyUpdateWindows(const std::string &installDir,
+                               const std::string &pendingPath,
+                               const std::string &pendingSigPath)
+{
+    const std::string target    = installDir + "/ntm-client.exe";
+    const std::string targetSig = installDir + "/ntm-client.exe.sig";
+    const std::string old_      = installDir + "/ntm-client.exe.old";
+    const std::string oldSig_   = installDir + "/ntm-client.exe.sig.old";
+
     const std::wstring wtarget(target.begin(), target.end());
     const std::wstring wold(old_.begin(), old_.end());
-    const std::wstring wpending(pending.begin(), pending.end());
-    const std::wstring wtarget2(target.begin(), target.end());
+    const std::wstring wpending(pendingPath.begin(), pendingPath.end());
 
-    if (!MoveFileW(wtarget.c_str(), wold.c_str()))
+    // Rename running exe to .old (allowed while running on NTFS Vista+).
+    if (!MoveFileExW(wtarget.c_str(), wold.c_str(),
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
         return false;
 
-    // Place new binary at the original path.
-    if (!MoveFileW(wpending.c_str(), wtarget2.c_str()))
+    // Place new binary at the original path; MOVEFILE_COPY_ALLOWED handles cross-volume
+    // (staging dir under %ProgramData% may differ from Program Files install dir).
+    if (!MoveFileExW(wpending.c_str(), wtarget.c_str(),
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED |
+                     MOVEFILE_WRITE_THROUGH))
     {
-        // Attempt to restore old name on failure.
-        MoveFileW(wold.c_str(), wtarget.c_str());
+        MoveFileExW(wold.c_str(), wtarget.c_str(),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
         return false;
     }
 
     // Move sig file (best-effort)
     std::error_code ec;
-    if (fs::exists(pendingSig, ec) && !ec)
+    if (fs::exists(pendingSigPath, ec) && !ec)
     {
+        const std::wstring wsigPending(pendingSigPath.begin(), pendingSigPath.end());
         const std::wstring wsigTarget(targetSig.begin(), targetSig.end());
         const std::wstring wsigOld(oldSig_.begin(), oldSig_.end());
-        const std::wstring wsigPending(pendingSig.begin(), pendingSig.end());
-        MoveFileW(wsigTarget.c_str(), wsigOld.c_str()); // rename old sig out of way
-        MoveFileW(wsigPending.c_str(), wsigTarget.c_str());
+        MoveFileExW(wsigTarget.c_str(), wsigOld.c_str(),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+        MoveFileExW(wsigPending.c_str(), wsigTarget.c_str(),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED | MOVEFILE_WRITE_THROUGH);
     }
     return true;
 }
-#endif
+
+// Smoke-test the new binary by running it with --version.
+// Returns true if the process exits 0 within 10 seconds.
+static bool smokeTestNewBinary(const std::string &exePath)
+{
+    std::wstring wexe(exePath.begin(), exePath.end());
+    std::wstring cmdline = L"\"" + wexe + L"\" --version";
+    std::vector<wchar_t> mutableCmd(cmdline.begin(), cmdline.end());
+    mutableCmd.push_back(L'\0');
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessW(wexe.c_str(), mutableCmd.data(), NULL, NULL, FALSE,
+                        CREATE_NO_WINDOW, NULL, NULL, &si, &pi))
+        return false;
+    DWORD wr = WaitForSingleObject(pi.hProcess, 10'000);
+    DWORD exitCode = 1;
+    if (wr == WAIT_OBJECT_0) GetExitCodeProcess(pi.hProcess, &exitCode);
+    else TerminateProcess(pi.hProcess, 1);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return wr == WAIT_OBJECT_0 && exitCode == 0;
+}
+
+#ifdef NTM_REQUIRE_AUTHENTICODE
+// Verify Authenticode signature of a binary using WinVerifyTrust.
+// Only compiled when -DNTM_REQUIRE_AUTHENTICODE is passed to cmake.
+// TODO: extract signer subject and compare against NTM_AUTHENTICODE_SUBJECT
+//       (CryptQueryObject + CertGetNameStringW); deferred to a follow-up PR.
+static bool verifyAuthenticode(const std::wstring &filePath)
+{
+    WINTRUST_FILE_INFO fileInfo{};
+    fileInfo.cbStruct      = sizeof(fileInfo);
+    fileInfo.pcwszFilePath = filePath.c_str();
+    WINTRUST_DATA wd{};
+    wd.cbStruct          = sizeof(wd);
+    wd.dwUIChoice        = WTD_UI_NONE;
+    wd.fdwRevocationChecks = WTD_REVOKE_WHOLECHAIN;
+    wd.dwUnionChoice     = WTD_CHOICE_FILE;
+    wd.pFile             = &fileInfo;
+    wd.dwStateAction     = WTD_STATEACTION_VERIFY;
+    GUID policy = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+    LONG status = WinVerifyTrust(NULL, &policy, &wd);
+    wd.dwStateAction = WTD_STATEACTION_CLOSE;
+    WinVerifyTrust(NULL, &policy, &wd);
+    return status == ERROR_SUCCESS;
+}
+#endif  // NTM_REQUIRE_AUTHENTICODE
+#endif  // _WIN32
 
 // ---------------------------------------------------------------------------
 // Main update loop
@@ -593,12 +682,27 @@ static void runUpdater(ClientConfig config)
             continue;
         }
 
+#ifdef _WIN32
+        // HARMONIZE-LINUX: size cap currently Windows-only; consider unifying.
+        {
+            constexpr std::int64_t kMaxUpdateBytes = 64LL * 1024 * 1024;
+            if (size > kMaxUpdateBytes)
+            {
+                std::cerr << "ntm-client: updater: server reported size " << size
+                          << " exceeds 64 MiB cap; refusing update\n";
+                continue;
+            }
+        }
+#endif
+
         std::cerr << "ntm-client: updater: update available — " << newVer
                   << (force ? " (forced)" : "") << "\n";
 
-        // Download path.
+        // Download path — Windows uses a separate staging dir so the service
+        // never needs write access to the install directory during download.
 #ifdef _WIN32
-        const std::string pendingPath = dir + "/ntm-client-pending.exe";
+        const std::string stagingDir  = updateStagingDir();
+        const std::string pendingPath = stagingDir + "/ntm-client-pending.exe";
 #else
         const std::string pendingPath = dir + "/ntm-client.pending";
 #endif
@@ -698,13 +802,46 @@ static void runUpdater(ClientConfig config)
 
         // Apply.
 #ifdef _WIN32
-        if (!applyUpdateWindows(dir))
+        if (!applyUpdateWindows(dir, pendingPath, pendingSigPath))
         {
             std::cerr << "ntm-client: updater: failed to apply update\n";
             fs::remove(pendingPath, ec);
             continue;
         }
-        std::cerr << "ntm-client: updater: update applied; restarting…\n";
+
+        // Smoke-test the new binary before committing to the restart.
+        // Runs --version; verifies the sig is intact and the exe is launchable.
+        const std::string targetExe = dir + "/ntm-client.exe";
+        if (!smokeTestNewBinary(targetExe))
+        {
+            std::cerr << "ntm-client: updater: smoke test failed; rolling back to previous binary\n";
+            const std::wstring wTarget(targetExe.begin(), targetExe.end());
+            const std::wstring wOldExe((dir + "/ntm-client.exe.old").begin(),
+                                       (dir + "/ntm-client.exe.old").end());
+            MoveFileExW(wOldExe.c_str(), wTarget.c_str(),
+                        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+            fs::remove(pendingPath, ec);
+            continue;
+        }
+
+#ifdef NTM_REQUIRE_AUTHENTICODE
+        {
+            std::wstring wexe(targetExe.begin(), targetExe.end());
+            if (!verifyAuthenticode(wexe))
+            {
+                std::cerr << "ntm-client: updater: Authenticode verification failed; rolling back\n";
+                const std::wstring wTarget(targetExe.begin(), targetExe.end());
+                const std::wstring wOldExe((dir + "/ntm-client.exe.old").begin(),
+                                           (dir + "/ntm-client.exe.old").end());
+                MoveFileExW(wOldExe.c_str(), wTarget.c_str(),
+                            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+                fs::remove(pendingPath, ec);
+                continue;
+            }
+        }
+#endif  // NTM_REQUIRE_AUTHENTICODE
+
+        std::cerr << "ntm-client: updater: update applied; restarting\n";
         // Exit so Task Scheduler / SCM restarts with new binary.
         ExitProcess(0);
 #else

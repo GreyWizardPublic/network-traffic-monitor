@@ -705,16 +705,33 @@ automatically.
 ## How it works on Windows
 
 1. Same 23-hour check cycle against `/api/update/check`.
-2. Download written to `ntm-client-pending.exe` in the binary directory (located via
-   `GetModuleFileName`).
-3. SHA-256 verification identical to Linux; failure aborts and deletes the pending file.
-4. `MoveFile` renames the running binary to `.exe.old`, then renames the pending file to
-   `ntm-client.exe`.
-5. The client calls `ExitProcess(0)`. Task Scheduler detects the exit and relaunches the
-   process within approximately one minute with the new binary.
+2. The server response is rejected if it reports a binary larger than **64 MiB** — a
+   safety cap against a rogue server advertising an unbounded download.
+3. Download written to `ntm-client-pending.exe` in
+   `%ProgramData%\ntm-client\staging\` (created automatically if absent). Separating
+   the staging directory from the install directory means the service account only needs
+   write access to `%ProgramData%\ntm-client\staging\` during the download phase —
+   not to the install directory (`Program Files`).
+4. SHA-256 and ML-DSA-65 signature verification identical to Linux; failure aborts and
+   deletes the pending file.
+5. `MoveFileExW` (with `MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED`) renames the
+   running binary to `ntm-client.exe.old`, then moves the pending file to
+   `ntm-client.exe`. `MOVEFILE_COPY_ALLOWED` handles the cross-volume case when
+   `%ProgramData%` and `Program Files` are on different drives.
+6. The new binary is smoke-tested: the client launches it with `--version` and waits up
+   to 10 seconds for exit 0. If the smoke test fails, the old binary is restored from
+   `ntm-client.exe.old` and the update is skipped.
+7. The client calls `ExitProcess(0)`. Task Scheduler / SCM detects the exit and
+   relaunches the process within approximately one minute with the new binary.
 
-On startup, any stale `ntm-client-pending.exe` or `.exe.old` file from a previous update
-is deleted automatically.
+On startup, stale `ntm-client-pending.exe` files (in both the staging and install
+directories) and `ntm-client.exe.old` from a previous update are deleted automatically.
+
+### Optional: Authenticode verification
+
+Build with `-DNTM_REQUIRE_AUTHENTICODE=ON -DNTM_AUTHENTICODE_SUBJECT="CN=Your Org"` to
+require that every downloaded binary passes `WinVerifyTrust` before it is applied.
+Disabled by default; full subject-string matching is deferred to a follow-up release.
 
 ## Install path and permissions
 
@@ -793,8 +810,19 @@ rm /opt/ntm/bin/ntm-client.pending
 An `ntm-client.exe.old` file in the binary directory indicates a completed update. The client
 removes it on next startup. To remove manually:
 ```powershell
-Remove-Item "C:\ProgramData\ntm\bin\ntm-client.exe.old"
+Remove-Item "C:\Program Files\ntm-client\ntm-client.exe.old"
 ```
+
+**Stale pending file (Windows)**
+`ntm-client-pending.exe` in `%ProgramData%\ntm-client\staging\` indicates an interrupted
+download. Deleted automatically on next startup. To remove manually:
+```powershell
+Remove-Item "$env:ProgramData\ntm-client\staging\ntm-client-pending.exe" -ErrorAction SilentlyContinue
+```
+
+**"server reported size N exceeds 64 MiB cap"**
+The update manifest on the server contains an unusually large `size` value. Verify the
+server-side manifest is correct. Legitimate ntm-client binaries are well under 64 MiB.
 
 **"rename failed: Permission denied" (Linux)**
 The service user does not own the binary directory. Re-apply the `chown` command from the

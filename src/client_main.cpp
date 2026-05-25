@@ -1,6 +1,7 @@
 #include "client.hpp"
 #include "client_platform.hpp"
 #include "client_signing.hpp"
+#include "client_version.hpp"
 
 #include <cstdio>
 #include <iostream>
@@ -63,6 +64,13 @@ int main(int argc, char *argv[])
             loadedConfigPath = configPath;
             continue;
         }
+#ifdef _WIN32
+        if (arg == "--version")
+        {
+            std::cout << kClientVersion << "\n";
+            return 0;
+        }
+#endif
         if (arg == "--help" || arg == "-h")
         {
             std::cout << "Usage: ntm-client [--config FILE] [--daemon] [--verbose]\n"
