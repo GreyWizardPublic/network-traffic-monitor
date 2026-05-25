@@ -7,6 +7,7 @@
 #include <netinet/in.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdarg>
@@ -307,6 +308,54 @@ struct DayBucket
     InterfaceEntityFlows entityFlows;
 };
 
+// ---------------------------------------------------------------------------
+// Per-client traffic history rings (in/out byte+packet counts).
+//   Fine ring  — 1440 1-minute slots (covers 24 h).
+//   Coarse ring — 168 1-hour  slots (covers 7 days, matching max windowDays_).
+// Keyed by clientId. Protected by TrafficStats::mutex_.
+// ---------------------------------------------------------------------------
+
+struct ClientMinuteBucket
+{
+    std::uint64_t epochMinute{0};   // epoch_sec/60; 0 means slot not yet written
+    std::uint64_t inBytes{0};
+    std::uint64_t outBytes{0};
+    std::uint64_t inPackets{0};
+    std::uint64_t outPackets{0};
+};
+struct ClientHourBucket
+{
+    std::uint64_t epochHour{0};     // epoch_sec/3600; 0 means slot not yet written
+    std::uint64_t inBytes{0};
+    std::uint64_t outBytes{0};
+    std::uint64_t inPackets{0};
+    std::uint64_t outPackets{0};
+};
+struct ClientHistoryRing
+{
+    static constexpr std::size_t kMinuteSlots = 1440; // 24 h × 60 min
+    static constexpr std::size_t kHourSlots   = 168;  // 7 days × 24 h
+    std::array<ClientMinuteBucket, kMinuteSlots> minutes{};
+    std::array<ClientHourBucket,   kHourSlots>   hours{};
+};
+
+// Output of TrafficStats::snapshotHistory() — flat sorted vector of buckets.
+struct HistoryBucket
+{
+    std::uint64_t t{0};           // epoch_sec of bucket start
+    std::uint64_t inBytes{0};
+    std::uint64_t outBytes{0};
+    std::uint64_t inPackets{0};
+    std::uint64_t outPackets{0};
+};
+struct ClientHistorySnapshot
+{
+    std::string   clientId;
+    unsigned      bucketSeconds{60};  // 60 for minute-level; 3600 for hour-level
+    unsigned      windowDays{0};      // server's configured aggregation window
+    std::vector<HistoryBucket> buckets;
+};
+
 class TrafficStats
 {
 public:
@@ -424,6 +473,28 @@ public:
 
         while (dayBuckets_.size() > windowDays_)
             dayBuckets_.pop_front();
+
+        // Per-minute and per-hour history rings for the histogram endpoint.
+        // Direction: "in" = bytes arriving at a LAN address; "out" = all else.
+        const bool isIn = isLanIP(dst) && !isLanIP(src);
+        const std::uint64_t epochMin  = (epochSec > 0) ? static_cast<std::uint64_t>(epochSec) / 60u  : 0u;
+        const std::uint64_t epochHour = (epochSec > 0) ? static_cast<std::uint64_t>(epochSec) / 3600u : 0u;
+        {
+            auto &ring = clientHistory_[clientId];
+            // Minute slot
+            auto &ms = ring.minutes[epochMin % ClientHistoryRing::kMinuteSlots];
+            if (ms.epochMinute != epochMin)
+                ms = ClientMinuteBucket{epochMin, 0, 0, 0, 0};
+            if (isIn) { ms.inBytes += length;  ++ms.inPackets;  }
+            else      { ms.outBytes += length; ++ms.outPackets; }
+            // Hour slot
+            auto &hs = ring.hours[epochHour % ClientHistoryRing::kHourSlots];
+            if (hs.epochHour != epochHour)
+                hs = ClientHourBucket{epochHour, 0, 0, 0, 0};
+            if (isIn) { hs.inBytes += length;  ++hs.inPackets;  }
+            else      { hs.outBytes += length; ++hs.outPackets; }
+        }
+
         return AddResult::Accepted;
     }
 
@@ -522,6 +593,58 @@ public:
             *windowStartOut = std::chrono::system_clock::now();
     }
 
+    // Return per-minute (minutes in [1,1440]) or per-hour (minutes=0 = full window)
+    // history for one client, sorted oldest-to-newest, empty slots omitted.
+    ClientHistorySnapshot snapshotHistory(const std::string &clientId, int minutes) const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        ClientHistorySnapshot out;
+        out.clientId   = clientId;
+        out.windowDays = windowDays_;
+
+        auto it = clientHistory_.find(clientId);
+        if (it == clientHistory_.end())
+            return out;
+        const ClientHistoryRing &ring = it->second;
+
+        if (minutes > 0)
+        {
+            // Fine ring: return the last `minutes` 1-minute buckets.
+            const std::size_t n = std::min(static_cast<std::size_t>(minutes),
+                                           ClientHistoryRing::kMinuteSlots);
+            out.bucketSeconds = 60;
+            const auto now   = std::chrono::system_clock::now();
+            const auto nowSec = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+            const std::uint64_t nowMin = (nowSec > 0) ? static_cast<std::uint64_t>(nowSec) / 60u : 0u;
+            // Collect slots for the last n minutes (inclusive of current).
+            for (std::size_t i = 0; i < n; ++i)
+            {
+                const std::uint64_t em = nowMin - (n - 1 - i);
+                const auto &s = ring.minutes[em % ClientHistoryRing::kMinuteSlots];
+                if (s.epochMinute != em) continue;  // slot not yet written or stale
+                HistoryBucket hb; hb.t=em*60; hb.inBytes=s.inBytes; hb.outBytes=s.outBytes; hb.inPackets=s.inPackets; hb.outPackets=s.outPackets;
+                out.buckets.push_back(hb);
+            }
+        }
+        else
+        {
+            // Coarse ring: return all non-empty hourly slots, sorted.
+            out.bucketSeconds = 3600;
+            std::vector<HistoryBucket> tmp;
+            for (const auto &s : ring.hours)
+            {
+                if (s.epochHour == 0) continue;
+                HistoryBucket hb; hb.t=s.epochHour*3600; hb.inBytes=s.inBytes; hb.outBytes=s.outBytes; hb.inPackets=s.inPackets; hb.outPackets=s.outPackets;
+                tmp.push_back(hb);
+            }
+            std::sort(tmp.begin(), tmp.end(), [](const HistoryBucket &a, const HistoryBucket &b){
+                return a.t < b.t;
+            });
+            out.buckets = std::move(tmp);
+        }
+        return out;
+    }
+
 private:
     static bool wouldOverflow(std::uint64_t packets, std::uint64_t addPackets,
                               std::uint64_t bytes, std::uint64_t addBytes)
@@ -567,6 +690,7 @@ private:
         // UB-1: reset per-client iface bookkeeping so the cap counts from zero again.
         clientIfaces_.erase(clientId);
         ifaceRejectCount_.erase(clientId);
+        clientHistory_.erase(clientId);
     }
 
     mutable std::mutex mutex_;
@@ -579,6 +703,9 @@ private:
     // UB-1: per-client iface cardinality tracking across the rolling window.
     std::unordered_map<std::string, std::unordered_set<std::string>> clientIfaces_;
     std::unordered_map<std::string, std::uint64_t> ifaceRejectCount_;
+
+    // Per-client traffic history rings (used by /api/client/history).
+    std::unordered_map<std::string, ClientHistoryRing> clientHistory_;
 };
 
 } // namespace ntm
