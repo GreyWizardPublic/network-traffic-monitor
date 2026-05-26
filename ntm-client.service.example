@@ -7,6 +7,9 @@
 #
 # Prerequisites:
 #   - Binary installed at /usr/local/bin/ntm-client
+#   - Companion signature installed at /usr/local/bin/ntm-client.sig (REQUIRED —
+#     the client verifies its own ML-DSA-65 signature at startup and refuses to
+#     start if the .sig file is missing or invalid)
 #   - Config file at /etc/ntmclient/ntm-client.conf
 #   - Dedicated unprivileged user created:
 #       sudo useradd -r -s /sbin/nologin ntmclient
