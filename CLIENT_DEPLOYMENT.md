@@ -60,8 +60,15 @@ The client does **not** require libcurl, zlib, or cpp-httplib.
 
 ## 2. Linux Install the Binary
 
+> **The `.sig` file is mandatory.** `ntm-client` verifies its own ML-DSA-65
+> signature at every startup and **refuses to start with FATAL** if
+> `ntm-client.sig` is absent from the same directory as the binary.
+> Always install the binary and its `.sig` file as a pair.
+
 ```bash
-sudo install -m 755 build-linux/ntm-client /usr/local/bin/ntm-client
+# Install binary and companion signature file (both required)
+sudo install -m 755 build-linux/ntm-client-linux-amd64-<version>     /usr/local/bin/ntm-client
+sudo install -m 644 build-linux/ntm-client-linux-amd64-<version>.sig /usr/local/bin/ntm-client.sig
 sudo mkdir -p /etc/ntmclient
 ```
 
@@ -69,6 +76,7 @@ Recommended directory layout:
 
 ```
 /usr/local/bin/ntm-client
+/usr/local/bin/ntm-client.sig   # ML-DSA-65 signature — MUST be deployed with the binary
 /etc/ntmclient/
     ntm-client.conf          # config file
     client_private.pem       # Ed25519 private key  (chmod 600)
@@ -281,11 +289,22 @@ sudo systemctl status ntm-client
 - [ ] systemd hardening applied (`PrivateTmp`, `ProtectSystem`, `NoNewPrivileges`,
   `RestrictAddressFamilies=AF_INET AF_INET6 AF_PACKET`)
 - [ ] `MemoryDenyWriteExecute` and `PrivateUsers` are **not** set
+- [ ] Binary and its `.sig` file both installed in the same directory (`/usr/local/bin/ntm-client` and `/usr/local/bin/ntm-client.sig`)
 - [ ] Binary installed in `/opt/ntm/bin/` owned by `ntmclient` user (required for auto-update)
 
 ---
 
 ## 11. Troubleshooting (Linux)
+
+**`FATAL — binary signature verification failed` (exits immediately)**
+`ntm-client.sig` is missing from the same directory as the binary, or does not match
+the binary (e.g. the binary was replaced without its companion `.sig`).
+Both files must be deployed together — re-run the `install` commands from
+[Section 2](#2-linux-install-the-binary) with the matching versioned pair:
+```bash
+sudo install -m 755 build-linux/ntm-client-linux-amd64-<version>     /usr/local/bin/ntm-client
+sudo install -m 644 build-linux/ntm-client-linux-amd64-<version>.sig /usr/local/bin/ntm-client.sig
+```
 
 **`pcap_findalldevs failed: permission denied`**
 The process has no packet capture privileges. Run with `sudo`, use `setcap`, or use the
