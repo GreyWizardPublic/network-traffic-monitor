@@ -93,6 +93,23 @@ final class AdminViewModel {
         catch { self.error = error.localizedDescription }
     }
 
+    // MARK: - Auth-gated loads (called from navigation destination views on appear)
+
+    /// Navigate to MonitorsView → prompts for auth if needed, then loads.
+    func loadMonitors() async {
+        await requireAdmin { await self.fetchMonitors() }
+    }
+
+    /// Navigate to ManageClientsView → prompts for auth if needed, then loads.
+    func loadKnownClients() async {
+        await requireAdmin { await self.fetchClients() }
+    }
+
+    /// Navigate to HiddenEntitiesView → prompts for auth if needed, then loads.
+    func loadHiddenEntities() async {
+        await requireAdmin { await self.fetchHiddenEntities() }
+    }
+
     // MARK: - Actions
 
     func unhideClient(_ clientId: String) async {
