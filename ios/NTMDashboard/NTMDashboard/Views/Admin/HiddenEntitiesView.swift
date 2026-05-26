@@ -67,11 +67,18 @@ struct HiddenEntitiesView: View {
                 }
             }
         }
+        .task { await adminVM.loadHiddenEntities() }
+        .refreshable { await adminVM.loadHiddenEntities() }
         .sheet(isPresented: $showAddSheet) {
             AddHiddenEntitySheet()
                 .environment(adminVM)
         }
-        .refreshable { await adminVM.fetchHiddenEntities() }
+        .sheet(isPresented: Binding(
+            get: { adminVM.showPasswordSheet },
+            set: { adminVM.showPasswordSheet = $0 }
+        )) {
+            AdminPasswordSheet().environment(adminVM)
+        }
     }
 }
 

@@ -46,7 +46,14 @@ struct ManageClientsView: View {
             }
         }
         .navigationTitle("Manage Clients")
-        .refreshable { await adminVM.fetchClients() }
+        .task { await adminVM.loadKnownClients() }
+        .refreshable { await adminVM.loadKnownClients() }
+        .sheet(isPresented: Binding(
+            get: { adminVM.showPasswordSheet },
+            set: { adminVM.showPasswordSheet = $0 }
+        )) {
+            AdminPasswordSheet().environment(adminVM)
+        }
         .confirmationDialog(
             "Purge \(clientToDelete?.nickname ?? String((clientToDelete?.clientId ?? "").prefix(12)) + "…")?",
             isPresented: Binding(

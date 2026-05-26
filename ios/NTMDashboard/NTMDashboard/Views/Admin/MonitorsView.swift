@@ -46,6 +46,13 @@ struct MonitorsView: View {
             }
         }
         .navigationTitle("Dashboard Monitors")
-        .refreshable { await adminVM.fetchMonitors() }
+        .task { await adminVM.loadMonitors() }
+        .refreshable { await adminVM.loadMonitors() }
+        .sheet(isPresented: Binding(
+            get: { adminVM.showPasswordSheet },
+            set: { adminVM.showPasswordSheet = $0 }
+        )) {
+            AdminPasswordSheet().environment(adminVM)
+        }
     }
 }
