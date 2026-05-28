@@ -34,9 +34,9 @@ TEST_CASE("proto constants: kWireProtoVersion is 2")
     REQUIRE_EQ(kWireProtoVersion, 2u);
 }
 
-TEST_CASE("proto constants: kApiVersion is 10")
+TEST_CASE("proto constants: kApiVersion is 11")
 {
-    REQUIRE_EQ(kApiVersion, 10u);
+    REQUIRE_EQ(kApiVersion, 11u);
 }
 
 TEST_CASE("proto constants: kAuthVersionV2 < kAuthVersionV3")

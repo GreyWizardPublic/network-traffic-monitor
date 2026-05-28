@@ -1934,6 +1934,32 @@ button{font-family:monospace;font-size:0.82em;padding:5px 14px;border-radius:3px
   <div class="err-msg" id="hidden_err" style="margin-top:8px"></div>
 </div>
 
+<!-- ── Client Configuration ───────────────────────────────────────── -->
+<div class="section" style="margin-top:22px">Client Configuration</div>
+<div class="sub">Running configuration values reported by each connected client. Cells highlighted in amber differ from the majority value across connected clients — use this to spot misconfigured machines without SSH-ing into each one.</div>
+<div class="panel">
+  <table id="cfg_tbl" style="width:100%;table-layout:fixed">
+    <thead><tr>
+      <th style="width:14%">Client</th>
+      <th style="width:9%">Transport</th>
+      <th style="width:8%">Compress</th>
+      <th style="width:8%">Auto-Upd</th>
+      <th style="width:11%">Agg Target</th>
+      <th style="width:10%">Reconnect</th>
+      <th style="width:8%">●</th>
+    </tr></thead>
+    <tbody id="cfg_tbl_body"><tr><td colspan="7" style="color:#555">Loading…</td></tr></tbody>
+  </table>
+  <div id="cfg_detail" style="display:none;margin-top:14px;padding:12px;background:#0a0a12;border:1px solid #2a2a4a;border-radius:4px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <span id="cfg_detail_title" style="font-size:0.85em;color:#7af"></span>
+      <button onclick="refreshCfgDetail()" style="font-family:monospace;font-size:0.78em;padding:3px 10px;border-radius:3px;border:1px solid #3a5a8a;background:#0d1828;color:#7af;cursor:pointer">Refresh</button>
+    </div>
+    <div id="cfg_detail_body" style="display:grid;grid-template-columns:1fr 1fr;gap:4px 20px;font-size:0.8em"></div>
+  </div>
+  <div class="err-msg" id="cfg_err" style="margin-top:8px"></div>
+</div>
+
 <!-- ── Software Updates ──────────────────────────────────────────────── -->
 <div class="section" style="margin-top:22px">Software Updates</div>
 <div class="sub">Place binaries in the server update directory. Naming convention: <code style="background:#111118;padding:1px 4px;border-radius:2px">ntm-client-linux-amd64-1.9.0</code> / <code style="background:#111118;padding:1px 4px;border-radius:2px">ntm-client-windows-amd64-1.9.0.exe</code>. Auto-update clients check once per day; use Force Update per agent to push immediately regardless of version.</div>
@@ -2339,8 +2365,139 @@ async function setHiddenIface(id,iface,action){
   } catch(e){ errEl.textContent='Request failed: '+esc(e.message); }
 }
 
+// ── Client Configuration ────────────────────────────────────────────────────
+
+let gCfgSelectedId = null;
+
+async function loadClientConfigs(){
+  try{
+    const cRes = await fetch('/api/admin/clients');
+    if(cRes.status === 404) return;
+    handleAdminExpiry(cRes.status);
+    if(!cRes.ok) return;
+    const {clients} = await cRes.json();
+    if(!clients || !clients.length){
+      document.getElementById('cfg_tbl_body').innerHTML='<tr><td colspan="7" style="color:#555">No registered clients</td></tr>';
+      return;
+    }
+    const cfgResults = await Promise.all(clients.map(function(c){
+      return fetch('/api/admin/client/config?client_id='+encodeURIComponent(c.client_id))
+        .then(function(r){ return r.ok ? r.json() : null; })
+        .catch(function(){ return null; });
+    }));
+
+    // Compute majority value per config column (connected clients only)
+    const cols = ['transport','compress','auto_update','agg_target_lines','reconnect_key'];
+    const counts = {};
+    cols.forEach(function(k){ counts[k] = {}; });
+    cfgResults.forEach(function(r){
+      if(!r || !r.connected || !r.config) return;
+      const c = r.config;
+      const vals = {
+        transport: c.transport,
+        compress: String(c.compress),
+        auto_update: String(c.auto_update),
+        agg_target_lines: String(c.agg_target_lines),
+        reconnect_key: c.reconnect_attempts + 'x' + c.reconnect_interval + 's'
+      };
+      cols.forEach(function(k){
+        counts[k][vals[k]] = (counts[k][vals[k]] || 0) + 1;
+      });
+    });
+    function majority(k){
+      const m = counts[k]; let best='', bestN=0;
+      Object.keys(m).forEach(function(v){ if(m[v]>bestN){ bestN=m[v]; best=v; } });
+      return best;
+    }
+    const maj = {};
+    cols.forEach(function(k){ maj[k] = majority(k); });
+
+    function cell(val, majVal){
+      const amber = val !== majVal && majVal !== '';
+      return '<td style="'+(amber?'color:#c84;font-weight:bold':'')+'">'+esc(String(val))+'</td>';
+    }
+    function boolCell(val, majVal){
+      const s = val ? '✓' : '✗';
+      const amber = String(val) !== majVal && majVal !== '';
+      return '<td style="'+(amber?'color:#c84;font-weight:bold':'')+'">'+s+'</td>';
+    }
+
+    const tbody = document.getElementById('cfg_tbl_body');
+    tbody.innerHTML = cfgResults.map(function(r, i){
+      const client = clients[i];
+      const nick = esc(client.nickname || client.client_id.substring(0,16)+'…');
+      const id = client.client_id;
+      const connected = r && r.connected;
+      const cfg = r && r.config;
+      const dot = connected ? '<span style="color:#4c4">●</span>' : '<span style="color:#555">○</span>';
+      const rowStyle = connected ? '' : 'color:#555;font-style:italic;';
+      const clickAttr = 'onclick="selectCfgClient(\''+esc(id)+'\')" style="cursor:pointer;'+rowStyle+'" class="selectable"';
+      if(!cfg){
+        return '<tr '+clickAttr+'><td title="'+esc(id)+'">'+nick+'</td>'
+          +'<td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>'+dot+'</td></tr>';
+      }
+      const reconnKey = cfg.reconnect_attempts + 'x' + cfg.reconnect_interval + 's';
+      return '<tr '+clickAttr+'><td title="'+esc(id)+'">'+nick+'</td>'
+        + cell(cfg.transport, maj.transport)
+        + boolCell(cfg.compress, maj.compress)
+        + boolCell(cfg.auto_update, maj.auto_update)
+        + cell(cfg.agg_target_lines+'/s', '')
+        + cell(reconnKey, maj.reconnect_key)
+        + '<td>'+dot+'</td></tr>';
+    }).join('');
+
+    // Restore expand if a client was selected
+    if(gCfgSelectedId){
+      const r = cfgResults.find(function(x){ return x && x.client_id === gCfgSelectedId; });
+      if(r) renderCfgDetail(r);
+    }
+  } catch(e){
+    // Silent: config feature may not be enabled on this server.
+  }
+}
+
+function selectCfgClient(id){
+  gCfgSelectedId = id;
+  fetch('/api/admin/client/config?client_id='+encodeURIComponent(id))
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(data){ if(data) renderCfgDetail(data); })
+    .catch(function(){});
+}
+
+function renderCfgDetail(r){
+  const panel = document.getElementById('cfg_detail');
+  const title = document.getElementById('cfg_detail_title');
+  const body  = document.getElementById('cfg_detail_body');
+  title.textContent = (r.nickname || r.client_id.substring(0,16)+'…')
+    + (r.connected ? '' : ' (offline)');
+  if(!r.config){
+    body.innerHTML = '<span style="color:#555">Config not yet received</span>';
+  } else {
+    const c = r.config;
+    const rows = [
+      ['Transport',        c.transport],
+      ['Compression',      c.compress ? 'enabled' : 'disabled'],
+      ['Auto-update',      c.auto_update ? 'enabled' : 'disabled'],
+      ['Send buffer',      c.send_buffer === 0 ? 'OS default' : c.send_buffer+' bytes'],
+      ['Reconnect',        c.reconnect_attempts+' attempts × '+c.reconnect_interval+'s'],
+      ['Agg target',       c.agg_target_lines+' lines/s'],
+      ['Agg interval',     c.agg_min_ms+'–'+c.agg_max_ms+' ms'],
+      ['Agg max flows',    String(c.agg_max_flows)]
+    ];
+    body.innerHTML = rows.map(function(kv){
+      return '<span style="color:#888">'+esc(kv[0])+'</span><span>'+esc(String(kv[1]))+'</span>';
+    }).join('');
+  }
+  panel.style.display = 'block';
+}
+
+async function refreshCfgDetail(){
+  if(!gCfgSelectedId) return;
+  selectCfgClient(gCfgSelectedId);
+}
+
 async function loadAll(){
-  await Promise.all([loadClients(),loadMonitors(),loadHiddenEntities()]);
+  await Promise.all([loadClients(),loadMonitors(),loadHiddenEntities(),loadClientConfigs()]);
 }
 
 loadAll();
@@ -2962,6 +3119,73 @@ void registerWebHandlers(NtmHttpServer &svr,
                     first = false;
                 }
                 j += "]}\n";
+                res.set_content(j, "application/json");
+            });
+    }
+
+    // GET /api/admin/client/config?client_id=<hex64> — return last-reported config for one client.
+    // Returns {"client_id":"...","nickname":"...","connected":bool,"config":{...}} on success,
+    // or {"client_id":"...","nickname":"...","connected":false,"config":null} when not yet received.
+    if (adminAvailable && config.clients_store && config.registry)
+    {
+        svr.Get("/api/admin/client/config",
+            [&config](const httplib::Request &req, httplib::Response &res)
+            {
+                const std::string clientId = req.get_param_value("client_id");
+                if (clientId.size() != 64 ||
+                    clientId.find_first_not_of("0123456789abcdef") != std::string::npos)
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"client_id must be 64 lowercase hex chars\"}\n",
+                                    "application/json");
+                    return;
+                }
+
+                std::string nickname;
+                {
+                    std::shared_lock<std::shared_mutex> lk(config.clients_store->mu);
+                    auto it = config.clients_store->nicknames.find(clientId);
+                    if (it != config.clients_store->nicknames.end())
+                        nickname = it->second;
+                }
+
+                bool connected = false;
+                ClientHealthStats hs;
+                bool hasConfig = false;
+                {
+                    std::lock_guard<std::mutex> lk(config.registry->mtx);
+                    auto it = config.registry->clientHealth.find(clientId);
+                    if (it != config.registry->clientHealth.end())
+                    {
+                        connected = true;
+                        hs = it->second;
+                        hasConfig = !hs.cfgTransport.empty();
+                    }
+                }
+
+                std::string j = "{\"client_id\":\""; j += jsonEsc(clientId);
+                j += "\",\"nickname\":\""; j += jsonEsc(nickname);
+                j += "\",\"connected\":"; j += connected ? "true" : "false";
+                if (hasConfig)
+                {
+                    j += ",\"config\":{";
+                    j += "\"transport\":\"";    j += jsonEsc(hs.cfgTransport); j += '"';
+                    j += ",\"compress\":";      j += (hs.cfgCompress == 1 ? "true" : "false");
+                    j += ",\"send_buffer\":";   j += std::to_string(hs.cfgSendBuffer);
+                    j += ",\"auto_update\":";   j += (hs.cfgAutoUpdate == 1 ? "true" : "false");
+                    j += ",\"reconnect_attempts\":"; j += std::to_string(hs.cfgReconnectAttempts);
+                    j += ",\"reconnect_interval\":"; j += std::to_string(hs.cfgReconnectInterval);
+                    j += ",\"agg_target_lines\":";   j += std::to_string(hs.cfgAggTarget);
+                    j += ",\"agg_min_ms\":";         j += std::to_string(hs.cfgAggMinMs);
+                    j += ",\"agg_max_ms\":";         j += std::to_string(hs.cfgAggMaxMs);
+                    j += ",\"agg_max_flows\":";      j += std::to_string(hs.cfgAggMaxFlows);
+                    j += '}';
+                }
+                else
+                {
+                    j += ",\"config\":null";
+                }
+                j += "}\n";
                 res.set_content(j, "application/json");
             });
     }

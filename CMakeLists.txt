@@ -191,6 +191,7 @@ if(WIN32)
         tests/test_client_http_util.cpp     # pure logic, no POSIX deps — shared with Linux suite
         tests/test_client_websocket.cpp     # pure logic, no POSIX deps — shared with Linux suite
         tests/test_client_config.cpp        # pure logic, no POSIX deps — shared with Linux suite
+        tests/test_client_config_health.cpp # pure logic, no POSIX deps — shared with Linux suite
         tests/test_alpn.cpp                 # pure logic, no POSIX deps — shared with Linux suite
         tests/test_zlib_stream.cpp          # uses zlib_stream.hpp → miniz on Windows
         tests/test_client_signing.cpp
@@ -305,6 +306,7 @@ if(NOT WIN32)
         tests/test_client_push.cpp
         tests/test_client_history.cpp
         tests/test_hidden_entities.cpp
+        tests/test_client_config_health.cpp
     )
     target_include_directories(ntm-tests PRIVATE src tests)
     # ntm_types.hpp uses POSIX socket headers for isLanIP(); no extra libs needed.

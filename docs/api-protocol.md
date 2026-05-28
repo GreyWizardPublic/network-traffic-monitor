@@ -331,7 +331,7 @@ recognise. New optional fields may be added at any `api_version` without a bump.
 
 ```json
 {
-  "api_version":              <integer>,  // API contract revision; currently 10
+  "api_version":              <integer>,  // API contract revision; currently 11
   "server_version":           <string>,   // ntm-server module version, e.g. "1.8.1"
   "server_wire_proto_version": <integer>, // wire protocol data-phase version the server speaks
   "window_start":              <integer>, // unix epoch: start of the rolling stats window
@@ -957,9 +957,63 @@ visible in `client_health`; only this interface's traffic rows are suppressed.
 
 ---
 
-## 17. Stability Contract
+## 17. Client Configuration Endpoint *(api_version 11+)*
 
-- All fields documented in § 10–16 are **stable at `api_version: 10`**.
+Returns the running configuration values last reported by a specific client via
+`cfg_*` fields in the health line (H-line). This allows operators to verify that
+all clients are using the intended configuration without SSH-ing into each machine.
+
+Requires an authenticated admin session. Registered when `webauthn_rp_id` is set
+in server config.
+
+### `GET /api/admin/client/config`
+
+**Query parameter:** `client_id=<64 hex>` (required)
+
+**Response `200` (client known, config received):**
+```json
+{
+  "client_id":  "<64 hex>",
+  "nickname":   "<display name or empty>",
+  "connected":  true,
+  "config": {
+    "transport":           "tcp",
+    "compress":            true,
+    "send_buffer":         0,
+    "auto_update":         false,
+    "reconnect_attempts":  10,
+    "reconnect_interval":  60,
+    "agg_target_lines":    500,
+    "agg_min_ms":          100,
+    "agg_max_ms":          5000,
+    "agg_max_flows":       10000
+  }
+}
+```
+
+`send_buffer: 0` means OS default. `transport` is `"tcp"` or `"websocket"`.
+
+**Response `200` (client not connected or config not yet received):**
+```json
+{
+  "client_id": "<64 hex>",
+  "nickname":  "<display name or empty>",
+  "connected": false,
+  "config":    null
+}
+```
+
+**Error responses:**
+
+| Status | Reason |
+|---|---|
+| `400` | `client_id` is not 64 lowercase hex chars |
+
+---
+
+## 18. Stability Contract
+
+- All fields documented in § 10–17 are **stable at `api_version: 11`**.
   No field will be removed or renamed without a version bump.
 - New **optional** fields may be added at any `api_version` without bumping;
   clients must tolerate extra fields.
@@ -981,4 +1035,6 @@ visible in `client_health`; only this interface's traffic rows are suppressed.
 - Servers at `api_version: 9` (ntm-server < 1.22.0) do not have the hide-entities
   endpoints. The admin UI should gracefully handle `404` from `/api/admin/hidden`
   by hiding the Hidden Entities panel.
+- Servers at `api_version: 10` (ntm-server < 1.23.0) do not have `/api/admin/client/config`.
+  The admin UI should gracefully handle `404` by hiding the Client Configuration panel.
 - The protocol doc is updated **before** the commit that changes either side.
