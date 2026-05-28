@@ -491,15 +491,25 @@ Set-Acl $path $acl
 
 ## 5. TLS Server Verification (Windows)
 
-Same two modes as Linux — configure one in the config file using Windows paths.
+Three modes are available. Mode A (Windows Certificate Store) is recommended for servers with publicly-trusted certificates.
 
-### Mode A — CA bundle verification
+### Mode A — Windows Certificate Store (recommended)
+
+Uses the certificates managed by Windows itself — the same roots that browsers and Windows Update trust. No files to manage; always reflects the current OS trust anchors.
 
 ```ini
-ca = C:\ProgramData\ntm-client\server_cert.pem
+ca = system
 ```
 
-### Mode B — Certificate pinning (recommended for self-signed certs)
+### Mode B — CA bundle file
+
+Point to a PEM file containing the CA certificates to trust:
+
+```ini
+ca = C:\ProgramData\ntm-client\ca-bundle.pem
+```
+
+### Mode C — Certificate pinning (recommended for self-signed certs)
 
 Copy the server certificate to the client machine:
 
@@ -523,7 +533,7 @@ Create `C:\ProgramData\ntm-client\ntm-client.conf`:
 server               = 192.168.1.10
 port                 = 5555
 identity             = C:\ProgramData\ntm-client\secrets\client_private.pem
-server_cert          = C:\ProgramData\ntm-client\server_cert.pem
+ca                   = system
 send_buffer_bytes    = 524288
 transport            = tcp
 ```
@@ -986,7 +996,7 @@ All keys are set in the config file (`key = value`) or overridden by CLI flags.
 | `server` | `--server` | `127.0.0.1` | Server hostname or IP |
 | `port` | `--port` | `5555` | Server ingestion port (1–65535) |
 | `identity` | `--identity` | *(none)* | Path to Ed25519 private key PEM |
-| `ca` | `--ca` | *(none)* | CA bundle to verify server certificate |
+| `ca` | `--ca` | *(none)* | CA bundle path, or `system` to use the OS trust store (Windows Certificate Store on Windows; system CA bundle on Linux) |
 | `server_cert` | `--server-cert` | *(none)* | Server cert for SHA-256 fingerprint pinning |
 | `send_buffer_bytes` | — | `524288` | Send buffer size in bytes (4096–2097152) |
 | `external_ip_url` | — | `http://checkip.amazonaws.com/` | URL used to detect external/WAN IP |
