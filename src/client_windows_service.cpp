@@ -64,6 +64,7 @@ static DWORD WINAPI serviceCtrlHandler(DWORD ctrl, DWORD /*eventType*/,
     {
         reportStatus(SERVICE_STOP_PENDING, 30'000);
         g_stopRequested.store(true);
+        platform::requestStop();   // signals the runClient() main loop to exit
         return NO_ERROR;
     }
     return ERROR_CALL_NOT_IMPLEMENTED;

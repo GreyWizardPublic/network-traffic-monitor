@@ -307,6 +307,8 @@ void setupSignals(std::atomic<bool> &running)
     std::signal(SIGTERM, sigHandler);
 }
 
+void requestStop() {}  // Linux uses signals; this path is only called on Windows
+
 // ---------------------------------------------------------------------------
 // Daemon
 // ---------------------------------------------------------------------------
