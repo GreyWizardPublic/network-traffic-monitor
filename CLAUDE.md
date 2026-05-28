@@ -411,6 +411,47 @@ branches, ensuring they always accept an identical set of keys.
 
 ---
 
+## Shared Client Sources — Cross-Platform Rebuild Rule
+
+The following files are compiled into **both** the Linux and Windows `ntm-client` binaries
+(the `NTM_CLIENT_COMMON_SOURCES` list in `CMakeLists.txt`, plus the shared version header):
+
+```
+src/client_main.cpp
+src/client_core.cpp
+src/client_impl.cpp
+src/client_transport_tcptls.cpp
+src/client_transport_websocket.cpp
+src/updater.cpp
+src/client_version.hpp          (version constant and platform identifier)
+src/client_config_parse.hpp     (config parsing — see Client Configuration Key Parity)
+src/client_types.hpp            (ClientConfig struct)
+```
+
+### Rule
+
+**Any commit that modifies a shared client source file listed above MUST be followed
+by a cross-agent handoff PR to the other client agent(s) to rebuild and push their
+binary.** Specifically:
+
+- **Arch Linux Agent** modifies a shared file → open a `[WINDOWS AGENT]` handoff PR
+  asking the Windows Agent to rebuild `ntm-client-windows-amd64-<version>.exe` and push
+  it to the server's `update_dir` via `push-client.sh --confirm`.
+
+- **Windows Agent** modifies a shared file → open a `[LINUX AGENT]` handoff PR
+  asking the Arch Linux Agent to rebuild `ntm-client-linux-amd64-<version>` and push it.
+
+**Why this matters:** Clients on both platforms auto-update from the same `update_dir`.
+If only one platform ships a bug fix or feature, the other platform's users are left on
+broken or outdated code indefinitely. Both binaries must ship together.
+
+The handoff PR must include:
+- The specific version to build (`ntm-client X.Y.Z.R`)
+- A one-line summary of what changed and why
+- A request to push with `push-client.sh --confirm` once built and tested
+
+---
+
 ## Demo Server
 
 Port 12345 serves mock `/api/summary` data for App Store review (no auth, iOS only).
