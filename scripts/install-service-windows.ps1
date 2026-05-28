@@ -126,7 +126,7 @@ try {
     New-Service -Name $ServiceName `
         -BinaryPathName $binaryPathName `
         -DisplayName "ntm-client Network Monitor" `
-        -Description "ntm-client packet monitor — network traffic telemetry" `
+        -Description "ntm-client packet monitor - network traffic telemetry" `
         -StartupType Automatic `
         -ErrorAction Stop | Out-Null
 } catch {
