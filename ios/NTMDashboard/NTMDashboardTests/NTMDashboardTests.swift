@@ -63,7 +63,7 @@ final class DashboardSnapshotDecodeTests: XCTestCase {
         """
         let s = try decode(json)
 
-        XCTAssertEqual(s.apiVersion, 10)
+        XCTAssertEqual(s.apiVersion, 11)
         XCTAssertEqual(s.serverVersion, "1.19.0")
         XCTAssertEqual(s.serverWireProtoVersion, 2)
         XCTAssertEqual(s.windowStart, 1716480000)
@@ -816,7 +816,7 @@ final class DashboardViewModelApiVersionTests: XCTestCase {
     }
 
     func testApiVersionAboveSupportedIsNonBlockingWarning() async {
-        let vm = DashboardViewModel(fetcher: MockSummaryFetcher(result: .success(makeSnap(api: 11))))
+        let vm = DashboardViewModel(fetcher: MockSummaryFetcher(result: .success(makeSnap(api: 12))))
         await vm.refresh()
         XCTAssertFalse(vm.apiVersionBlocking,  "newer server: warn but don't block")
         XCTAssertNotNil(vm.apiVersionWarning,  "newer server: warning must be set")

@@ -55,7 +55,7 @@ targets:
         DEVELOPMENT_TEAM: W65LG3MSG6
         CODE_SIGN_STYLE: Automatic
         MARKETING_VERSION: "1.13.0"
-        CURRENT_PROJECT_VERSION: "20"
+        CURRENT_PROJECT_VERSION: "21"
       configs:
         Debug:
           DEBUG_INFORMATION_FORMAT: dwarf
