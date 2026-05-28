@@ -117,19 +117,22 @@ Copy-Item -Path $SigPath    -Destination ($ServiceExe + ".sig") -Force
 # We grant (OI)(CI)(M) on InstallDir for the service SID.
 
 # ── Register service ───────────────────────────────────────────────────────────
+# Use New-Service (PS cmdlet → SCM API) instead of sc.exe create to avoid the
+# PowerShell 5.1 quoting bug where a $variable whose value starts with " has its
+# outer quotes stripped, producing a malformed binPath= argument (error 1639).
 Write-Host "[setup] Registering Windows service..." -ForegroundColor Yellow
-$binPath = "`"$ServiceExe`" --service --config `"$ConfigPath`""
-& sc.exe create $ServiceName `
-    binPath= $binPath `
-    start= auto `
-    DisplayName= "ntm-client Network Monitor" | Out-Null
-
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERROR: sc.exe create failed (exit $LASTEXITCODE)" -ForegroundColor Red
+$binaryPathName = "`"$ServiceExe`" --service --config `"$ConfigPath`""
+try {
+    New-Service -Name $ServiceName `
+        -BinaryPathName $binaryPathName `
+        -DisplayName "ntm-client Network Monitor" `
+        -Description "ntm-client packet monitor — network traffic telemetry" `
+        -StartupType Automatic `
+        -ErrorAction Stop | Out-Null
+} catch {
+    Write-Host "ERROR: New-Service failed: $_" -ForegroundColor Red
     exit 1
 }
-
-& sc.exe description $ServiceName "ntm-client packet monitor — network traffic telemetry" | Out-Null
 
 # Failure actions: restart 3 times (5s / 5s / 30s), reset after 24h.
 # The auto-updater calls ExitProcess(0) after a successful update; the SCM
