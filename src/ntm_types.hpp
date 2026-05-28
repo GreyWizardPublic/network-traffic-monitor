@@ -70,6 +70,20 @@ struct ClientHealthStats
     unsigned      wireProtoVersion{0};  // from wire_proto=; 0 = not yet reported
     std::uint32_t aggIntervalMs{0};     // from agg_interval_ms=; 0 = not reported (old client)
     std::uint32_t aggFlows{0};          // from agg_flows=; unique flows in last flush
+
+    // Reported config (from H-line cfg_* fields).
+    // cfgTransport == "" means the client has not yet sent cfg_* fields (old client or
+    // first H-line not yet received).  Once set, all fields below are valid.
+    std::string   cfgTransport;                    // "tcp" | "websocket"
+    std::int8_t   cfgCompress{-1};                 // 1=on, 0=off, -1=unknown
+    std::uint32_t cfgSendBuffer{0};                // bytes; 0 = OS default
+    std::int8_t   cfgAutoUpdate{-1};               // 1=on, 0=off, -1=unknown
+    std::uint32_t cfgReconnectAttempts{0};
+    std::uint32_t cfgReconnectInterval{0};
+    std::uint32_t cfgAggTarget{0};
+    std::uint32_t cfgAggMinMs{0};
+    std::uint32_t cfgAggMaxMs{0};
+    std::uint32_t cfgAggMaxFlows{0};
 };
 
 // Parse a space-separated key=value H-line body (the part after the "H " prefix)
@@ -119,14 +133,29 @@ inline ClientHealthStats parseHealthLine(const std::string &body)
             try { dst = static_cast<unsigned>(std::stoull(val)); } catch (...) {}
         };
 
-        if      (key == "pcap_recv")       toU64(hs.pcapRecv);
-        else if (key == "pcap_drop")       toU64(hs.pcapDrop);
-        else if (key == "buf_drop")        toU64(hs.bufDrop);
-        else if (key == "wire_proto")      toUint(hs.wireProtoVersion);
-        else if (key == "ver")             hs.version  = val;
-        else if (key == "platform")        hs.platform = val;
-        else if (key == "agg_interval_ms") toU32(hs.aggIntervalMs);
-        else if (key == "agg_flows")       toU32(hs.aggFlows);
+        auto toI8Bool = [&](std::int8_t &dst) {
+            if      (val == "1") dst = 1;
+            else if (val == "0") dst = 0;
+        };
+
+        if      (key == "pcap_recv")              toU64(hs.pcapRecv);
+        else if (key == "pcap_drop")              toU64(hs.pcapDrop);
+        else if (key == "buf_drop")               toU64(hs.bufDrop);
+        else if (key == "wire_proto")             toUint(hs.wireProtoVersion);
+        else if (key == "ver")                    hs.version  = val;
+        else if (key == "platform")               hs.platform = val;
+        else if (key == "agg_interval_ms")        toU32(hs.aggIntervalMs);
+        else if (key == "agg_flows")              toU32(hs.aggFlows);
+        else if (key == "cfg_transport")          { if (val == "tcp" || val == "websocket") hs.cfgTransport = val; }
+        else if (key == "cfg_compress")           toI8Bool(hs.cfgCompress);
+        else if (key == "cfg_send_buffer")        toU32(hs.cfgSendBuffer);
+        else if (key == "cfg_auto_update")        toI8Bool(hs.cfgAutoUpdate);
+        else if (key == "cfg_reconnect_attempts") toU32(hs.cfgReconnectAttempts);
+        else if (key == "cfg_reconnect_interval") toU32(hs.cfgReconnectInterval);
+        else if (key == "cfg_agg_target")         toU32(hs.cfgAggTarget);
+        else if (key == "cfg_agg_min_ms")         toU32(hs.cfgAggMinMs);
+        else if (key == "cfg_agg_max_ms")         toU32(hs.cfgAggMaxMs);
+        else if (key == "cfg_agg_max_flows")      toU32(hs.cfgAggMaxFlows);
         // unknown keys: silently ignored
     }
     return hs;

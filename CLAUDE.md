@@ -348,7 +348,7 @@ Both protocol version constants live in `src/proto_client_server.hpp`:
 | Constant | Current value | Protocol |
 |---|---|---|
 | `kWireProtoVersion` | `2` | Wire (data-phase line format) |
-| `kApiVersion` | `10` | HTTPS API (endpoint schemas) |
+| `kApiVersion` | `11` | HTTPS API (endpoint schemas) |
 
 ### Protocol lockstep rule
 
@@ -380,6 +380,34 @@ all of them.
 4. **Both protocols are independent.** A wire-protocol change does not require an
    API version bump, and vice versa — unless the same commit touches both sides.
 5. **When a protocol bumps, bump every lockstep module** per the table above.
+
+---
+
+## Client Configuration Key Parity
+
+All ntm-client configuration keys are parsed by the single shared file
+`src/client_config_parse.hpp` and stored in `src/client_types.hpp::ClientConfig`.
+Both Linux and Windows clients `#include` these files without any platform-specific
+branches, ensuring they always accept an identical set of keys.
+
+### Rules
+
+1. **All configuration keys MUST be added to `src/client_config_parse.hpp` exclusively —
+   never in platform-specific files** — so that Linux and Windows clients always accept
+   an identical set of configuration keys.
+
+2. **All config keys must have identical runtime behaviour on all platforms.**
+   Intentional platform exceptions (e.g. a feature not yet implemented on one platform)
+   require:
+   - Explicit documentation in `CLIENT_DEPLOYMENT.md` (noting the limitation and which
+     platforms are affected).
+   - A cross-agent handoff PR to the owning agent to resolve the gap before the next
+     MINOR release of ntm-client.
+
+3. **All config fields reported in H-lines (`cfg_*` fields) must reflect the actual
+   runtime value on both platforms.** If a field's behaviour differs between platforms,
+   the H-line must accurately reflect the effective value (e.g. `cfg_compress=0` on a
+   platform where compression is disabled) so the admin dashboard shows the true state.
 
 ---
 

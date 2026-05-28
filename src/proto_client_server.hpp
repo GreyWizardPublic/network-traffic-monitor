@@ -23,7 +23,8 @@ inline constexpr unsigned kWireProtoVersion = 2;
 // v8: added /api/update/download_sig endpoint; added sig_size field to /api/update/check.
 // v9: added /api/client/history endpoint (per-client traffic histogram).
 // v10: added admin hide-entities endpoints; /api/summary filters hidden clients/ifaces.
-inline constexpr unsigned kApiVersion = 10;
+// v11: added /api/admin/client/config endpoint; clients report cfg_* fields in H-lines.
+inline constexpr unsigned kApiVersion = 11;
 
 // Default TCP port — serves both ntm-client data ingestion and the HTTPS
 // dashboard when port consolidation is in use (see docs/wire-protocol.md § 2).
