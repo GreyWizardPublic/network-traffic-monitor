@@ -117,6 +117,11 @@ void ntmLog(LogLevel level, bool isDaemon, const std::string &msg);
 // *running = false when the user requests shutdown.
 void setupSignals(std::atomic<bool> &running);
 
+// Signal the main loop to stop (sets the same flag as setupSignals).
+// Called by the Windows SCM service control handler on SERVICE_CONTROL_STOP;
+// no-op on Linux (signals go directly to the signal handler).
+void requestStop();
+
 // ---------------------------------------------------------------------------
 // Daemon / background process
 // ---------------------------------------------------------------------------
