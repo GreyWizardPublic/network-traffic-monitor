@@ -535,12 +535,14 @@ port                 = 5555
 identity             = C:\ProgramData\ntm-client\secrets\client_private.pem
 ca                   = system
 send_buffer_bytes    = 524288
-transport            = tcp
+
+# transport = tcp      # direct TLS connection (LAN or VPN, default)
+# transport = websocket  # required when server is behind Cloudflare or any HTTP proxy
 ```
 
 | Key | Values | Default | Notes |
 |-----|--------|---------|-------|
-| `transport` | `tcp` \| `websocket` (alias `ws`) | `tcp` | Use `websocket` when a firewall or proxy blocks raw TLS on port 5555. See [`docs/wire-protocol.md`](docs/wire-protocol.md) for transport details. |
+| `transport` | `tcp` \| `websocket` (alias `ws`) | `tcp` | **`tcp`** — direct TLS; use when the client can reach the server port directly (LAN, VPN, or port-forwarded). **`websocket`** — required when the server is behind Cloudflare or any HTTP/HTTPS reverse proxy. A misconfigured transport causes the client to receive an HTTP error response instead of the auth nonce, which presents as `authentication rejected`. See the [Cloudflare/proxy note](#authentication-rejected--alpn-warning) in Troubleshooting. |
 
 > Both `C:\path\to\file` and `C:/path/to/file` are accepted.
 
@@ -714,9 +716,33 @@ Register-ScheduledTask -TaskName "ntm-client" -Action $action `
 - Pinned cert (`server_cert`) does not match the server's current certificate.
 - Confirm the path in `server_cert` or `ca` is correct and the file is readable by SYSTEM.
 
-**`server rejected authentication`**
-- The client public key is not in the server's `allowed_clients.txt`.
-- Re-derive the hex public key and add it to the server allowlist.
+**`server rejected authentication` / `authentication rejected`** {#authentication-rejected--alpn-warning}
+
+There are two distinct causes — check the verbose log to distinguish them.
+
+*Cause A — wrong transport (Cloudflare / HTTP proxy):*
+- Run with `--verbose` and look for this warning:
+  ```
+  WARNING — server selected ALPN='(none)' not 'ntm-wire'. Use transport=websocket to traverse Cloudflare.
+  ```
+  When present, the client is connecting through an HTTP proxy (Cloudflare, nginx, etc.) that
+  does not forward raw TLS. Add `transport = websocket` to the config:
+  ```ini
+  transport = websocket
+  ```
+  The WebSocket upgrade request passes through HTTP proxies; the raw TLS auth byte (`0x03`)
+  does not. Without this setting the client receives an HTTP 4xx error response in place of
+  the 32-byte auth nonce, which it signs and sends — causing immediate rejection.
+
+*Cause B — key not registered on server:*
+- Derive the 64-char hex public key from the client's private key:
+  ```bash
+  # In MSYS2 mingw64 shell:
+  openssl pkey -in /c/ProgramData/ntm-client/secrets/client_private.pem \
+    -pubout -outform DER | od -A n -t x1 | tr -d ' \n' | tail -c 64
+  ```
+  Add that 64-char hex as a new line in the server's `allowed_keys` file and reload the
+  server (or send SIGHUP if supported).
 
 **`ntm-client: NOTE: ensure identity key is protected via NTFS permissions`**
 - Set the ACL on `client_private.pem` as shown in Section 4.
