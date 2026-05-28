@@ -71,10 +71,16 @@ public:
                      bool useCompression = true,
                      bool isDaemon = false,
                      bool verbose = false,
-                     TransportMode transportMode = TransportMode::TcpTls)
+                     TransportMode transportMode = TransportMode::TcpTls,
+                     bool autoUpdate = false)
         : aggInterval_(aggCfg)
         , aggMaxFlows_(aggMaxFlows)
         , useCompression_(useCompression)
+        , cfgSendBufferBytes_(sendBufferBytes)
+        , cfgAutoUpdate_(autoUpdate)
+        , cfgAggTargetLinesPerSec_(aggCfg.targetLinesPerSec)
+        , cfgAggMinIntervalMs_(aggCfg.minIntervalMs)
+        , cfgAggMaxIntervalMs_(aggCfg.maxIntervalMs)
         , host_(std::move(host)), port_(port)
         , identityPath_(std::move(identityPath))
         , tlsCaPath_(std::move(tlsCaPath))
@@ -88,11 +94,9 @@ public:
         , verbose_(verbose)
         , transportMode_(transportMode)
     {
-        // sendBuffer_ / flushBuffer_ are no longer used for D-lines (aggregation
-        // builds D-lines directly into flushBuffer_ each flush cycle).
-        // Reserve a reasonable initial capacity to avoid frequent reallocations.
+        // flushBuffer_ is written by the aggregation flush path; reserve a reasonable
+        // initial capacity to avoid frequent reallocations.
         flushBuffer_.reserve(kSendBufferDefaultBytes);
-        (void)sendBufferBytes; // retained in signature for ABI compat
 
         if (!tlsCaPath_.empty() || !tlsServerCertPath_.empty())
         {
@@ -174,6 +178,13 @@ private:
     AdaptiveInterval         aggInterval_;
     std::uint32_t            aggMaxFlows_{kAggMaxFlows};
     std::uint32_t            aggLastFlows_{0}; // flows emitted in last flush — reported in H-line
+
+    // ── Config snapshot (emitted in every H-line for admin visibility) ─────────
+    std::size_t              cfgSendBufferBytes_{0};
+    bool                     cfgAutoUpdate_{false};
+    std::uint32_t            cfgAggTargetLinesPerSec_{500};
+    std::uint32_t            cfgAggMinIntervalMs_{100};
+    std::uint32_t            cfgAggMaxIntervalMs_{5000};
 
     // ── zlib compression ─────────────────────────────────────────────────────
     bool                     useCompression_{true};  // from config; actual use depends on negotiation
@@ -368,6 +379,16 @@ private:
                         + " platform=" + kClientPlatform
                         + " agg_interval_ms=" + std::to_string(aggInterval_.intervalMs())
                         + " agg_flows="       + std::to_string(aggLastFlows_)
+                        + " cfg_transport="           + (transportMode_ == TransportMode::WebSocket ? "websocket" : "tcp")
+                        + " cfg_compress="            + (useCompression_ ? "1" : "0")
+                        + " cfg_send_buffer="         + std::to_string(cfgSendBufferBytes_)
+                        + " cfg_auto_update="         + (cfgAutoUpdate_ ? "1" : "0")
+                        + " cfg_reconnect_attempts="  + std::to_string(reconnectMaxAttempts_)
+                        + " cfg_reconnect_interval="  + std::to_string(reconnectIntervalSec_)
+                        + " cfg_agg_target="          + std::to_string(cfgAggTargetLinesPerSec_)
+                        + " cfg_agg_min_ms="          + std::to_string(cfgAggMinIntervalMs_)
+                        + " cfg_agg_max_ms="          + std::to_string(cfgAggMaxIntervalMs_)
+                        + " cfg_agg_max_flows="       + std::to_string(aggMaxFlows_)
                         + "\n";
                     if (!deflateAndWrite(hLine.data(), hLine.size()))
                         closeUnlocked();
@@ -747,7 +768,8 @@ int runClient(bool daemonMode, const ClientConfig &config, char **argv)
                                 config.useCompression,
                                 daemonMode,
                                 config.verbose,
-                                config.transport);
+                                config.transport,
+                                config.auto_update);
 
     // Enumerate capturable devices. Returns false only when pcap_findalldevs
     // itself errors (hard failure at startup); an empty result is valid and
