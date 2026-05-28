@@ -68,6 +68,12 @@ struct SettingsView: View {
                     .frame(maxWidth: .infinity)
                 }
             }
+
+            Section("Support") {
+                Link(destination: URL(string: "mailto:support@code1one.com")!) {
+                    Label("support@code1one.com", systemImage: "envelope")
+                }
+            }
         }
         .navigationTitle("Settings")
     }
