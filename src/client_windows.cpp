@@ -426,6 +426,11 @@ void setupSignals(std::atomic<bool> &running)
     ::SetConsoleCtrlHandler(consoleCtrlHandler, TRUE);
 }
 
+void requestStop()
+{
+    if (g_runningPtr) g_runningPtr->store(false);
+}
+
 // ---------------------------------------------------------------------------
 // Daemon (not supported on Windows)
 // ---------------------------------------------------------------------------
