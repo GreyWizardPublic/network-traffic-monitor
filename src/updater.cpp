@@ -662,8 +662,8 @@ static void runUpdater(ClientConfig config)
             continue;
         }
 
-        const bool available = jsonBool(body, "available", false);
-        const bool force      = jsonBool(body, "force",     false);
+        const bool available = jsonBool(body, "update_available", false);
+        const bool force      = jsonBool(body, "force",            false);
 
         if (!available && !force)
         {
@@ -671,12 +671,19 @@ static void runUpdater(ClientConfig config)
                 std::cerr << "ntm-client: updater: no update available\n";
             continue;
         }
+        if (force && !available)
+        {
+            // Server flagged force but has no binary in update_dir yet.
+            std::cerr << "ntm-client: updater: force flag set but no binary available on server\n";
+            continue;
+        }
 
         const std::string newVer = jsonStr(body, "version");
         const std::string sha256 = jsonStr(body, "sha256");
+        // "size" is an optional download-cap hint; 0 means read until EOF.
         const std::int64_t size  = jsonInt(body, "size", 0);
 
-        if (newVer.empty() || sha256.size() != 64 || size <= 0)
+        if (newVer.empty() || sha256.size() != 64)
         {
             std::cerr << "ntm-client: updater: malformed check response\n";
             continue;
