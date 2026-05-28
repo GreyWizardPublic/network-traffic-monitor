@@ -5,12 +5,12 @@ import XCTest
 
 final class DashboardSnapshotDecodeTests: XCTestCase {
 
-    // MARK: Full v10 snapshot — every documented field present
+    // MARK: Full v11 snapshot — every documented field present
 
-    func testFullV10Snapshot() throws {
+    func testFullV11Snapshot() throws {
         let json = """
         {
-          "api_version": 10,
+          "api_version": 11,
           "server_version": "1.19.0",
           "server_wire_proto_version": 2,
           "window_start": 1716480000,
@@ -63,7 +63,7 @@ final class DashboardSnapshotDecodeTests: XCTestCase {
         """
         let s = try decode(json)
 
-        XCTAssertEqual(s.apiVersion, 10)
+        XCTAssertEqual(s.apiVersion, 11)
         XCTAssertEqual(s.serverVersion, "1.19.0")
         XCTAssertEqual(s.serverWireProtoVersion, 2)
         XCTAssertEqual(s.windowStart, 1716480000)
@@ -246,7 +246,7 @@ final class DashboardSnapshotDecodeTests: XCTestCase {
     func testDemoSnapshot() throws {
         let json = """
         {
-          "api_version": 10,
+          "api_version": 11,
           "server_version": "1.19.0",
           "demo": true,
           "demo_expires_at": 1716481000,
@@ -390,7 +390,7 @@ final class DashboardSnapshotDecodeTests: XCTestCase {
     func testMultipleClientsDecoded() throws {
         let json = """
         {
-          "api_version": 10, "server_version": "1.19.0",
+          "api_version": 11, "server_version": "1.19.0",
           "window_start": 0, "generated_at": 0,
           "interfaces": [], "entities": [], "overhead_entities": [],
           "client_health": [
@@ -657,8 +657,8 @@ final class CertificatePinnerTests: XCTestCase {
 final class ProtocolVersionTests: XCTestCase {
 
     // api-protocol.md § Change log: current API version is 10
-    func testSupportedApiVersionIsTenPerSpec() {
-        XCTAssertEqual(NTMProtocol.supportedApiVersion, 10)
+    func testSupportedApiVersionIsElevenPerSpec() {
+        XCTAssertEqual(NTMProtocol.supportedApiVersion, 11)
     }
 
     // api-protocol.md § 3: api_version 1 has no /auth/* endpoints
@@ -816,7 +816,7 @@ final class DashboardViewModelApiVersionTests: XCTestCase {
     }
 
     func testApiVersionAboveSupportedIsNonBlockingWarning() async {
-        let vm = DashboardViewModel(fetcher: MockSummaryFetcher(result: .success(makeSnap(api: 11))))
+        let vm = DashboardViewModel(fetcher: MockSummaryFetcher(result: .success(makeSnap(api: 12))))
         await vm.refresh()
         XCTAssertFalse(vm.apiVersionBlocking,  "newer server: warn but don't block")
         XCTAssertNotNil(vm.apiVersionWarning,  "newer server: warning must be set")
@@ -1032,7 +1032,7 @@ final class DashboardViewModelFilterTests: XCTestCase {
     private func makeSnap() -> DashboardSnapshot {
         let hex = String(repeating: "a", count: 64)
         let json = """
-        {"api_version":10,"server_version":"1.19.0","window_start":0,"generated_at":0,
+        {"api_version":11,"server_version":"1.23.0","window_start":0,"generated_at":0,
          "interfaces":[{"client":"home-pi","iface":"eth0","packets":100,"bytes":50000},
                        {"client":"other-pi","iface":"eth0","packets":50,"bytes":25000}],
          "entities":[],"overhead_entities":[],
