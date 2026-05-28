@@ -51,7 +51,7 @@ struct ClientConfig
     std::uint32_t aggMaxFlows{10000};         // flow-table cap; forced flush when reached
 
     // zlib stream compression on the data phase (auth v3 + capability exchange).
-    // Linux client only; Windows client always sends kCapNone regardless of this flag.
+    // Supported on Linux (system zlib) and Windows (vendored miniz, src/third_party/miniz/).
     // Set to false via config key 'compress=false' or CLI flag '--no-compress'.
     bool useCompression{true};
 
