@@ -16,6 +16,7 @@
 #  endif
 #  include <winsock2.h>
 #  include <ws2tcpip.h>
+#  include <wincrypt.h>   // CertOpenSystemStoreW, CertEnumCertificatesInStore
 #else
 #  include <arpa/inet.h>
 #  include <netinet/in.h>
@@ -60,21 +61,62 @@ bool isLanAddrV6(const std::uint8_t addr[16])
 // TLS helpers
 // ---------------------------------------------------------------------------
 
+#ifdef _WIN32
+// HARMONIZE-LINUX: Windows loads trust anchors from the OS Certificate Store;
+// Linux uses SSL_CTX_set_default_verify_paths() (file-based system CA bundle).
+// Both paths are triggered by ca=system in the config.
+static void loadWindowsCertStore(SSL_CTX *ctx)
+{
+    X509_STORE *store = SSL_CTX_get_cert_store(ctx);
+    for (const wchar_t *name : {L"ROOT", L"CA"})
+    {
+        HCERTSTORE hStore = CertOpenSystemStoreW(0, name);
+        if (!hStore) continue;
+        PCCERT_CONTEXT pCert = nullptr;
+        while ((pCert = CertEnumCertificatesInStore(hStore, pCert)) != nullptr)
+        {
+            const unsigned char *p = pCert->pbCertEncoded;
+            X509 *x509 = d2i_X509(nullptr, &p,
+                                   static_cast<long>(pCert->cbCertEncoded));
+            if (x509)
+            {
+                X509_STORE_add_cert(store, x509);
+                X509_free(x509);
+            }
+        }
+        CertCloseStore(hStore, 0);
+    }
+}
+#endif
+
 SSL_CTX *createClientTLSContext(const std::string &caPath,
                                 const std::string &serverCertPath)
 {
     SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
     if (!ctx) return nullptr;
 
-    const bool useCaVerify = !caPath.empty();
-    SSL_CTX_set_verify(ctx, useCaVerify ? SSL_VERIFY_PEER : SSL_VERIFY_NONE, nullptr);
-    if (useCaVerify)
+    const bool useSystem = (caPath == "system");
+    const bool useCaFile = !caPath.empty() && !useSystem;
+
+    SSL_CTX_set_verify(ctx,
+        (useCaFile || useSystem) ? SSL_VERIFY_PEER : SSL_VERIFY_NONE,
+        nullptr);
+
+    if (useCaFile)
     {
         if (SSL_CTX_load_verify_locations(ctx, caPath.c_str(), nullptr) != 1)
         {
             SSL_CTX_free(ctx);
             return nullptr;
         }
+    }
+    else if (useSystem)
+    {
+#ifdef _WIN32
+        loadWindowsCertStore(ctx);
+#else
+        SSL_CTX_set_default_verify_paths(ctx);
+#endif
     }
     SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3);
     SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
