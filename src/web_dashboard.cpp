@@ -2048,7 +2048,7 @@ async function loadClients(){
           if(latest){
             if(semverGt(latest.version,x.version||'0.0.0')){
               updCell='<span style="color:#c84">&#9650; v'+esc(latest.version)+'</span> '
-                +'<button onclick="doForceUpdate(\''+esc(x.client_id)+'\')" '
+                +'<button onclick="doForceUpdate(\''+esc(x.client_id)+'\',this)" '
                 +'style="font-size:0.75em;padding:2px 8px;background:#3a1a00;color:#c84;'
                 +'border:1px solid #5a3000;border-radius:2px;cursor:pointer;font-family:monospace">Force</button>';
               rowBg='background:#1a1400';
@@ -2224,17 +2224,53 @@ function semverGt(a,b){
   return false;
 }
 
-async function doForceUpdate(clientId){
-  document.getElementById('msg').textContent='Requesting force update…';
+async function doForceUpdate(clientId, btn){
+  btn.disabled=true;
+  btn.textContent='Sending…';
+  btn.style.color='#888';
+  btn.style.borderColor='#444';
+  btn.style.background='#1a1a1a';
   try{
     const r=await fetch('/api/admin/update/force',{
       method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pubkey:clientId})
     });
     if(handleAdminExpiry(r.status))return;
     const d=await r.json();
-    document.getElementById('msg').textContent=
-      (r.ok&&d.ok)?'Force update flagged. Agent will update on next daily check.':'✗ '+(d.error||'Error');
-  }catch(e){document.getElementById('msg').textContent='✗ Request failed: '+esc(e.message);}
+    if(r.ok&&d.ok){
+      btn.textContent='✓ Flagged';
+      btn.style.color='#4c4';
+      btn.style.borderColor='#3a5a3a';
+      btn.style.background='#0d1a0d';
+      // Keep disabled — flag is one-shot; table refresh will restore button if still needed
+    }else{
+      btn.textContent='✗ Failed';
+      btn.style.color='#c44';
+      btn.style.borderColor='#5a2a2a';
+      btn.style.background='#1a0d0d';
+      // Re-enable after 3 s so operator can retry
+      setTimeout(function(){
+        btn.disabled=false;
+        btn.textContent='Force';
+        btn.style.color='#c84';
+        btn.style.borderColor='#5a3000';
+        btn.style.background='#3a1a00';
+      },3000);
+      document.getElementById('msg').textContent='✗ Force update failed: '+(d.error||'Error');
+    }
+  }catch(e){
+    btn.textContent='✗ Error';
+    btn.style.color='#c44';
+    btn.style.borderColor='#5a2a2a';
+    btn.style.background='#1a0d0d';
+    setTimeout(function(){
+      btn.disabled=false;
+      btn.textContent='Force';
+      btn.style.color='#c84';
+      btn.style.borderColor='#5a3000';
+      btn.style.background='#3a1a00';
+    },3000);
+    document.getElementById('msg').textContent='✗ Request failed: '+esc(e.message);
+  }
 }
 
 async function doScanManifest(){
