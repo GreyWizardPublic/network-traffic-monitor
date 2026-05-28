@@ -1030,7 +1030,7 @@ All keys are set in the config file (`key = value`) or overridden by CLI flags.
 | `reconnect_attempts` | `--reconnect-attempts` | `10` | Max consecutive reconnect failures before exit (1–1000) |
 | `reconnect_interval_sec` | `--reconnect-interval` | `60` | Seconds between reconnect attempts (1–3600) |
 | `transport` | `--transport` | `tcp` | Connection transport: `tcp` (raw TLS, default) or `websocket` (WebSocket over TLS, for Cloudflare tunnels and HTTP proxies) |
-| `compress` | `--no-compress` (inverse) | `true` | Enable zlib compression on the data phase. Set `compress=false` or pass `--no-compress` to disable. Linux client only — Windows always sends uncompressed regardless of this setting. |
+| `compress` | `--no-compress` (inverse) | `true` | Enable zlib compression on the data phase. Set `compress=false` or pass `--no-compress` to disable. Supported on both Linux (system zlib) and Windows (vendored miniz). |
 | `auto_update` | — | `false` | Enable daily binary self-update check (opt-in) |
 | `web_port` | — | `8443` | *(Deprecated — server v1.15.0+)* HTTPS port used by auto-update to reach `/api/update/check`. Before server v1.15.0 this matched `web_port` in the server config (default `8443`). From server v1.15.0+ the dashboard shares the data-ingestion `port` via ALPN — remove this key from the config when connecting to a v1.15.0+ server. |
 | `verbose` | `--verbose` | `false` | Enable verbose logging |
