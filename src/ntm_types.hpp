@@ -3,8 +3,16 @@
 // ntm_types.hpp — aggregation data types and process-wide logging,
 // shared between server_core and web_dashboard compilation units.
 
-#include <arpa/inet.h>
-#include <netinet/in.h>
+#ifdef _WIN32
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  include <winsock2.h>
+#  include <ws2tcpip.h>
+#else
+#  include <arpa/inet.h>
+#  include <netinet/in.h>
+#endif
 
 #include <algorithm>
 #include <array>
@@ -21,7 +29,9 @@
 #include <set>
 #include <shared_mutex>
 #include <string>
-#include <syslog.h>
+#ifndef _WIN32
+#  include <syslog.h>
+#endif
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -293,6 +303,7 @@ inline void serverLog(LogLevel lvl, const char *fmt, ...)
     if (n < 0)
         return;
 
+#ifndef _WIN32
     if (g_daemon.load(std::memory_order_relaxed))
     {
         int prio = (lvl == LogLevel::Err) ? LOG_ERR
@@ -301,6 +312,7 @@ inline void serverLog(LogLevel lvl, const char *fmt, ...)
         syslog(prio, "%s", buf);
     }
     else
+#endif
     {
         std::cerr << buf;
         if (n > 0 && buf[n - 1] != '\n')
