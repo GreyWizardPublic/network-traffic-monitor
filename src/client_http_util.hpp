@@ -116,4 +116,50 @@ inline std::string buildGetRequest(const std::string &path,
            "\r\n";
 }
 
+// ---------------------------------------------------------------------------
+// Hostname validation (L-2)
+// ---------------------------------------------------------------------------
+
+// Returns true if host is safe to embed in an HTTP request line or Host
+// header — i.e. contains no CR or LF that could be used for header injection.
+inline bool hasValidHostname(const std::string &host)
+{
+    return host.find_first_of("\r\n") == std::string::npos;
+}
+
+// ---------------------------------------------------------------------------
+// Minimal JSON string extraction (L-1)
+// ---------------------------------------------------------------------------
+
+// Extract the string value of `key` from a flat (non-nested) JSON object.
+// Handles \" escape sequences correctly so a backslash-quoted value is never
+// truncated at the escape. Returns {} on missing key or unterminated string.
+inline std::string jsonStr(const std::string &json, const std::string &key)
+{
+    const std::string pattern = "\"" + key + "\":\"";
+    auto pos = json.find(pattern);
+    if (pos == std::string::npos) return {};
+    pos += pattern.size();
+    std::string result;
+    while (pos < json.size())
+    {
+        if (json[pos] == '\\' && pos + 1 < json.size())
+        {
+            ++pos;
+            result += json[pos];
+        }
+        else if (json[pos] == '"')
+        {
+            break;
+        }
+        else
+        {
+            result += json[pos];
+        }
+        ++pos;
+    }
+    if (pos >= json.size()) return {}; // unterminated string
+    return result;
+}
+
 } // namespace ntm::http_util

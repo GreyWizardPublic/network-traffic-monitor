@@ -195,3 +195,96 @@ TEST_CASE("buildGetRequest: ends with double CRLF")
     REQUIRE(req.size() >= 4);
     REQUIRE_EQ(req.substr(req.size() - 4), std::string{"\r\n\r\n"});
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// hasValidHostname — L-2 host-header injection guard
+// ═══════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("hasValidHostname: plain hostname is valid")
+{
+    REQUIRE(hasValidHostname("ntm.example.com"));
+}
+
+TEST_CASE("hasValidHostname: IP address is valid")
+{
+    REQUIRE(hasValidHostname("192.168.1.1"));
+}
+
+TEST_CASE("hasValidHostname: hostname with port suffix is valid")
+{
+    REQUIRE(hasValidHostname("server.local:8443"));
+}
+
+TEST_CASE("hasValidHostname: empty string is valid (caller responsibility)")
+{
+    REQUIRE(hasValidHostname(""));
+}
+
+TEST_CASE("hasValidHostname: CR injection is rejected (L-2)")
+{
+    REQUIRE(!hasValidHostname("victim.com\r\nX-Injected: evil"));
+}
+
+TEST_CASE("hasValidHostname: LF injection is rejected (L-2)")
+{
+    REQUIRE(!hasValidHostname("victim.com\nX-Injected: evil"));
+}
+
+TEST_CASE("hasValidHostname: bare CR is rejected")
+{
+    REQUIRE(!hasValidHostname("host\r"));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// jsonStr — L-1 JSON escape handling
+// ═══════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("jsonStr: plain string value extracted correctly")
+{
+    REQUIRE_EQ(jsonStr(R"({"version":"1.2.3"})", "version"),
+               std::string{"1.2.3"});
+}
+
+TEST_CASE("jsonStr: sha256 hex value extracted correctly")
+{
+    std::string hash(64, 'a');
+    std::string json = R"({"sha256":")" + hash + R"("})";
+    REQUIRE_EQ(jsonStr(json, "sha256"), hash);
+}
+
+TEST_CASE("jsonStr: escaped quote inside value is not treated as terminator (L-1)")
+{
+    // {"version":"1.2\"hack"} — the \" is an escaped quote inside the string,
+    // not the closing quote.
+    REQUIRE_EQ(jsonStr(R"({"version":"1.2\"hack"})", "version"),
+               std::string{R"(1.2"hack)"});
+}
+
+TEST_CASE("jsonStr: backslash escape folds next char (backslash-n becomes 'n', not newline)")
+{
+    // The extractor consumes the backslash and keeps the next character as-is;
+    // \n becomes the letter 'n', not a newline byte.
+    REQUIRE_EQ(jsonStr(R"({"v":"a\nb"})", "v"), std::string{"anb"});
+}
+
+TEST_CASE("jsonStr: missing key returns empty string")
+{
+    REQUIRE_EQ(jsonStr(R"({"other":"x"})", "version"), std::string{});
+}
+
+TEST_CASE("jsonStr: empty JSON returns empty string")
+{
+    REQUIRE_EQ(jsonStr("", "version"), std::string{});
+}
+
+TEST_CASE("jsonStr: unterminated value returns empty string")
+{
+    // The closing '"' is never found — should return {} rather than partial.
+    REQUIRE_EQ(jsonStr(R"({"version":"1.2.3)", "version"), std::string{});
+}
+
+TEST_CASE("jsonStr: value adjacent to other fields is not confused")
+{
+    REQUIRE_EQ(jsonStr(R"({"a":"x","version":"1.9.0","b":"y"})", "version"),
+               std::string{"1.9.0"});
+}

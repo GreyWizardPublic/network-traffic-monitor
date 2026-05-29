@@ -6,6 +6,7 @@
 #include "client_core.hpp"
 #include "client_version.hpp"
 #include "client_signing.hpp"
+#include "client_http_util.hpp"
 
 #include <openssl/evp.h>
 #include <openssl/rand.h>
@@ -259,18 +260,6 @@ static std::string sslRead(SSL *ssl, SockFdType fd, std::size_t limit = 2 * 1024
     return out;
 }
 
-// Tiny JSON field extractor (string values only, no nesting).
-static std::string jsonStr(const std::string &json, const std::string &key)
-{
-    std::string pattern = "\"" + key + "\":\"";
-    auto pos = json.find(pattern);
-    if (pos == std::string::npos) return {};
-    pos += pattern.size();
-    auto end = json.find('"', pos);
-    if (end == std::string::npos) return {};
-    return json.substr(pos, end - pos);
-}
-
 static bool jsonBool(const std::string &json, const std::string &key, bool def = false)
 {
     std::string pt = "\"" + key + "\":";
@@ -321,6 +310,12 @@ static std::pair<int, std::string> httpsGet(const std::string &host, std::uint16
                                              const std::string &serverCertPath,
                                              bool verbose)
 {
+    // L-2: guard against CR/LF injection via a hostile config-file server value.
+    if (!ntm::http_util::hasValidHostname(host))
+    {
+        std::cerr << "ntm-client: updater: invalid server hostname (contains CR/LF)\n";
+        return {0, {}};
+    }
     SockFdType fd = connectTcp(host, port);
     if (fd == kBadSock) return {0, {}};
     SockGuard sg(fd);
@@ -343,6 +338,12 @@ static int httpsGetToFile(const std::string &host, std::uint16_t port,
                           const std::string &destPath, std::int64_t expectedSize,
                           bool verbose)
 {
+    // L-2: guard against CR/LF injection via a hostile config-file server value.
+    if (!ntm::http_util::hasValidHostname(host))
+    {
+        std::cerr << "ntm-client: updater: invalid server hostname (contains CR/LF)\n";
+        return 0;
+    }
     SockFdType fd = connectTcp(host, port);
     if (fd == kBadSock) return 0;
     SockGuard sg(fd);
@@ -374,6 +375,9 @@ static int httpsGetToFile(const std::string &host, std::uint16_t port,
     FILE *f = std::fopen(destPath.c_str(), "wb");
     if (!f) return 0;
 
+    // Hard ceiling: abort if more bytes arrive than a sane update could ever be.
+    // Protects against a compromised server returning an unbounded body when size==0.
+    constexpr std::int64_t kAbsoluteMaxBytes = 256LL * 1024 * 1024;
     std::int64_t written = 0;
     char buf[65536];
     while (true)
@@ -386,6 +390,12 @@ static int httpsGetToFile(const std::string &host, std::uint16_t port,
             return 0;
         }
         written += n;
+        if (written > kAbsoluteMaxBytes)
+        {
+            std::fclose(f);
+            std::cerr << "ntm-client: updater: download exceeded 256 MiB absolute cap; aborting\n";
+            return 0;
+        }
         if (expectedSize > 0 && written >= expectedSize) break;
     }
     std::fclose(f);
@@ -678,8 +688,8 @@ static void runUpdater(ClientConfig config)
             continue;
         }
 
-        const std::string newVer = jsonStr(body, "version");
-        const std::string sha256 = jsonStr(body, "sha256");
+        const std::string newVer = ntm::http_util::jsonStr(body, "version");
+        const std::string sha256 = ntm::http_util::jsonStr(body, "sha256");
         // "size" is an optional download-cap hint; 0 means read until EOF.
         const std::int64_t size  = jsonInt(body, "size", 0);
 
@@ -689,8 +699,7 @@ static void runUpdater(ClientConfig config)
             continue;
         }
 
-#ifdef _WIN32
-        // HARMONIZE-LINUX: size cap currently Windows-only; consider unifying.
+        // H-2: enforce download size cap on all platforms.
         {
             constexpr std::int64_t kMaxUpdateBytes = 64LL * 1024 * 1024;
             if (size > kMaxUpdateBytes)
@@ -700,7 +709,6 @@ static void runUpdater(ClientConfig config)
                 continue;
             }
         }
-#endif
 
         std::cerr << "ntm-client: updater: update available — " << newVer
                   << (force ? " (forced)" : "") << "\n";
