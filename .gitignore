@@ -40,6 +40,17 @@ allowed_monitors.txt
 *.pem
 identity_*
 
+# Apple signing material — private keys and profiles must never be committed
+*.p8
+*.p12
+AuthKey_*.p8
+*.mobileprovision
+
+# iOS build outputs — archives and IPAs are distribution artefacts, not source
+ios/Build/
+*.xcarchive
+*.ipa
+
 # Editor / IDE noise
 .vscode/
 .idea/
