@@ -57,6 +57,7 @@ fi
 
 openssl pkeyutl \
     -sign \
+    -rawin \
     -inkey "${PRIVATE_KEY_PATH}" \
     -in    "${BINARY}" \
     -out   "${SIG_FILE}"

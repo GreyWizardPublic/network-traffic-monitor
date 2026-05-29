@@ -173,7 +173,6 @@ fi
 # ---------------------------------------------------------------------------
 info "Requesting nonce from $BASE_URL/admin/client/nonce ..."
 NONCE_RESP=$(curl --silent --show-error --fail \
-    --insecure \
     "$BASE_URL/admin/client/nonce") \
     || die "failed to contact server at $BASE_URL/admin/client/nonce"
 
@@ -225,7 +224,6 @@ fi
 
 info "Uploading binary and signature to $BASE_URL/admin/client/push ..."
 PUSH_RESP=$(curl --silent --show-error --fail \
-    --insecure \
     -F "platform=$PLATFORM" \
     -F "version=$VERSION" \
     -F "nonce=$NONCE" \
