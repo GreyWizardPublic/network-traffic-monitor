@@ -62,6 +62,10 @@ targets:
         Release:
           DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
           SWIFT_OPTIMIZATION_LEVEL: "-O"
+          # Pin to Apple Distribution so Automatic signing cannot regress to
+          # the personal-team Development cert when archiving for TestFlight /
+          # App Store. See ios/certs/AppleDistribution-W65LG3MSG6.cer.
+          CODE_SIGN_IDENTITY: "Apple Distribution: Dong Xue (W65LG3MSG6)"
     scheme:
       testTargets:
         - name: NTMDashboardTests
