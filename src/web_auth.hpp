@@ -30,12 +30,25 @@ inline std::string cookieFromHeader(const std::string &cookieHeader,
                                     const std::string &name)
 {
     const std::string prefix = name + "=";
-    auto pos = cookieHeader.find(prefix);
-    if (pos == std::string::npos) return {};
-    auto start = pos + prefix.size();
-    auto end   = cookieHeader.find(';', start);
-    return cookieHeader.substr(start,
-        end == std::string::npos ? std::string::npos : end - start);
+    std::size_t pos = 0;
+    while (pos < cookieHeader.size())
+    {
+        // Skip whitespace after ';'
+        while (pos < cookieHeader.size() && cookieHeader[pos] == ' ') ++pos;
+        // Check if this token starts exactly with `name=`
+        if (cookieHeader.compare(pos, prefix.size(), prefix) == 0)
+        {
+            std::size_t start = pos + prefix.size();
+            std::size_t end   = cookieHeader.find(';', start);
+            return cookieHeader.substr(start,
+                end == std::string::npos ? std::string::npos : end - start);
+        }
+        // Advance past this cookie to the next ';'
+        pos = cookieHeader.find(';', pos);
+        if (pos == std::string::npos) break;
+        ++pos;
+    }
+    return {};
 }
 
 // ---------------------------------------------------------------------------
