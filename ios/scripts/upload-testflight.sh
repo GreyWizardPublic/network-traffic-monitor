@@ -10,9 +10,9 @@
 #   ./ios/scripts/store-asc-key.sh <KEY_ID> /path/to/AuthKey_<KEY_ID>.p8
 #
 # Required env vars:
-#   ASC_KEY_ID     — 10-char App Store Connect API key ID (e.g. REDACTED_KEY_ID)
-#   ASC_ISSUER_ID  — Issuer UUID from appstoreconnect.apple.com
-#                    Users and Access → Integrations → App Store Connect API
+#   ASC_KEY_ID     — 10-char App Store Connect API key ID
+#                    (Users and Access → Integrations → App Store Connect API)
+#   ASC_ISSUER_ID  — Issuer UUID (same page as above)
 #
 # Optional env vars:
 #   IPA_PATH       — defaults to ios/Build/Export/NTMDashboard.ipa

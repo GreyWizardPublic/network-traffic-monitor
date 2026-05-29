@@ -6,8 +6,9 @@ import time, json, base64, hashlib, hmac, struct, urllib.request, urllib.error
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
-KEY_ID    = "REDACTED_OLD_KEY_ID"
-ISSUER_ID = "REDACTED_ISSUER_ID"
+import os, sys
+KEY_ID    = os.environ.get("ASC_KEY_ID")    or sys.exit("Set ASC_KEY_ID env var (10-char key ID)")
+ISSUER_ID = os.environ.get("ASC_ISSUER_ID") or sys.exit("Set ASC_ISSUER_ID env var (UUID issuer)")
 # Key is stored in macOS Keychain: service=appstoreconnect-api-key, account=<KEY_ID>
 
 import subprocess
