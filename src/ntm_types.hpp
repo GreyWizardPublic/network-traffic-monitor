@@ -152,8 +152,8 @@ inline ClientHealthStats parseHealthLine(const std::string &body)
         else if (key == "pcap_drop")              toU64(hs.pcapDrop);
         else if (key == "buf_drop")               toU64(hs.bufDrop);
         else if (key == "wire_proto")             toUint(hs.wireProtoVersion);
-        else if (key == "ver")                    hs.version  = val;
-        else if (key == "platform")               hs.platform = val;
+        else if (key == "ver")                    hs.version  = val.substr(0, 64);
+        else if (key == "platform")               hs.platform = val.substr(0, 64);
         else if (key == "agg_interval_ms")        toU32(hs.aggIntervalMs);
         else if (key == "agg_flows")              toU32(hs.aggFlows);
         else if (key == "cfg_transport")          { if (val == "tcp" || val == "websocket") hs.cfgTransport = val; }

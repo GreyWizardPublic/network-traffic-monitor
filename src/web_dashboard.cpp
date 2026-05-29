@@ -2699,6 +2699,10 @@ void registerWebHandlers(NtmHttpServer &svr,
 
             // Security headers on every response.
             res.set_header("X-Content-Type-Options", "nosniff");
+            res.set_header("Strict-Transport-Security",
+                           "max-age=31536000; includeSubDomains");
+            res.set_header("Referrer-Policy", "no-referrer");
+            res.set_header("Permissions-Policy", "()");
             res.set_header("Content-Security-Policy",
                            "default-src 'self'; "
                            "script-src 'self' 'unsafe-inline'; "
@@ -3391,6 +3395,16 @@ void registerWebHandlers(NtmHttpServer &svr,
                 // Lazy GC: prune expired tokens on each issuance.
                 for (auto it = g_demoTokens.begin(); it != g_demoTokens.end(); )
                     it = (now >= it->second) ? g_demoTokens.erase(it) : std::next(it);
+                // Cap total active tokens to prevent slow OOM via IP rotation.
+                constexpr std::size_t kMaxDemoTokens = 1000;
+                if (g_demoTokens.size() >= kMaxDemoTokens)
+                {
+                    // Evict the token with the earliest expiry.
+                    auto oldest = std::min_element(g_demoTokens.begin(), g_demoTokens.end(),
+                        [](const auto &a, const auto &b) { return a.second < b.second; });
+                    if (oldest != g_demoTokens.end())
+                        g_demoTokens.erase(oldest);
+                }
                 g_demoTokens.emplace(token, now + kDemoSessionSec);
             }
             // Reset demo session window so mock data timestamps look fresh.
