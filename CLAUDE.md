@@ -491,8 +491,9 @@ export of the original signing Mac — do **not** commit the `.p12`.
 ./ios/scripts/archive-app.sh
 
 # 2. Upload to TestFlight (reads .p8 from Keychain, wipes after upload)
-ASC_KEY_ID=REDACTED_KEY_ID \
-ASC_ISSUER_ID=REDACTED_ISSUER_ID \
+# ASC_KEY_ID and ASC_ISSUER_ID are in App Store Connect → Users and Access →
+# Integrations. Never commit these values — pass as env vars only.
+ASC_KEY_ID=<your-key-id> ASC_ISSUER_ID=<issuer-uuid> \
 ./ios/scripts/upload-testflight.sh
 ```
 
