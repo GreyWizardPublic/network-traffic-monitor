@@ -452,6 +452,55 @@ The handoff PR must include:
 
 ---
 
+## Apple Distribution cert reference (iOS)
+
+The signing identity used for all NTMDashboard TestFlight and App Store builds.
+The public cert is committed under `ios/certs/`; the matching private key lives
+only in the Mac's login keychain (never in the repo).
+
+| Field | Value |
+|---|---|
+| Identity name (CN) | `Apple Distribution: Dong Xue (W65LG3MSG6)` |
+| Team ID | `W65LG3MSG6` |
+| SHA-1 fingerprint | `A40BD2CA12210ACDD8FE89E199F62E895F0B6914` |
+| Valid through | 2027-05-29 |
+| Repo path | `ios/certs/AppleDistribution-W65LG3MSG6.cer` |
+
+**Verify the correct cert is loaded before archiving:**
+
+```bash
+security find-identity -p codesigning -v | grep W65LG3MSG6
+# Expected line:
+#   N) A40BD2CA12210ACDD8FE89E199F62E895F0B6914 "Apple Distribution: Dong Xue (W65LG3MSG6)"
+```
+
+If the line is missing, the private key is not in keychain. Import from a `.p12`
+export of the original signing Mac — do **not** commit the `.p12`.
+
+**Other identities on the system to avoid for Release builds:**
+
+| Identity | Why to avoid |
+|---|---|
+| `Apple Development: Dong Xue (2F447K4U9Z)` | Personal/free team — team ID `2F447K4U9Z` does not match. Automatic signing may pick this if the Distribution cert is missing. |
+| `iPhone Distribution: Dong Xue (W65LG3MSG6)` | Legacy naming for the same team. `project.yml` pins the modern "Apple Distribution" name; use that for consistency. |
+
+**Publishing workflow:**
+
+```bash
+# 1. Archive + export IPA (checks cert, runs xcodegen, verifies signing)
+./ios/scripts/archive-app.sh
+
+# 2. Upload to TestFlight (reads .p8 from Keychain, wipes after upload)
+ASC_KEY_ID=REDACTED_KEY_ID \
+ASC_ISSUER_ID=REDACTED_ISSUER_ID \
+./ios/scripts/upload-testflight.sh
+```
+
+Never upload to TestFlight or App Store without explicit human instruction in
+the current conversation turn.
+
+---
+
 ## Demo Server
 
 Port 12345 serves mock `/api/summary` data for App Store review (no auth, iOS only).
