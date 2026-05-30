@@ -560,9 +560,9 @@ static bool setCurrentUserOnly(const std::string &path)
 
 TEST_CASE("checkIdentityFilePermissions: non-existent path does not crash")
 {
-    ntm::platform::checkIdentityFilePermissions(
+    bool ok = ntm::platform::checkIdentityFilePermissions(
         "C:\\nonexistent\\ntm_no_such_file_83749.key", false, false);
-    // Must not throw or crash regardless of missing file.
+    REQUIRE(ok); // missing file is not a permission error; caller handles fopen failure
 }
 
 TEST_CASE("checkIdentityFilePermissions: file with Everyone-Read triggers warning")
@@ -576,14 +576,15 @@ TEST_CASE("checkIdentityFilePermissions: file with Everyone-Read triggers warnin
         return; // skip if no privilege to modify DACL
     }
 
-    // Capture stderr to verify the warning is emitted.
+    // Capture stderr to verify the FATAL message is emitted and check returns false.
     std::ostringstream captured;
     std::streambuf *saved = std::cerr.rdbuf(captured.rdbuf());
-    ntm::platform::checkIdentityFilePermissions(path, false, false);
+    bool ok = ntm::platform::checkIdentityFilePermissions(path, false, false);
     std::cerr.rdbuf(saved);
     DeleteFileA(path.c_str());
 
-    REQUIRE(captured.str().find("WARNING") != std::string::npos);
+    REQUIRE(!ok);
+    REQUIRE(captured.str().find("FATAL") != std::string::npos);
 }
 
 TEST_CASE("checkIdentityFilePermissions: file readable only by current user is silent")
@@ -599,11 +600,12 @@ TEST_CASE("checkIdentityFilePermissions: file readable only by current user is s
 
     std::ostringstream captured;
     std::streambuf *saved = std::cerr.rdbuf(captured.rdbuf());
-    ntm::platform::checkIdentityFilePermissions(path, false, false);
+    bool ok = ntm::platform::checkIdentityFilePermissions(path, false, false);
     std::cerr.rdbuf(saved);
     DeleteFileA(path.c_str());
 
-    REQUIRE(captured.str().find("WARNING") == std::string::npos);
+    REQUIRE(ok);
+    REQUIRE(captured.str().find("FATAL") == std::string::npos);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

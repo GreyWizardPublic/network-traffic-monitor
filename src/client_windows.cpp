@@ -341,10 +341,12 @@ bool checkIdentityFilePermissions(const std::string &path, bool isDaemon, bool /
         { WinInteractiveSid,         "Interactive"        },
     };
 
-    auto warn = [&](const std::string &msg) {
-        if (isDaemon) ntmLog(LogLevel::Warn, true, msg);
+    auto fatal = [&](const std::string &msg) {
+        if (isDaemon) ntmLog(LogLevel::Err, true, msg);
         else std::cerr << msg << "\n";
     };
+
+    bool ok = true;
 
     for (const auto &s : broadSids) {
         BYTE   sidBuf[SECURITY_MAX_SID_SIZE]{};
@@ -360,9 +362,10 @@ bool checkIdentityFilePermissions(const std::string &path, bool isDaemon, bool /
         if (GetEffectiveRightsFromAclW(dacl, &trustee, &rights) != ERROR_SUCCESS)
             continue;
         if (rights & (FILE_READ_DATA | GENERIC_READ | FILE_GENERIC_READ)) {
-            warn("ntm-client: WARNING: identity key '" + path +
-                 "' is readable by " + s.name + ".\n"
-                 "  Fix: icacls \"" + path + "\" /inheritance:r /grant:r \"<current-user>:(R)\"");
+            fatal("ntm-client: FATAL: identity key '" + path +
+                  "' is readable by " + s.name + ".\n"
+                  "  Fix: icacls \"" + path + "\" /inheritance:r /grant:r \"<current-user>:(R)\"");
+            ok = false;
         }
     }
 
@@ -385,16 +388,16 @@ bool checkIdentityFilePermissions(const std::string &path, bool isDaemon, bool /
                                    reinterpret_cast<PSID>(admins), &adSize);
                 if (!EqualSid(ownerSid, reinterpret_cast<PSID>(localSystem)) &&
                     !EqualSid(ownerSid, reinterpret_cast<PSID>(admins))) {
-                    warn("ntm-client: WARNING: identity key '" + path +
-                         "' is not owned by the current user or SYSTEM/Administrators.");
+                    fatal("ntm-client: FATAL: identity key '" + path +
+                          "' is not owned by the current user or SYSTEM/Administrators.");
+                    ok = false;
                 }
             }
         }
         CloseHandle(hToken);
     }
     LocalFree(sd);
-    // H-4: Windows hard-fail (WARN→FATAL) is implemented in Handoff C (win/handoff/h4-identity-perms-hard-fail).
-    return true;
+    return ok;
 }
 
 // ---------------------------------------------------------------------------
