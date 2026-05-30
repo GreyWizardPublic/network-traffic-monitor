@@ -6,14 +6,19 @@ enum KeychainService {
 
     static func saveToken(_ token: String, for serverURL: String) {
         let data = Data(token.utf8)
-        let query: [CFString: Any] = [
+        // Delete first (handles upgrade from old entry stored without ThisDeviceOnly)
+        SecItemDelete([
+            kSecClass: kSecClassGenericPassword,
+            kSecAttrService: service,
+            kSecAttrAccount: serverURL
+        ] as CFDictionary)
+        SecItemAdd([
             kSecClass: kSecClassGenericPassword,
             kSecAttrService: service,
             kSecAttrAccount: serverURL,
-            kSecValueData: data
-        ]
-        SecItemDelete(query as CFDictionary)
-        SecItemAdd(query as CFDictionary, nil)
+            kSecValueData: data,
+            kSecAttrAccessible: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        ] as CFDictionary, nil)
     }
 
     static func loadToken(for serverURL: String) -> String? {

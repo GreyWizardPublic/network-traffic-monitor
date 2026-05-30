@@ -34,8 +34,10 @@ final class CertificatePinner: NSObject, URLSessionDelegate, @unchecked Sendable
                 completionHandler(.cancelAuthenticationChallenge, nil)
             }
         } else {
-            // No pinning — accept based on system CA trust
-            completionHandler(.useCredential, URLCredential(trust: serverTrust))
+            // No pin stored yet — reject to prevent silent MITM on first connection.
+            // The caller catches the resulting cert error, reads lastSeenCert, and
+            // presents the fingerprint to the user for explicit TOFU confirmation.
+            completionHandler(.cancelAuthenticationChallenge, nil)
         }
     }
 

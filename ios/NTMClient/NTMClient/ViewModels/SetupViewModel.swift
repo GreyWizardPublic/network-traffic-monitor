@@ -254,9 +254,9 @@ final class SetupViewModel {
         defer { isLoading = false }
 
         guard let url = URL(string: Self.demoServerURL + "/api/demo/begin") else { return }
-        let pinner = CertificatePinner(pinnedCertData: nil)
-        lastPinner = pinner
-        let session = URLSession(configuration: .ephemeral, delegate: pinner, delegateQueue: nil)
+        // Demo server has a valid CA cert — use system trust directly.
+        // A custom pinner with nil pin would cancel the TLS challenge (H-3 fix).
+        let session = URLSession(configuration: .ephemeral)
 
         var req = URLRequest(url: url, timeoutInterval: 10)
         req.httpMethod = "POST"
