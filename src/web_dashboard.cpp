@@ -1934,7 +1934,10 @@ button{font-family:monospace;font-size:0.82em;padding:5px 14px;border-radius:3px
       <button onclick="doDeleteAllLogs()" style="font-family:monospace;font-size:0.82em;padding:4px 12px;border-radius:3px;border:1px solid #5a3a3a;background:#180d0d;color:#c88;cursor:pointer">Delete ALL Files</button>
     </div>
   </div>
-  <div id="logs_no_logging" style="display:none;color:#666;font-size:0.82em;padding:4px 0">File logging not active on this client.</div>
+  <div id="logs_no_logging" style="display:none;font-size:0.82em;padding:6px 8px;border-radius:3px;background:#1a1400;border:1px solid #4a3a00;color:#c94">
+    File logging is not active on this client.<br>
+    <span style="color:#888">To enable it, add <code style="color:#bba;font-size:0.95em">log_dir=/path/to/logs</code> to the client config file and restart the client.</span>
+  </div>
   <div class="err-msg" id="logs_err" style="margin-top:8px"></div>
 </div>
 
@@ -2315,12 +2318,13 @@ async function loadLogs(){
 }
 
 let _logLevelFadeTimer=null;
-function showLogLevelMsg(text,isErr){
+// isErr: true=red, false=green. isWarn: true=amber (level set but inactive logging).
+function showLogLevelMsg(text,isErr,isWarn){
   const msg=document.getElementById('logs_level_msg');
   const btn=document.getElementById('logs_apply_btn');
   if(_logLevelFadeTimer){clearTimeout(_logLevelFadeTimer);_logLevelFadeTimer=null;}
   msg.style.opacity='1';
-  msg.style.color=isErr?'#e66':'#6d6';
+  msg.style.color=isErr?'#e66':isWarn?'#c94':'#6d6';
   msg.textContent=text;
   btn.disabled=false;
   btn.style.opacity='1';
@@ -2353,8 +2357,14 @@ async function applyLogLevel(){
     });
     if(handleAdminExpiry(r.status)){showLogLevelMsg('',false);return;}
     const d=await r.json();
-    if(r.ok&&d.ok){showLogLevelMsg('✓ Level set to '+esc(d.level),false);}
-    else{showLogLevelMsg('✗ '+(d.error||'Unknown error'),true);}
+    if(r.ok&&d.ok){
+      const fileLoggingInactive=document.getElementById('logs_no_logging').style.display!=='none';
+      if(fileLoggingInactive){
+        showLogLevelMsg('✓ Level stored (file logging not active — level takes effect once enabled)',false,true);
+      }else{
+        showLogLevelMsg('✓ Level set to '+esc(d.level),false,false);
+      }
+    }else{showLogLevelMsg('✗ '+(d.error||'Unknown error'),true,false);}
   }catch(e){
     showLogLevelMsg('✗ Request failed: '+esc(e.message),true);
   }
