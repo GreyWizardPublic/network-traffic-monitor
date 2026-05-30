@@ -1,19 +1,24 @@
 #!/usr/bin/env bash
-# pre-commit — enforce version bumps for ntm-server and ntm-client.
+# pre-commit — enforce version bumps for ntm-server, ntm-client, and iOS modules.
 #
 # Installed automatically by cmake (core.hooksPath = scripts/hooks).
-# On a fresh clone, run `cmake -B build -S .` once to activate.
+# On a fresh clone, run `cmake -B build -S .` once to activate (Linux/Windows).
+# iOS / Swift Agent: run `git config core.hooksPath scripts/hooks` once per clone
+# (Xcode has no cmake configure step to auto-install the hook).
 #
 # Policy (docs/agent-framework.md §5):
 #   Every commit that touches module source must also stage the relevant
-#   *_version.hpp file. No exceptions, no matter how small the change.
+#   version file. No exceptions, no matter how small the change.
 #
 # Classification:
 #   Server-only  →  src/server_core.*, src/web_dashboard.*, src/webauthn.*
 #   Client-only  →  src/client*.*, src/updater.*, src/flow_aggregator.*
 #   Both         →  any other src/*.cpp / src/*.hpp, CMakeLists.txt
-#   Exempt       →  tests/, docs/, scripts/, ios/, *.md, src/ntm_test.hpp,
-#                   src/*_version.hpp (the version files themselves)
+#   NTMClient    →  ios/NTMClient/** (excl. tests, xcodeproj)
+#   NTMDashboard →  ios/NTMDashboard/** (excl. tests, xcodeproj)
+#   Exempt       →  tests/, docs/, scripts/, *.md, src/ntm_test.hpp,
+#                   *_version.hpp / ClientVersion.swift / project.yml (version files)
+#                   ios/**Tests/**, ios/*.xcodeproj/**, ios/scripts/**, ios/certs/**
 
 set -euo pipefail
 
@@ -23,6 +28,10 @@ needs_server=0
 needs_client=0
 has_server_bump=0
 has_client_bump=0
+has_ntmclient_bump=0
+has_ntmdashboard_bump=0
+needs_ntmclient=0
+needs_ntmdashboard=0
 
 while IFS= read -r f; do
     [[ -z "$f" ]] && continue
@@ -30,10 +39,12 @@ while IFS= read -r f; do
     # Version files themselves — record the bump; do not trigger a requirement.
     [[ "$f" == "src/server_version.hpp" ]] && { has_server_bump=1; continue; }
     [[ "$f" == "src/client_version.hpp" ]] && { has_client_bump=1; continue; }
+    [[ "$f" == "ios/NTMClient/Shared/ClientVersion.swift" ]] && { has_ntmclient_bump=1; continue; }
+    [[ "$f" == "ios/project.yml" ]] && { has_ntmdashboard_bump=1; continue; }
 
     # Exempt paths — changes here never require a version bump.
     case "$f" in
-        tests/*|docs/*|scripts/*|ios/*|*.md|.gitignore|.github/*)
+        tests/*|docs/*|scripts/*|*.md|.gitignore|.github/*)
             continue ;;
         src/ntm_test.hpp|src/proto_client_server.hpp.in)
             # ntm_test.hpp is test infrastructure only; not shipped.
@@ -45,6 +56,29 @@ while IFS= read -r f; do
     if [[ "$f" == "CMakeLists.txt" ]]; then
         needs_server=1; needs_client=1; continue
     fi
+
+    # Generated Xcode project files — not module source.
+    [[ "$f" =~ ^ios/.*\.xcodeproj/ ]] && continue
+
+    # iOS test and non-source files — exempt.
+    case "$f" in
+        ios/NTMClient/NTMClientTests/*|ios/NTMDashboard/NTMDashboardTests/*|\
+ios/scripts/*|ios/certs/*)
+            continue ;;
+    esac
+
+    # NTMClient source → require ClientVersion.swift bump.
+    if [[ "$f" == ios/NTMClient/* ]]; then
+        needs_ntmclient=1; continue
+    fi
+
+    # NTMDashboard source → require project.yml (MARKETING_VERSION) bump.
+    if [[ "$f" == ios/NTMDashboard/* ]]; then
+        needs_ntmdashboard=1; continue
+    fi
+
+    # Any other ios/ file (top-level, non-source) — exempt.
+    [[ "$f" == ios/* ]] && continue
 
     # Only classify files under src/ from here on.
     [[ "$f" == src/* ]] || continue
@@ -74,6 +108,14 @@ if (( needs_server && ! has_server_bump )); then
 fi
 if (( needs_client && ! has_client_bump )); then
     echo "pre-commit: ERROR — client source changed but src/client_version.hpp is not staged." >&2
+    fail=1
+fi
+if (( needs_ntmclient && ! has_ntmclient_bump )); then
+    echo "pre-commit: ERROR — ios/NTMClient/ source changed but ios/NTMClient/Shared/ClientVersion.swift is not staged." >&2
+    fail=1
+fi
+if (( needs_ntmdashboard && ! has_ntmdashboard_bump )); then
+    echo "pre-commit: ERROR — ios/NTMDashboard/ source changed but ios/project.yml is not staged." >&2
     fail=1
 fi
 

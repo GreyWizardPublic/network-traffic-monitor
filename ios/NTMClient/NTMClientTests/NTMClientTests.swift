@@ -18,9 +18,9 @@ final class ClientVersionTests: XCTestCase {
         }
     }
 
-    // Must match kWireProtoVersion in src/proto_client_server.hpp (currently 3)
+    // Must match kWireProtoVersion in src/proto_client_server.hpp (currently 4)
     func testWireProtoVersionMatchesSpec() {
-        XCTAssertEqual(kWireProtoVersion, 3,
+        XCTAssertEqual(kWireProtoVersion, 4,
                        "kWireProtoVersion must match src/proto_client_server.hpp")
     }
 
@@ -709,6 +709,38 @@ final class FlowAggregatorTests: XCTestCase {
         agg.observe(makePacket(src: "5.6.7.8", dst: "1.2.3.4", bytes: 60))
         let (_, count) = agg.drain()
         XCTAssertEqual(count, 2, "src→dst and dst→src are distinct flows")
+    }
+}
+
+// MARK: - Wire ctrl-line dispatch (wire-4 C-line / L-line protocol)
+
+final class WireCtrlLineTests: XCTestCase {
+
+    func testUpdateNowRespondsWithNoop() {
+        let resp = wireCtrlLineResponse(for: "C update_now req-abc-123")
+        XCTAssertEqual(resp, "L upd req-abc-123 noop ios_unsupported")
+    }
+
+    func testUpdateNowPassesReqIdThrough() {
+        let resp = wireCtrlLineResponse(for: "C update_now xyz-789")
+        XCTAssertEqual(resp, "L upd xyz-789 noop ios_unsupported")
+    }
+
+    func testUpdateNowWithoutReqIdReturnsNil() {
+        // Malformed line — two parts only, no req_id.
+        XCTAssertNil(wireCtrlLineResponse(for: "C update_now"))
+    }
+
+    func testUnknownCtrlVerbReturnsNil() {
+        XCTAssertNil(wireCtrlLineResponse(for: "C unknown_cmd foo"))
+    }
+
+    func testNonCtrlLineReturnsNil() {
+        XCTAssertNil(wireCtrlLineResponse(for: "H pcap_recv=0 pcap_drop=0"))
+    }
+
+    func testEmptyLineReturnsNil() {
+        XCTAssertNil(wireCtrlLineResponse(for: ""))
     }
 }
 

@@ -81,6 +81,16 @@ native code.
 - Runs on-device and simulator tests; handles App Store / TestFlight publishing.
 - **Does not** write C++ code — use PR handoff instead.
 
+**One-time git hook setup (run once per clone):**
+
+```bash
+git config core.hooksPath scripts/hooks
+```
+
+Xcode has no cmake configure step, so the pre-commit hook is not installed
+automatically. This single command activates it. Without it, version-bump
+enforcement is silently absent for iOS commits.
+
 ### 2.5 Windows Agent
 
 **Owns:** all Windows-specific C++ client code in `src/` (files conditionally
