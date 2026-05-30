@@ -115,31 +115,47 @@ final class WireViewModel {
         connectedSince = nil
     }
 
-    // Sends X/A announce, then loops sending H heartbeats.
-    // Throws when the session should end (task cancelled or session too old).
+    // Sends X/A announce, then runs heartbeat sender and C-line reader concurrently.
+    // Throws when the session should end (task cancelled, network error, or session too old).
     private func runSession(config: ServerConfig, sessionStart: Date) async throws {
-        let nickname = config.nickname.isEmpty ? "iOS" : config.nickname
-
         // Announce: WAN IP is unknown on iOS without an external check — send null.
         try await client.sendLine("X null")
         for addr in localAddresses() {
             try await client.sendLine("A \(addr)")
         }
 
-        // Heartbeat loop
+        // Run heartbeat and C-line reader concurrently; end the session when either finishes.
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask { try await self.heartbeatLoop(sessionStart: sessionStart) }
+            group.addTask { try await self.ctrlLineLoop() }
+            // First task to finish (return or throw) ends the session.
+            try await group.next()
+            group.cancelAll()
+        }
+    }
+
+    private func heartbeatLoop(sessionStart: Date) async throws {
         while !Task.isCancelled {
             let elapsed = Date.now.timeIntervalSince(sessionStart)
-            // Reconnect before the server's 6-hour session limit.
             if elapsed >= Double(kMaxSessionSec) - 60 { return }
-
             try await client.sendLine(
                 "H pcap_recv=\(packetsSent) pcap_drop=0 buf_drop=0 ver=\(kClientVersion) wire_proto=\(kWireProtoVersion)"
             )
-
-            // Sleep in small chunks so task cancellation is responsive.
             for _ in 0..<(kHealthIntervalSec * 4) {
                 guard !Task.isCancelled else { return }
                 try? await Task.sleep(for: .milliseconds(250))
+            }
+        }
+    }
+
+    // Reads C-lines from the server and dispatches responses.
+    // iOS does not support auto-update; C update_now is answered with noop.
+    private func ctrlLineLoop() async throws {
+        while !Task.isCancelled {
+            let line = try await client.receiveLine()
+            guard !line.isEmpty else { continue }
+            if let response = wireCtrlLineResponse(for: line) {
+                try await client.sendLine(response)
             }
         }
     }
@@ -196,4 +212,15 @@ final class WireViewModel {
            second >= 16 && second <= 31 { return true }
         return false
     }
+}
+
+// Wire-4 C-line dispatch — pure parsing logic, accessible from tests.
+// Returns the L-line to send back, or nil to silently ignore the line.
+func wireCtrlLineResponse(for line: String) -> String? {
+    let parts = line.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
+    guard parts.count >= 1, parts[0] == "C" else { return nil }
+    if parts.count >= 3, parts[1] == "update_now" {
+        return "L upd \(parts[2]) noop ios_unsupported"
+    }
+    return nil
 }

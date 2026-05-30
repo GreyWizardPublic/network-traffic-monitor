@@ -252,6 +252,20 @@ actor WireProtocolClient {
         try await t.send(data)
     }
 
+    // Reads bytes until LF and returns the line without the terminator.
+    // Throws WireError.connectionClosed if the server closes the connection.
+    func receiveLine(maxLength: Int = 4096) async throws -> String {
+        guard let t = transport else { throw WireError.notConnected }
+        var bytes = Data()
+        bytes.reserveCapacity(64)
+        while bytes.count < maxLength {
+            let b = try await t.receive(exactly: 1)
+            if b[0] == 0x0A { break }
+            bytes.append(b[0])
+        }
+        return String(bytes: bytes, encoding: .utf8) ?? ""
+    }
+
     func disconnect() async {
         await transport?.cancel()
         transport = nil

@@ -1,8 +1,8 @@
 // NTMClient (iOS) module version — independent of ntm-server version.
-// Wire protocol spoken: kWireProtoVersion = 3 (must match kWireProtoVersion in
+// Wire protocol spoken: kWireProtoVersion = 4 (must match kWireProtoVersion in
 // src/proto_client_server.hpp; see CLAUDE.md § Versioning for lockstep rules).
-let kClientVersion    = "1.4.0.0"
-let kWireProtoVersion = 3
+let kClientVersion    = "1.5.0.0"
+let kWireProtoVersion = 4
 
 // TLS ALPN identifier for the ntm-wire data-ingestion channel.
 // Mirrors kAlpnNtmWire in src/proto_client_server.hpp.

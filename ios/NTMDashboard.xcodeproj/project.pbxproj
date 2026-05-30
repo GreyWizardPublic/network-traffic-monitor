@@ -513,7 +513,7 @@
 				CODE_SIGN_ENTITLEMENTS = NTMDashboard/NTMDashboard/NTMDashboard.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 23;
+				CURRENT_PROJECT_VERSION = 24;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = W65LG3MSG6;
 				INFOPLIST_FILE = NTMDashboard/NTMDashboard/Info.plist;
@@ -522,7 +522,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.15.0;
+				MARKETING_VERSION = 1.16.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ntm.NTMDashboard;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -602,7 +602,7 @@
 				CODE_SIGN_ENTITLEMENTS = NTMDashboard/NTMDashboard/NTMDashboard.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Distribution: Dong Xue (W65LG3MSG6)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 23;
+				CURRENT_PROJECT_VERSION = 24;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = W65LG3MSG6;
 				INFOPLIST_FILE = NTMDashboard/NTMDashboard/Info.plist;
@@ -611,7 +611,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.15.0;
+				MARKETING_VERSION = 1.16.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ntm.NTMDashboard;
 				SDKROOT = iphoneos;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
