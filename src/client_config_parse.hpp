@@ -175,6 +175,23 @@ inline bool parseConfigLine(const std::string &key, const std::string &val,
             out.transport = TransportMode::TcpTls;
         return true;
     }
+    if (key == "log_dir")
+    {
+        out.log_dir = v;
+        return true;
+    }
+    if (key == "log_level")
+    {
+        if (v == "Info" || v == "Warn" || v == "Err")
+            out.log_level = v;
+        else
+        {
+            std::cerr << "ntm-client: config: unknown log_level '" << v
+                      << "' — must be Info, Warn, or Err. Using Info.\n";
+            out.log_level = "Info";
+        }
+        return true;
+    }
     return false;
 }
 

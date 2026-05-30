@@ -1276,7 +1276,8 @@ static void runWireDataLoop(
     IPDataUpdater                                   &ipDataUpdater,
     std::unique_ptr<ZlibInflater>                   &inflater,
     std::vector<std::uint8_t>                       &inflatedBuf,
-    const ServerConfig                              &config)
+    const ServerConfig                              &config,
+    std::shared_ptr<ClientControlChannels>           ctrlChannels = nullptr)
 {
     std::string buffer;
     buffer.reserve(4096);
@@ -1483,6 +1484,13 @@ static void runWireDataLoop(
                     registry->clientHealth[clientId] = hs;
                 }
             }
+            else if (line.rfind(kLogRespLinePrefix, 0) == 0 && ctrlChannels)
+            {
+                // Wire-proto v3: L-line response from client to a pending admin command.
+                auto ch = ctrlChannels->get(clientId);
+                if (ch)
+                    ch->routeLLine(line.substr(2)); // strip "L "
+            }
         }
         if (pos > 0)
             buffer.erase(0, pos);
@@ -1500,7 +1508,8 @@ void connectionThread(int clientFd,
                       PerIPConnectionLimiter &perIPLimiter,
                       const ServerConfig &config,
                       SSL *preAcceptedSsl,
-                      std::shared_ptr<std::atomic<bool>> doneFlag)
+                      std::shared_ptr<std::atomic<bool>> doneFlag,
+                      std::shared_ptr<ClientControlChannels> ctrlChannels = nullptr)
 {
     // H1: signal completion to the accept-loop reaper so it can join() and remove the
     // worker entry from the tracking vector. Without this, the vector would grow
@@ -1632,6 +1641,27 @@ void connectionThread(int clientFd,
         ~RegistryCleanup() { if (reg) reg->removeClient(id); }
     } regCleanup{registry, clientId};
 
+    // Wire-proto v3: register a per-client control channel so admin handlers can
+    // send C-lines to this client and receive L-line responses.
+    if (ctrlChannels)
+    {
+        auto ch = std::make_shared<ClientCtrlChannel>();
+        // Capture ssl/clientFd by value; writeMtx in ClientCtrlChannel serialises
+        // concurrent admin writes.  SSL allows concurrent read + write on the same
+        // object (OpenSSL 1.1+ with separate mutexes), so this is safe.
+        ch->writeCtrlLine = [ssl, clientFd](const std::string &line) -> bool {
+            std::string lineWithNl = line + "\n";
+            return writeExact(ssl, clientFd, lineWithNl.data(), lineWithNl.size());
+        };
+        ctrlChannels->add(clientId, ch);
+    }
+    struct CtrlChannelCleanup
+    {
+        std::shared_ptr<ClientControlChannels> cch;
+        std::string id;
+        ~CtrlChannelCleanup() { if (cch) cch->remove(id); }
+    } ctrlCleanup{ctrlChannels, clientId};
+
     // Register this client's TCP connection IP → hex clientId in the shared registry.
     // Additional interface addresses (IPv4 + IPv6) are registered when the client
     // sends "A ip\n" announce lines immediately after auth.
@@ -1675,7 +1705,7 @@ void connectionThread(int clientFd,
 
     runWireDataLoop(tcpRecvFn, clientId, clientIp, sessionStart,
                     registry, stats, ipDataUpdater,
-                    inflater, inflatedBuf, config);
+                    inflater, inflatedBuf, config, ctrlChannels);
 
     // Normal exit: ConnCloser destructor handles close(connFd) + SSL_free(ssl).
 
@@ -1714,7 +1744,8 @@ static void wsConnectionThread(
     PerIPConnectionLimiter                    &perIPLimiter,
     const ServerConfig                        &config,
     SSL                                       *preAcceptedSsl,
-    std::shared_ptr<std::atomic<bool>>         doneFlag)
+    std::shared_ptr<std::atomic<bool>>         doneFlag,
+    std::shared_ptr<ClientControlChannels>     ctrlChannels = nullptr)
 {
     struct DoneGuard {
         std::shared_ptr<std::atomic<bool>> flag;
@@ -1872,6 +1903,21 @@ static void wsConnectionThread(
         registry->ipToClientId[clientIp] = clientId;
     }
 
+    // Wire-proto v3: control channel for admin → client C-lines (WebSocket path).
+    if (ctrlChannels)
+    {
+        auto ch = std::make_shared<ClientCtrlChannel>();
+        ch->writeCtrlLine = [&stream](const std::string &line) -> bool {
+            std::string lineWithNl = line + "\n";
+            return stream.writeFrame(lineWithNl.data(), lineWithNl.size());
+        };
+        ctrlChannels->add(clientId, ch);
+    }
+    struct CtrlChannelCleanup {
+        std::shared_ptr<ClientControlChannels> cch; std::string id;
+        ~CtrlChannelCleanup() { if (cch) cch->remove(id); }
+    } ctrlCleanup{ctrlChannels, clientId};
+
     // ── 5. Data-phase timeout + data loop ────────────────────────────────────
     {
         unsigned pollSecs = config.idle_timeout_seconds;
@@ -1895,7 +1941,7 @@ static void wsConnectionThread(
 
     runWireDataLoop(wsRecvFn, clientId, clientIp, sessionStart,
                     registry, stats, ipDataUpdater,
-                    inflater, inflatedBuf, config);
+                    inflater, inflatedBuf, config, ctrlChannels);
 
     } // end try
     catch (const std::exception &e)
@@ -2668,6 +2714,7 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
             webCfg.webauthn         = webAuthnRP;
             webCfg.clients_store    = clientsStore;
             webCfg.hidden_store     = hiddenStore;
+            webCfg.ctrl_channels    = std::make_shared<ClientControlChannels>();
             webCfg.server_ips       = serverIpSet;
             webCfg.dashboard_ips    = dashboardIpSet;
             webCfg.update_dir       = config.update_dir;
@@ -2989,7 +3036,8 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                               std::ref(perIPLimiter),
                               std::cref(config),
                               ssl,
-                              doneFlag);
+                              doneFlag,
+                              webCfg.ctrl_channels);
                 }
                 else if (isWireClient)
                 {
@@ -3006,7 +3054,8 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                               std::ref(perIPLimiter),
                               std::cref(config),
                               ssl,
-                              doneFlag);
+                              doneFlag,
+                              webCfg.ctrl_channels);
                 }
                 else
                 {

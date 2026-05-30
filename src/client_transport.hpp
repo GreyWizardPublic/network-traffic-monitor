@@ -14,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 // Forward-declare SSL so headers that include this file need not pull in OpenSSL.
 typedef struct ssl_st SSL;
@@ -62,6 +63,14 @@ public:
     // is not TLS (plain TCP).  Used by verifyServerIdentityAndPin() which needs
     // direct SSL handle access for certificate inspection.
     virtual SSL *sslHandle() const = 0;
+
+    // Wire-proto v3: non-blocking poll for incoming server→client lines (C-lines).
+    // Appends any available bytes to inBuf, then extracts complete newline-terminated
+    // lines into out.  Returns false on hard error (caller should close transport).
+    // Returns true with an empty out if no complete lines are available yet.
+    // Default no-op: transports that never receive server-initiated data return true.
+    virtual bool pollCtrlLines(std::string & /*inBuf*/,
+                               std::vector<std::string> & /*out*/) { return true; }
 };
 
 } // namespace ntm

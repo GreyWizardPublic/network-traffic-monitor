@@ -29,14 +29,14 @@ TEST_CASE("proto constants: kDemoPort is 12345")
 // Protocol versions
 // ═══════════════════════════════════════════════════════════════════════════
 
-TEST_CASE("proto constants: kWireProtoVersion is 2")
+TEST_CASE("proto constants: kWireProtoVersion is 3")
 {
-    REQUIRE_EQ(kWireProtoVersion, 2u);
+    REQUIRE_EQ(kWireProtoVersion, 3u);
 }
 
-TEST_CASE("proto constants: kApiVersion is 11")
+TEST_CASE("proto constants: kApiVersion is 12")
 {
-    REQUIRE_EQ(kApiVersion, 11u);
+    REQUIRE_EQ(kApiVersion, 12u);
 }
 
 TEST_CASE("proto constants: kAuthVersionV2 < kAuthVersionV3")

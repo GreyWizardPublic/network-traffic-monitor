@@ -18,6 +18,7 @@
 #include <openssl/ssl.h>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace ntm
 {
@@ -43,6 +44,7 @@ public:
     bool readExact(void *buf, std::size_t n) override;
     bool writeExact(const void *buf, std::size_t n) override;
     SSL *sslHandle() const override { return ssl_; }
+    bool pollCtrlLines(std::string &inBuf, std::vector<std::string> &out) override;
 
 private:
     SSL_CTX              *sslCtx_;

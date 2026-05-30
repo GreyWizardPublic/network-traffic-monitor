@@ -60,6 +60,14 @@ struct ClientConfig
     // WebSocket: HTTP/1.1 WebSocket upgrade over TLS, traverses Cloudflare.
     // Config key: transport=tcp|websocket   CLI flag: --transport tcp|websocket
     TransportMode transport{TransportMode::TcpTls};
+
+    // File-based logging (wire-proto v3 remote log management).
+    // log_dir: directory for date-named log files; empty = use platform default.
+    // log_level: initial verbosity: "Info" (default), "Warn", or "Err".
+    //   Overridden at runtime via C set_loglevel from the admin dashboard.
+    // Config keys: log_dir=<path>  log_level=Info|Warn|Err
+    std::string log_dir;
+    std::string log_level{"Info"};
 };
 
 } // namespace ntm

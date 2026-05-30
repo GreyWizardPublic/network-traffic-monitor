@@ -1,5 +1,6 @@
 #include "client.hpp"
 #include "client_core.hpp"
+#include "client_filelog.hpp"
 #include "client_platform.hpp"
 #include "client_transport.hpp"
 #include "client_transport_tcptls.hpp"
@@ -218,6 +219,10 @@ private:
     bool                     isDaemon_{false};
     bool                     verbose_{false};
 
+    // Wire-proto v3: accumulator for partial C-lines from the server.
+    // Populated by pollCtrlLines() in the sender loop; never accessed from other threads.
+    std::string              ctrlInBuf_;
+
     platform::NetworkMonitor netMonitor_;
 
     // Write `data` to the active transport, compressing via zlib if compression
@@ -255,6 +260,226 @@ private:
         lastReannounceTime_ = std::chrono::duration_cast<std::chrono::seconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
         return true;
+    }
+
+    // Process one incoming C-line (server→client control command, wire-proto v3).
+    // Called under connectionMutex_ with an active transport_.
+    // Sends the corresponding L-line response(s) via deflateAndWrite.
+    void processCtrlLine(const std::string &line)
+    {
+        // Strip the "C " prefix.
+        if (line.size() < 2 || line[0] != 'C' || line[1] != ' ') return;
+        const std::string body = line.substr(2);
+
+        // ── C set_loglevel <level> ──────────────────────────────────────────
+        if (body.rfind("set_loglevel ", 0) == 0)
+        {
+            std::string level = body.substr(13);
+            platform::LogLevel lv = platform::LogLevel::Info;
+            if (level == "Warn") lv = platform::LogLevel::Warn;
+            else if (level == "Err") lv = platform::LogLevel::Err;
+            else level = "Info";
+            globalFileLogger().setLevel(lv);
+            const std::string ack = std::string(kLogRespLinePrefix)
+                                  + "ack set_loglevel " + level + "\n";
+            deflateAndWrite(ack.data(), ack.size());
+            platform::ntmLog(lv, isDaemon_,
+                             "ntm-client: log level changed to " + level + " by admin");
+            return;
+        }
+
+        // Extract req_id (second token for all remaining commands).
+        const std::size_t sp1 = body.find(' ');
+        if (sp1 == std::string::npos) return;
+        const std::string cmd   = body.substr(0, sp1);
+        const std::size_t sp2   = body.find(' ', sp1 + 1);
+        const std::string reqId = (sp2 == std::string::npos)
+            ? body.substr(sp1 + 1)
+            : body.substr(sp1 + 1, sp2 - sp1 - 1);
+        if (reqId.empty() || reqId.size() > kCtrlReqIdMaxLen) return;
+
+        auto sendErr = [&](const std::string &code, const std::string &msg) {
+            const std::string errLine = std::string(kLogRespLinePrefix)
+                + "err " + reqId + " " + code + " " + msg + "\n";
+            deflateAndWrite(errLine.data(), errLine.size());
+        };
+
+        // ── C log_list <req_id> ─────────────────────────────────────────────
+        if (cmd == "log_list")
+        {
+            if (!globalFileLogger().active())
+            {
+                sendErr("unavailable", "file-logging-not-active");
+                return;
+            }
+            const auto files = globalFileLogger().listFiles();
+            {
+                const std::string begin = std::string(kLogRespLinePrefix)
+                    + "list " + reqId + " begin " + std::to_string(files.size()) + "\n";
+                deflateAndWrite(begin.data(), begin.size());
+            }
+            for (const auto &f : files)
+            {
+                const std::string entry = std::string(kLogRespLinePrefix)
+                    + "list " + reqId + " file "
+                    + f.name + " "
+                    + std::to_string(f.size) + " "
+                    + f.mtime + "\n";
+                deflateAndWrite(entry.data(), entry.size());
+            }
+            {
+                const std::string end = std::string(kLogRespLinePrefix)
+                    + "list " + reqId + " end\n";
+                deflateAndWrite(end.data(), end.size());
+            }
+            return;
+        }
+
+        // ── C log_delete_all <req_id> ───────────────────────────────────────
+        if (cmd == "log_delete_all")
+        {
+            if (!globalFileLogger().active())
+            {
+                sendErr("unavailable", "file-logging-not-active");
+                return;
+            }
+            const int n = globalFileLogger().deleteAllFiles();
+            const std::string resp = std::string(kLogRespLinePrefix)
+                + "del_all " + reqId + " ok " + std::to_string(n) + "\n";
+            deflateAndWrite(resp.data(), resp.size());
+            return;
+        }
+
+        // Remaining commands need a filename argument.
+        if (sp2 == std::string::npos) return;
+        const std::string filename = body.substr(sp2 + 1);
+        if (filename.empty() || filename.find('/') != std::string::npos
+            || filename.find('\\') != std::string::npos
+            || filename.find("..") != std::string::npos)
+        {
+            sendErr("bad_filename", "invalid-or-missing-filename");
+            return;
+        }
+
+        // ── C log_delete <req_id> <filename> ───────────────────────────────
+        if (cmd == "log_delete")
+        {
+            if (!globalFileLogger().active())
+            {
+                sendErr("unavailable", "file-logging-not-active");
+                return;
+            }
+            if (globalFileLogger().deleteFile(filename))
+            {
+                const std::string resp = std::string(kLogRespLinePrefix)
+                    + "del " + reqId + " ok " + filename + "\n";
+                deflateAndWrite(resp.data(), resp.size());
+            }
+            else
+            {
+                const std::string resp = std::string(kLogRespLinePrefix)
+                    + "del " + reqId + " err " + filename + " not-found\n";
+                deflateAndWrite(resp.data(), resp.size());
+            }
+            return;
+        }
+
+        // ── C log_get <req_id> <filename> ──────────────────────────────────
+        if (cmd == "log_get")
+        {
+            if (!globalFileLogger().active())
+            {
+                sendErr("unavailable", "file-logging-not-active");
+                return;
+            }
+            const std::string filePath = globalFileLogger().logDir() + "/" + filename;
+            FILE *fp = std::fopen(filePath.c_str(), "rb");
+            if (!fp)
+            {
+                sendErr("not_found", "file-not-found");
+                return;
+            }
+            // Get file size.
+            std::fseek(fp, 0, SEEK_END);
+            const long fileSzLong = std::ftell(fp);
+            std::fseek(fp, 0, SEEK_SET);
+            if (fileSzLong < 0)
+            {
+                std::fclose(fp);
+                sendErr("io_error", "cannot-stat-file");
+                return;
+            }
+            const std::uintmax_t fileSize = static_cast<std::uintmax_t>(fileSzLong);
+
+            // Compute SHA-256.
+            std::string sha256hex;
+            {
+                // Re-open for hashing so reading doesn't move the position.
+                FILE *hfp = std::fopen(filePath.c_str(), "rb");
+                if (hfp)
+                {
+                    unsigned char digest[32]{};
+                    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+                    if (ctx)
+                    {
+                        EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr);
+                        std::uint8_t hashBuf[8192];
+                        std::size_t nr;
+                        while ((nr = std::fread(hashBuf, 1, sizeof(hashBuf), hfp)) > 0)
+                            EVP_DigestUpdate(ctx, hashBuf, nr);
+                        unsigned int dlen = 0;
+                        EVP_DigestFinal_ex(ctx, digest, &dlen);
+                        EVP_MD_CTX_free(ctx);
+                    }
+                    std::fclose(hfp);
+                    char hexBuf[65]{};
+                    for (int i = 0; i < 32; ++i)
+                        std::snprintf(hexBuf + i * 2, 3, "%02x", digest[i]);
+                    sha256hex = hexBuf;
+                }
+            }
+
+            // Send L get begin.
+            {
+                const std::string hdr = std::string(kLogRespLinePrefix)
+                    + "get " + reqId + " begin "
+                    + filename + " "
+                    + std::to_string(fileSize) + " "
+                    + sha256hex + "\n";
+                deflateAndWrite(hdr.data(), hdr.size());
+            }
+
+            // Send chunks (≤ 32 KiB raw → base64-encoded).
+            static constexpr std::size_t kRawChunk = 32768;
+            std::vector<std::uint8_t> rawChunk(kRawChunk);
+            std::size_t nr;
+            while ((nr = std::fread(rawChunk.data(), 1, kRawChunk, fp)) > 0)
+            {
+                // Base64-encode the raw chunk.
+                const int b64Len = ((static_cast<int>(nr) + 2) / 3) * 4;
+                std::vector<unsigned char> b64(static_cast<std::size_t>(b64Len) + 1, 0);
+                EVP_EncodeBlock(b64.data(), rawChunk.data(), static_cast<int>(nr));
+                const std::string chunk = std::string(kLogRespLinePrefix)
+                    + "get " + reqId + " chunk "
+                    + std::string(reinterpret_cast<const char *>(b64.data()),
+                                  static_cast<std::size_t>(b64Len))
+                    + "\n";
+                if (!deflateAndWrite(chunk.data(), chunk.size()))
+                {
+                    std::fclose(fp);
+                    return;
+                }
+            }
+            std::fclose(fp);
+
+            // Send L get end.
+            {
+                const std::string end = std::string(kLogRespLinePrefix)
+                    + "get " + reqId + " end\n";
+                deflateAndWrite(end.data(), end.size());
+            }
+            return;
+        }
     }
 
     void senderLoop()
@@ -358,6 +583,21 @@ private:
                     aggInterval_.reset();  // fresh connection — start responsive
                 }
 
+                // Wire-proto v3: poll for incoming C-lines (server→client control cmds).
+                if (transport_ && transport_->isConnected())
+                {
+                    std::vector<std::string> ctrlLines;
+                    if (!transport_->pollCtrlLines(ctrlInBuf_, ctrlLines))
+                    {
+                        closeUnlocked();
+                    }
+                    else
+                    {
+                        for (const auto &cl : ctrlLines)
+                            processCtrlLine(cl);
+                    }
+                }
+
                 if (transport_ && transport_->isConnected() && netChanged)
                 {
                     if (nowEpochSec - lastReannounceTime_ >= static_cast<std::int64_t>(kAnnounceRateLimitSec))
@@ -389,6 +629,11 @@ private:
                         + " cfg_agg_min_ms="          + std::to_string(cfgAggMinIntervalMs_)
                         + " cfg_agg_max_ms="          + std::to_string(cfgAggMaxIntervalMs_)
                         + " cfg_agg_max_flows="       + std::to_string(aggMaxFlows_)
+                        + " cfg_log_level="           + []{
+                              const auto lv = globalFileLogger().currentLevel();
+                              return lv == platform::LogLevel::Warn ? std::string("Warn")
+                                   : lv == platform::LogLevel::Err  ? std::string("Err")
+                                   : std::string("Info"); }()
                         + "\n";
                     if (!deflateAndWrite(hLine.data(), hLine.size()))
                         closeUnlocked();

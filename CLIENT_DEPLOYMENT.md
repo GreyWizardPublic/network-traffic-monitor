@@ -1034,5 +1034,24 @@ All keys are set in the config file (`key = value`) or overridden by CLI flags.
 | `auto_update` | — | `false` | Enable daily binary self-update check (opt-in) |
 | `web_port` | — | `8443` | *(Deprecated — server v1.15.0+)* HTTPS port used by auto-update to reach `/api/update/check`. Before server v1.15.0 this matched `web_port` in the server config (default `8443`). From server v1.15.0+ the dashboard shares the data-ingestion `port` via ALPN — remove this key from the config when connecting to a v1.15.0+ server. |
 | `verbose` | `--verbose` | `false` | Enable verbose logging |
+| `log_dir` | — | *(platform default — see below)* | Directory for client log files. Empty string uses the platform default. |
+| `log_level` | — | `Info` | Initial log verbosity: `Info`, `Warn`, or `Err`. Can be changed at runtime from the admin dashboard without restarting the client. |
 
 Precedence: **CLI flags** > **config file** > **built-in defaults**.
+
+### File logging default paths
+
+| Platform | Mode | Default `log_dir` |
+|----------|------|-------------------|
+| Linux | Daemon (`--daemon`) | `/var/log/ntm-client/` |
+| Linux | Foreground (user) | `$XDG_STATE_HOME/ntm-client/logs/` or `~/.local/state/ntm-client/logs/` |
+| Windows | Service | `%PROGRAMDATA%\ntm-client\logs\` |
+| Windows | User | `%LOCALAPPDATA%\ntm-client\logs\` |
+
+File logging is enabled by default when a valid log directory can be determined.  
+Set `log_dir=` (empty) to use the platform default, or specify an absolute path.
+
+Log files are named `ntm-client-YYYY-MM-DD.log`. The client:
+- **Retains 3 days** of log files (older files are deleted on startup and daily at midnight).
+- **Caps each file at 50 MB** — when the cap is reached, the oldest half of the file is discarded in place to make room for new entries.
+- **Supports runtime level changes** via the admin dashboard (Manage Clients → select client → Logs panel). The change takes effect immediately without restarting the client.
