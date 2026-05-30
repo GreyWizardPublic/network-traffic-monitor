@@ -881,6 +881,8 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
         if (!first) j += ',';
         j += "\n    {\"client\":\"";
         j += jsonEsc(displayClient(client));   // hex → nickname (or hex if no nickname)
+        j += "\",\"client_id\":\"";
+        j += jsonEsc(client);                  // raw hex id — used by log/update endpoints
         j += "\",\"iface\":\"";
         j += jsonEsc(iface);
         j += "\",\"packets\":";
@@ -2043,6 +2045,7 @@ function esc(s){
 }
 
 let selectedClient=null;
+let selectedClientHexId='';
 
 function handleAdminExpiry(status){
   if(status===403){window.location.href='/admin';return true;}
@@ -2129,10 +2132,11 @@ async function loadClients(){
     const clients={};
     for(const x of (d.interfaces||[])){
       const name=x.client||'(ip-auth)';
-      if(!clients[name])clients[name]={ifaces:[],packets:0,bytes:0};
+      if(!clients[name])clients[name]={ifaces:[],packets:0,bytes:0,clientId:x.client_id||''};
       clients[name].ifaces.push(x.iface);
       clients[name].packets+=x.packets;
       clients[name].bytes+=x.bytes;
+      if(!clients[name].clientId&&x.client_id)clients[name].clientId=x.client_id;
     }
     const tbody=document.getElementById('client_body');
     const names=Object.keys(clients);
@@ -2141,12 +2145,12 @@ async function loadClients(){
     }else{
       tbody.innerHTML=names.map(name=>{
         const c=clients[name];
-        return`<tr class="selectable" data-client="${esc(name)}">
+        return`<tr class="selectable" data-client="${esc(name)}" data-client-id="${esc(c.clientId)}">
           <td>${esc(name)}</td><td>${esc(c.ifaces.join(', '))}</td>
           <td>${c.packets.toLocaleString()}</td><td>${fmtB(c.bytes)}</td></tr>`;
       }).join('');
       tbody.querySelectorAll('tr').forEach(tr=>{
-        tr.addEventListener('click',()=>selectClient(tr.dataset.client));
+        tr.addEventListener('click',()=>selectClient(tr.dataset.client,tr.dataset.clientId));
       });
     }
     // Demo status
@@ -2181,8 +2185,9 @@ async function loadMonitors(){
   }
 }
 
-function selectClient(name){
+function selectClient(name,hexId){
   selectedClient=name;
+  selectedClientHexId=hexId||clientIdMap[name]||'';
   document.querySelectorAll('#client_body tr').forEach(tr=>{
     tr.className=tr.dataset.client===name?'selectable selected':'selectable';
   });
@@ -2200,6 +2205,7 @@ function selectClient(name){
 
 function cancelSelect(){
   selectedClient=null;
+  selectedClientHexId='';
   document.querySelectorAll('#client_body tr').forEach(tr=>tr.className='selectable');
   document.getElementById('confirm_panel').style.display='none';
   document.getElementById('logs_panel').style.display='none';
@@ -2235,6 +2241,7 @@ async function doPurge(){
 
 function resetView(){
   selectedClient=null;
+  selectedClientHexId='';
   document.getElementById('result_panel').style.display='none';
   document.getElementById('confirm_panel').style.display='none';
   document.getElementById('logs_panel').style.display='none';
@@ -2252,12 +2259,12 @@ function fmtFileSize(b){
 }
 
 // Resolve the hex client_id for the currently selected client.
-// The logs API requires a 64-char hex id, not the display name.
-// clientIdMap is populated from client_health on every refresh.
+// Priority: id stored at row-click time (from /api/summary client_id field),
+// then clientIdMap (health-based, connected clients only), then empty.
 function logsHexId(){
-  const id=clientIdMap[selectedClient]||'';
+  const id=selectedClientHexId||clientIdMap[selectedClient]||'';
   if(!id)document.getElementById('logs_err').textContent=
-    '✗ Client ID not available — wait for the next refresh (30 s) and try again';
+    '✗ Client ID not available — try refreshing the page';
   return id;
 }
 
