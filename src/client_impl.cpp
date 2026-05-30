@@ -119,6 +119,8 @@ public:
         if (sslCtx_) { SSL_CTX_free(sslCtx_); sslCtx_ = nullptr; }
     }
 
+    void setCfg(ClientConfig c) { cfg_ = std::move(c); }
+
     bool connectOnce()
     {
         std::lock_guard<std::mutex> lock(connectionMutex_);
@@ -222,6 +224,9 @@ private:
     // Wire-proto v3: accumulator for partial C-lines from the server.
     // Populated by pollCtrlLines() in the sender loop; never accessed from other threads.
     std::string              ctrlInBuf_;
+
+    // Wire-proto v4: stored config snapshot for the server-pushed auto-update path.
+    ClientConfig             cfg_;
 
     platform::NetworkMonitor netMonitor_;
 
@@ -478,6 +483,51 @@ private:
                     + "get " + reqId + " end\n";
                 deflateAndWrite(end.data(), end.size());
             }
+            return;
+        }
+
+        // ── C update_now <req_id> ───────────────────────────────────────────
+        if (cmd == "update_now")
+        {
+            if (!cfg_.auto_update)
+            {
+                sendErr("unavailable", "auto-update-disabled");
+                return;
+            }
+
+            // Ack immediately so the server sees the command was received.
+            {
+                const std::string ack = std::string(kLogRespLinePrefix)
+                    + "upd " + reqId + " ack\n";
+                deflateAndWrite(ack.data(), ack.size());
+            }
+
+            // Helper: emit one L upd line.
+            auto sendUpd = [&](const std::string &tail) {
+                const std::string line = std::string(kLogRespLinePrefix)
+                    + "upd " + reqId + " " + tail + "\n";
+                deflateAndWrite(line.data(), line.size());
+            };
+
+            UpdateCallbacks cb;
+            cb.onStage = [&](std::string_view s) {
+                sendUpd("stage " + std::string(s));
+            };
+            cb.onError = [&](std::string_view s, std::string_view m) {
+                sendUpd("err " + std::string(s) + " " + std::string(m));
+            };
+            cb.onNoop  = [&](std::string_view r) {
+                sendUpd("noop " + std::string(r));
+            };
+            cb.onDone  = [&](std::string_view v) {
+                sendUpd("done " + std::string(v));
+            };
+
+            // Run synchronously (blocks this connection for the download duration).
+            // On Linux success: execv() is called after cb.onDone(); never returns.
+            // On Windows success: ExitProcess(0) is called; never returns.
+            // On noop/error: returns normally; connection resumes.
+            doOneCheckCycle(cfg_, UpdateTrigger::ServerPush, cb);
             return;
         }
     }
@@ -1015,6 +1065,7 @@ int runClient(bool daemonMode, const ClientConfig &config, char **argv)
                                 config.verbose,
                                 config.transport,
                                 config.auto_update);
+    connection.setCfg(config);
 
     // Enumerate capturable devices. Returns false only when pcap_findalldevs
     // itself errors (hard failure at startup); an empty result is valid and

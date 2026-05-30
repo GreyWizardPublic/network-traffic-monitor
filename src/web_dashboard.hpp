@@ -92,6 +92,10 @@ struct WebConfig
     // Wire-protocol v3 control channels: maps clientId → per-client channel used
     // by the log-management admin endpoints.  Null = log management disabled.
     std::shared_ptr<ClientControlChannels> ctrl_channels;
+
+    // Wire-protocol v4 update status registry: ephemeral per-client UpdateStatus
+    // entries for the server-pushed auto-update endpoints.  Null = update push disabled.
+    std::shared_ptr<ClientUpdateRegistry> update_registry;
 };
 
 // Thin httplib::Server subclass that makes process_request() publicly accessible.

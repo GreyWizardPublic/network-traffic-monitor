@@ -1277,7 +1277,8 @@ static void runWireDataLoop(
     std::unique_ptr<ZlibInflater>                   &inflater,
     std::vector<std::uint8_t>                       &inflatedBuf,
     const ServerConfig                              &config,
-    std::shared_ptr<ClientControlChannels>           ctrlChannels = nullptr)
+    std::shared_ptr<ClientControlChannels>           ctrlChannels = nullptr,
+    std::shared_ptr<ClientUpdateRegistry>            updateRegistry = nullptr)
 {
     std::string buffer;
     buffer.reserve(4096);
@@ -1484,12 +1485,60 @@ static void runWireDataLoop(
                     registry->clientHealth[clientId] = hs;
                 }
             }
-            else if (line.rfind(kLogRespLinePrefix, 0) == 0 && ctrlChannels)
+            else if (line.rfind(kLogRespLinePrefix, 0) == 0)
             {
-                // Wire-proto v3: L-line response from client to a pending admin command.
-                auto ch = ctrlChannels->get(clientId);
-                if (ch)
-                    ch->routeLLine(line.substr(2)); // strip "L "
+                const std::string lBody = line.substr(2); // strip "L "
+
+                // Wire-proto v4: L upd — binary update progress response.
+                if (updateRegistry && lBody.rfind("upd ", 0) == 0)
+                {
+                    // Format: "upd <req_id> <verb> [fields...]"
+                    const std::string rest = lBody.substr(4); // strip "upd "
+                    const std::size_t sp1 = rest.find(' ');
+                    if (sp1 != std::string::npos)
+                    {
+                        const std::string reqId = rest.substr(0, sp1);
+                        std::string tail = rest.substr(sp1 + 1);
+                        // strip trailing newline/CR
+                        while (!tail.empty() && (tail.back() == '\n' || tail.back() == '\r'))
+                            tail.pop_back();
+                        const std::size_t sp2 = tail.find(' ');
+                        const std::string verb = (sp2 == std::string::npos) ? tail : tail.substr(0, sp2);
+                        const std::string arg  = (sp2 == std::string::npos) ? "" : tail.substr(sp2 + 1);
+
+                        if (verb == "ack")
+                        {
+                            updateRegistry->applyUpdLine(clientId, reqId, "ack", "", "", false);
+                        }
+                        else if (verb == "stage")
+                        {
+                            updateRegistry->applyUpdLine(clientId, reqId, arg, "", "", false);
+                        }
+                        else if (verb == "noop")
+                        {
+                            updateRegistry->applyUpdLine(clientId, reqId, "noop_" + arg, "", "", true);
+                        }
+                        else if (verb == "done")
+                        {
+                            updateRegistry->applyUpdLine(clientId, reqId, "done", "", arg, true);
+                        }
+                        else if (verb == "err")
+                        {
+                            // "err <stage_name> <message>"
+                            const std::size_t sp3 = arg.find(' ');
+                            const std::string errStage = (sp3 == std::string::npos) ? arg : arg.substr(0, sp3);
+                            const std::string errMsg   = (sp3 == std::string::npos) ? "" : arg.substr(sp3 + 1);
+                            updateRegistry->applyUpdLine(clientId, reqId, "err_" + errStage, errMsg, "", true);
+                        }
+                    }
+                }
+                // Wire-proto v3: all other L-lines are log command responses.
+                else if (ctrlChannels)
+                {
+                    auto ch = ctrlChannels->get(clientId);
+                    if (ch)
+                        ch->routeLLine(lBody);
+                }
             }
         }
         if (pos > 0)
@@ -1509,7 +1558,8 @@ void connectionThread(int clientFd,
                       const ServerConfig &config,
                       SSL *preAcceptedSsl,
                       std::shared_ptr<std::atomic<bool>> doneFlag,
-                      std::shared_ptr<ClientControlChannels> ctrlChannels = nullptr)
+                      std::shared_ptr<ClientControlChannels> ctrlChannels = nullptr,
+                      std::shared_ptr<ClientUpdateRegistry>  updateRegistry = nullptr)
 {
     // H1: signal completion to the accept-loop reaper so it can join() and remove the
     // worker entry from the tracking vector. Without this, the vector would grow
@@ -1705,7 +1755,7 @@ void connectionThread(int clientFd,
 
     runWireDataLoop(tcpRecvFn, clientId, clientIp, sessionStart,
                     registry, stats, ipDataUpdater,
-                    inflater, inflatedBuf, config, ctrlChannels);
+                    inflater, inflatedBuf, config, ctrlChannels, updateRegistry);
 
     // Normal exit: ConnCloser destructor handles close(connFd) + SSL_free(ssl).
 
@@ -1745,7 +1795,8 @@ static void wsConnectionThread(
     const ServerConfig                        &config,
     SSL                                       *preAcceptedSsl,
     std::shared_ptr<std::atomic<bool>>         doneFlag,
-    std::shared_ptr<ClientControlChannels>     ctrlChannels = nullptr)
+    std::shared_ptr<ClientControlChannels>     ctrlChannels = nullptr,
+    std::shared_ptr<ClientUpdateRegistry>      updateRegistry = nullptr)
 {
     struct DoneGuard {
         std::shared_ptr<std::atomic<bool>> flag;
@@ -1941,7 +1992,7 @@ static void wsConnectionThread(
 
     runWireDataLoop(wsRecvFn, clientId, clientIp, sessionStart,
                     registry, stats, ipDataUpdater,
-                    inflater, inflatedBuf, config, ctrlChannels);
+                    inflater, inflatedBuf, config, ctrlChannels, updateRegistry);
 
     } // end try
     catch (const std::exception &e)
@@ -2715,6 +2766,7 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
             webCfg.clients_store    = clientsStore;
             webCfg.hidden_store     = hiddenStore;
             webCfg.ctrl_channels    = std::make_shared<ClientControlChannels>();
+            webCfg.update_registry  = std::make_shared<ClientUpdateRegistry>();
             webCfg.server_ips       = serverIpSet;
             webCfg.dashboard_ips    = dashboardIpSet;
             webCfg.update_dir       = config.update_dir;
@@ -3037,7 +3089,8 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                               std::cref(config),
                               ssl,
                               doneFlag,
-                              webCfg.ctrl_channels);
+                              webCfg.ctrl_channels,
+                              webCfg.update_registry);
                 }
                 else if (isWireClient)
                 {
@@ -3055,7 +3108,8 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                               std::cref(config),
                               ssl,
                               doneFlag,
-                              webCfg.ctrl_channels);
+                              webCfg.ctrl_channels,
+                              webCfg.update_registry);
                 }
                 else
                 {

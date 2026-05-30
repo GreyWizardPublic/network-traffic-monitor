@@ -427,6 +427,85 @@ struct ClientControlChannels
 };
 
 // ---------------------------------------------------------------------------
+// Wire-protocol v4: per-client ephemeral update status (server-pushed auto-update).
+// Created when admin clicks Force Update; expires 5 min after terminal state.
+// ---------------------------------------------------------------------------
+
+struct UpdateStatus
+{
+    std::string req_id;
+    std::string stage;       // last stage name; "sent" initially; "" = no recent activity
+    std::string error;       // populated on err line; empty otherwise
+    std::string new_version; // populated on done line
+    std::chrono::steady_clock::time_point started_at;
+    std::chrono::steady_clock::time_point updated_at;
+    bool terminal{false};    // true once done / err / noop / timeout reached
+};
+
+// Global registry of per-client ephemeral update status entries.
+struct ClientUpdateRegistry
+{
+    mutable std::mutex mtx;
+    std::unordered_map<std::string, UpdateStatus> statuses; // clientId → status
+
+    // Upsert: sets or replaces the status for clientId; resets updated_at.
+    void set(const std::string &clientId, UpdateStatus s)
+    {
+        s.updated_at = std::chrono::steady_clock::now();
+        std::lock_guard<std::mutex> lk(mtx);
+        statuses[clientId] = std::move(s);
+        purgeExpiredLocked();
+    }
+
+    // Apply one L upd line field update to an existing entry.
+    // Returns false if the req_id doesn't match the current entry (stale response).
+    bool applyUpdLine(const std::string &clientId,
+                      const std::string &reqId,
+                      const std::string &stage,
+                      const std::string &error,
+                      const std::string &newVersion,
+                      bool terminal)
+    {
+        std::lock_guard<std::mutex> lk(mtx);
+        auto it = statuses.find(clientId);
+        if (it == statuses.end() || it->second.req_id != reqId) return false;
+        it->second.stage       = stage;
+        it->second.error       = error;
+        it->second.new_version = newVersion;
+        it->second.terminal    = terminal;
+        it->second.updated_at  = std::chrono::steady_clock::now();
+        return true;
+    }
+
+    // Snapshot the current status for a client; returns {} if none.
+    UpdateStatus get(const std::string &clientId) const
+    {
+        std::lock_guard<std::mutex> lk(mtx);
+        auto it = statuses.find(clientId);
+        if (it == statuses.end()) return {};
+        return it->second;
+    }
+
+    void purgeExpiredLocked()
+    {
+        const auto now = std::chrono::steady_clock::now();
+        for (auto it = statuses.begin(); it != statuses.end(); )
+        {
+            if (it->second.terminal &&
+                std::chrono::duration_cast<std::chrono::minutes>(
+                    now - it->second.updated_at).count() >= 5)
+            {
+                it = statuses.erase(it);
+            }
+            else
+            {
+                ++it;
+            }
+        }
+    }
+};
+
+// ---------------------------------------------------------------------------
 
 inline constexpr unsigned kAggregationWindowDaysDefault = 7;
 
