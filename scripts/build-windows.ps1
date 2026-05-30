@@ -57,7 +57,7 @@ if ($Clean -and (Test-Path $BuildDir)) {
     Remove-Item -Recurse -Force $BuildDir
 }
 
-# ── Stale binary cleanup (CLAUDE.md § "Stale binary cleanup") ─────────────────
+# ── Stale binary cleanup (docs/project-rules.md §9) ──────────────────────────
 # Because the version is baked into the filename, a version bump leaves old
 # binaries behind.  Remove both the .exe AND its companion .sig so the wrong
 # pair is never deployed by mistake.
