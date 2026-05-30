@@ -7,6 +7,7 @@
 #include "server_version.hpp"
 #include "server_signing.hpp"    // ML-DSA-65 binary signature verification
 #include "server_upgrade.hpp"    // auto-upgrade nonce store + helpers
+#include "web_auth.hpp"          // isTrustedProxyCatchAll, cookieFromHeader helpers
 #include "web_dashboard.hpp"     // transitively includes webauthn.hpp
 // httplib.h comes transitively via web_dashboard.hpp
 
@@ -1217,9 +1218,11 @@ static SSL_CTX *createServerTLSContext(const std::string &certPath, const std::s
         SSL_CTX_free(ctx);
         return nullptr;
     }
-    SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3);
-    // M1: enforce TLS 1.2+ on the server (matches client minimum).
+    SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 |
+                              SSL_OP_CIPHER_SERVER_PREFERENCE);
+    // Enforce TLS 1.2+ minimum; restrict to forward-secret AEAD ciphers only.
     SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+    SSL_CTX_set_cipher_list(ctx, "ECDHE+AESGCM:ECDHE+CHACHA20");
     SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_OFF);
     SSL_CTX_set_timeout(ctx, static_cast<long>(kMaxSessionSeconds));
 
@@ -2370,6 +2373,18 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                   "ntm-server: client authentication is mandatory; "
                   "set allowed_keys in config or via --allowed-keys");
         if (sslCtx) SSL_CTX_free(sslCtx);
+        return 1;
+    }
+
+    // L-5: refuse catch-all trusted_proxy values that would trust any source IP.
+    if (!config.trusted_proxy.empty() && ntm::isTrustedProxyCatchAll(config.trusted_proxy))
+    {
+        serverLog(LogLevel::Err,
+                  "ntm-server: FATAL — trusted_proxy is set to '%s' which would "
+                  "trust spoofed proxy headers from any source. Use a specific proxy "
+                  "IP address or remove trusted_proxy from the config.",
+                  config.trusted_proxy.c_str());
+        SSL_CTX_free(sslCtx);
         return 1;
     }
 

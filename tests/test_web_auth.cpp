@@ -346,3 +346,29 @@ TEST_CASE("hasAdminProofPrefix: demo token does not satisfy admin prefix")
 {
     REQUIRE(!ntm::hasAdminProofPrefix("demo_aabb"));
 }
+
+// ============================================================================
+// isTrustedProxyCatchAll — L-5 regression
+// ============================================================================
+
+TEST_CASE("isTrustedProxyCatchAll: 0.0.0.0 is a catch-all (L-5)")
+{
+    REQUIRE(ntm::isTrustedProxyCatchAll("0.0.0.0"));
+}
+
+TEST_CASE("isTrustedProxyCatchAll: :: is a catch-all (L-5)")
+{
+    REQUIRE(ntm::isTrustedProxyCatchAll("::"));
+}
+
+TEST_CASE("isTrustedProxyCatchAll: specific proxy IP is not a catch-all (L-5)")
+{
+    REQUIRE(!ntm::isTrustedProxyCatchAll("127.0.0.1"));
+    REQUIRE(!ntm::isTrustedProxyCatchAll("10.0.0.1"));
+    REQUIRE(!ntm::isTrustedProxyCatchAll("192.168.1.1"));
+}
+
+TEST_CASE("isTrustedProxyCatchAll: empty string is not a catch-all (L-5)")
+{
+    REQUIRE(!ntm::isTrustedProxyCatchAll(""));
+}

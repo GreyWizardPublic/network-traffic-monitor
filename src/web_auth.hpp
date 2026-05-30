@@ -150,4 +150,18 @@ inline bool hasAdminProofPrefix(const std::string &token)
     return token.size() >= 7 && token.substr(0, 7) == "ntm_ap_";
 }
 
+// ---------------------------------------------------------------------------
+// trusted_proxy validation
+// ---------------------------------------------------------------------------
+
+// Returns true if the string is a well-known "catch-all" address that would
+// cause the server to unconditionally trust spoofed proxy headers.
+// Refused addresses: 0.0.0.0, ::, and the unspecified-address strings.
+// A non-empty, non-catch-all address is assumed to be a specific proxy IP
+// (validated operationally by the operator).
+inline bool isTrustedProxyCatchAll(const std::string &addr)
+{
+    return addr == "0.0.0.0" || addr == "::" || addr == "0:0:0:0:0:0:0:0";
+}
+
 } // namespace ntm

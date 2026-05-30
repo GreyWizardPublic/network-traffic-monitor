@@ -216,6 +216,27 @@ TEST_CASE("parseHealthLine: reportedAtSec is NOT set by parser (stays -1)")
     REQUIRE_EQ(hs.reportedAtSec, std::int64_t{-1});
 }
 
+// L-3 regression: ver and platform fields must be capped at 64 characters.
+TEST_CASE("parseHealthLine: ver field capped at 64 chars (L-3)")
+{
+    const std::string long_ver(200, 'A');
+    auto hs = parseHealthLine("ver=" + long_ver);
+    REQUIRE_EQ(hs.version.size(), std::size_t{64});
+}
+
+TEST_CASE("parseHealthLine: platform field capped at 64 chars (L-3)")
+{
+    const std::string long_plat(200, 'B');
+    auto hs = parseHealthLine("platform=" + long_plat);
+    REQUIRE_EQ(hs.platform.size(), std::size_t{64});
+}
+
+TEST_CASE("parseHealthLine: ver field within limit preserved exactly (L-3)")
+{
+    auto hs = parseHealthLine("ver=1.19.0.1");
+    REQUIRE_EQ(hs.version, std::string{"1.19.0.1"});
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Derived computation: output rate (dashboard calculation)
 // ═══════════════════════════════════════════════════════════════════════════

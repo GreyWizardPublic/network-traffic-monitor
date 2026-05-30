@@ -23,6 +23,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <sys/stat.h>
 
 #include <openssl/err.h>
 #include <openssl/evp.h>
@@ -425,7 +426,7 @@ inline bool writeUpgradeAtomically(
     }
 
     // Set executable bit on the temp binary
-    if (std::system(("chmod 0755 '" + binTmp + "' 2>/dev/null").c_str()) != 0)
+    if (::chmod(binTmp.c_str(), 0755) != 0)
     {
         cleanup();
         errOut = "chmod failed on " + binTmp;
