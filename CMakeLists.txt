@@ -307,6 +307,7 @@ if(NOT WIN32)
         tests/test_client_history.cpp
         tests/test_hidden_entities.cpp
         tests/test_client_config_health.cpp
+        tests/test_client_identity_perms.cpp  # H-4: POSIX-only permission check
     )
     target_include_directories(ntm-tests PRIVATE src tests)
     # ntm_types.hpp uses POSIX socket headers for isLanIP(); no extra libs needed.

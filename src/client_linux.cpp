@@ -5,6 +5,7 @@
 #include "client_platform.hpp"
 #include "client_core.hpp"
 #include "client_http_util.hpp"
+#include "client_linux_perms.hpp"
 
 #include <pcap/pcap.h>
 
@@ -255,22 +256,9 @@ bool isLoopbackIface(const pcap_if *dev)
 // Key file permissions
 // ---------------------------------------------------------------------------
 
-void checkIdentityFilePermissions(const std::string &path, bool isDaemon, bool /*verbose*/)
+bool checkIdentityFilePermissions(const std::string &path, bool isDaemon, bool /*verbose*/)
 {
-    struct stat st;
-    if (::stat(path.c_str(), &st) != 0) return;
-    if ((st.st_mode & (S_IRWXG | S_IRWXO)) != 0)
-    {
-        const char *msg = "ntm-client: WARNING: identity key has group/world permissions";
-        if (isDaemon) syslog(LOG_WARNING, "%s (path=%s)", msg, path.c_str());
-        else std::cerr << msg << " (path=" << path << ")\n";
-    }
-    if (st.st_uid != ::geteuid())
-    {
-        const char *msg = "ntm-client: WARNING: identity key not owned by current user";
-        if (isDaemon) syslog(LOG_WARNING, "%s (path=%s)", msg, path.c_str());
-        else std::cerr << msg << " (path=" << path << ")\n";
-    }
+    return checkIdentityKeyPermissionsImpl(path, isDaemon);
 }
 
 // ---------------------------------------------------------------------------

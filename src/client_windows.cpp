@@ -314,11 +314,11 @@ bool isLoopbackIface(const pcap_if *dev)
 // policy (only owner + SYSTEM/Administrators may read) are intentionally
 // identical; the APIs differ because Windows uses ACLs instead of POSIX modes.
 
-void checkIdentityFilePermissions(const std::string &path, bool isDaemon, bool /*verbose*/)
+bool checkIdentityFilePermissions(const std::string &path, bool isDaemon, bool /*verbose*/)
 {
     // Convert to wide string for Windows APIs.
     int wlen = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
-    if (wlen <= 0) return;
+    if (wlen <= 0) return true; // file may not exist; fopen in caller handles it
     std::wstring wpath(static_cast<std::size_t>(wlen), L'\0');
     MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, wpath.data(), wlen);
 
@@ -328,7 +328,7 @@ void checkIdentityFilePermissions(const std::string &path, bool isDaemon, bool /
     DWORD ret = GetNamedSecurityInfoW(wpath.c_str(), SE_FILE_OBJECT,
                     DACL_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION,
                     &ownerSid, nullptr, &dacl, nullptr, &sd);
-    if (ret != ERROR_SUCCESS || !sd) return;  // file may not exist; silent return
+    if (ret != ERROR_SUCCESS || !sd) return true; // file may not exist; silent pass
 
     // Build SIDs for broad-access groups that should NOT have read access.
     struct {
@@ -393,6 +393,8 @@ void checkIdentityFilePermissions(const std::string &path, bool isDaemon, bool /
         CloseHandle(hToken);
     }
     LocalFree(sd);
+    // H-4: Windows hard-fail (WARN→FATAL) is implemented in Handoff C (win/handoff/h4-identity-perms-hard-fail).
+    return true;
 }
 
 // ---------------------------------------------------------------------------

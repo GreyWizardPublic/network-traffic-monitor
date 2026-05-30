@@ -304,7 +304,11 @@ bool performClientAuth(ITransport       &transport,
 
     logInfo("ntm-client: [auth] identity file: " + identityPath);
 
-    platform::checkIdentityFilePermissions(identityPath, isDaemon, verbose);
+    if (!platform::checkIdentityFilePermissions(identityPath, isDaemon, verbose))
+    {
+        setErr("identity key has unsafe permissions or owner — see log for fix");
+        return false;
+    }
 
     FILE *fp = std::fopen(identityPath.c_str(), "r");
     if (!fp)
