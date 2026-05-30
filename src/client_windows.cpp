@@ -4,6 +4,7 @@
 
 #include "client_platform.hpp"
 #include "client_core.hpp"
+#include "client_filelog.hpp"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #  define WIN32_LEAN_AND_MEAN
@@ -404,9 +405,22 @@ bool checkIdentityFilePermissions(const std::string &path, bool isDaemon, bool /
 // Logging (stderr always — no syslog on Windows)
 // ---------------------------------------------------------------------------
 
-void ntmLog(LogLevel /*level*/, bool /*isDaemon*/, const std::string &msg)
+void ntmLog(LogLevel level, bool /*isDaemon*/, const std::string &msg)
 {
     std::cerr << msg << "\n";
+    ntm::globalFileLogger().write(level, msg);
+}
+
+std::string defaultLogDir(bool isDaemon)
+{
+    // Service mode: %PROGRAMDATA%\ntm-client\logs
+    // User foreground: %LOCALAPPDATA%\ntm-client\logs
+    const char *base = isDaemon
+        ? ::getenv("PROGRAMDATA")
+        : ::getenv("LOCALAPPDATA");
+    if (base && base[0] != '\0')
+        return std::string(base) + "\\ntm-client\\logs";
+    return "";
 }
 
 // ---------------------------------------------------------------------------

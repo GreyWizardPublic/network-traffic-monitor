@@ -199,6 +199,7 @@ if(WIN32)
         tests/test_client_push.cpp
         src/client_core.cpp
         src/client_windows.cpp
+        src/client_filelog.cpp              # required by client_windows.cpp (dual-sink ntmLog)
         src/third_party/miniz/miniz.c       # required by zlib_stream.hpp on Windows
     )
     target_include_directories(ntm-tests-windows PRIVATE src tests "${NPCAP_SDK}/Include")
