@@ -4875,25 +4875,31 @@ void registerWebHandlers(NtmHttpServer &svr,
                 }
 
                 // Reassemble: decode base64 chunks; find total_bytes from begin line.
+                // Format: "get <req_id> begin <name> <total_bytes> <sha256>"
+                //         "get <req_id> chunk <base64>"   (base64 has no spaces)
+                //         "get <req_id> end"
                 std::string fileData;
                 std::uintmax_t totalBytes = 0;
                 for (const auto &line : resp->lines)
                 {
                     if (line.rfind("get ", 0) != 0) continue;
-                    const std::size_t sp1 = line.find(' ');         // after "get"
+                    const std::size_t sp1 = line.find(' ');           // after "get"
                     const std::size_t sp2 = line.find(' ', sp1 + 1); // after req_id
                     if (sp2 == std::string::npos) continue;
-                    const std::string subtype = line.substr(sp2 + 1, line.find(' ', sp2 + 1) - sp2 - 1);
+                    const std::size_t sp3 = line.find(' ', sp2 + 1); // after subtype word
+                    const std::string subtype = line.substr(sp2 + 1,
+                        sp3 == std::string::npos ? std::string::npos : sp3 - sp2 - 1);
                     if (subtype == "begin")
                     {
                         // "get <req_id> begin <name> <total_bytes> <sha256>"
-                        const std::size_t sp3 = line.find(' ', sp2 + 1);
-                        const std::size_t sp4 = line.find(' ', sp3 + 1); // after "begin"
+                        // sp3 = space after "begin"
+                        if (sp3 == std::string::npos) continue;
+                        const std::size_t sp4 = line.find(' ', sp3 + 1); // after filename
                         if (sp4 == std::string::npos) continue;
-                        const std::size_t sp5 = line.find(' ', sp4 + 1); // after filename
-                        if (sp5 == std::string::npos) continue;
-                        const std::size_t sp6 = line.find(' ', sp5 + 1); // after total_bytes
-                        const std::string tbStr = line.substr(sp5 + 1, sp6 - sp5 - 1);
+                        const std::size_t sp5 = line.find(' ', sp4 + 1); // after total_bytes
+                        // total_bytes is between sp4+1 and sp5 (or end if no sha256)
+                        const std::string tbStr = line.substr(sp4 + 1,
+                            sp5 == std::string::npos ? std::string::npos : sp5 - sp4 - 1);
                         try { totalBytes = std::stoull(tbStr); } catch (...) {}
                         fileData.reserve(static_cast<std::size_t>(
                             std::min(totalBytes, static_cast<std::uintmax_t>(50ULL * 1024 * 1024))));
@@ -4901,10 +4907,9 @@ void registerWebHandlers(NtmHttpServer &svr,
                     else if (subtype == "chunk")
                     {
                         // "get <req_id> chunk <base64>"
-                        const std::size_t sp3 = line.find(' ', sp2 + 1);
-                        const std::size_t sp4 = line.find(' ', sp3 + 1);
-                        if (sp4 == std::string::npos) continue;
-                        const std::string b64 = line.substr(sp4 + 1);
+                        // sp3 = space after "chunk"; base64 starts at sp3+1 (no spaces inside)
+                        if (sp3 == std::string::npos) continue;
+                        const std::string b64 = line.substr(sp3 + 1);
                         // Decode base64 → raw bytes
                         const int rawLen = (static_cast<int>(b64.size()) / 4) * 3;
                         std::vector<unsigned char> raw(static_cast<std::size_t>(rawLen) + 4, 0);
