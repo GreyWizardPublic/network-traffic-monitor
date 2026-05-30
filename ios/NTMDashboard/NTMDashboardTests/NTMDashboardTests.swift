@@ -1,3 +1,4 @@
+import Security
 import XCTest
 @testable import NTMDashboard
 
@@ -650,6 +651,25 @@ final class CertificatePinnerTests: XCTestCase {
         XCTAssertNotEqual(CertificatePinner.fingerprint(Data([0x00])),
                           CertificatePinner.fingerprint(Data([0x01])))
     }
+
+    // H-3: when no pin is stored, any non-serverTrust challenge must be cancelled.
+    func testNoPinCancelsNonServerTrustChallenge() {
+        let pinner = CertificatePinner(pinnedCertData: nil)
+        var receivedDisposition: URLSession.AuthChallengeDisposition?
+        let space = URLProtectionSpace(
+            host: "example.com", port: 443, protocol: "https",
+            realm: nil, authenticationMethod: NSURLAuthenticationMethodHTTPBasic
+        )
+        let challenge = URLAuthenticationChallenge(
+            protectionSpace: space, proposedCredential: nil,
+            previousFailureCount: 0, failureResponse: nil, error: nil,
+            sender: MockChallengeSenderNTMD()
+        )
+        pinner.urlSession(URLSession.shared, didReceive: challenge) { disposition, _ in
+            receivedDisposition = disposition
+        }
+        XCTAssertEqual(receivedDisposition, .cancelAuthenticationChallenge)
+    }
 }
 
 // MARK: - Protocol version constants (spec conformance)
@@ -1247,5 +1267,58 @@ final class AdminClientTTLTests: XCTestCase {
         let client = AdminClient(config: .default)
         let authenticated = await client.isAdminAuthenticated
         XCTAssertFalse(authenticated)
+    }
+}
+
+private final class MockChallengeSenderNTMD: NSObject, URLAuthenticationChallengeSender {
+    func use(_ credential: URLCredential, for challenge: URLAuthenticationChallenge) {}
+    func continueWithoutCredential(for challenge: URLAuthenticationChallenge) {}
+    func cancel(_ challenge: URLAuthenticationChallenge) {}
+    func performDefaultHandling(for challenge: URLAuthenticationChallenge) {}
+    func rejectProtectionSpaceAndContinue(with challenge: URLAuthenticationChallenge) {}
+}
+
+// MARK: - M-5 KeychainService ThisDeviceOnly
+
+final class KeychainServiceSecurityTests: XCTestCase {
+
+    private let testURL = "https://test-server-m5.example.com:8443"
+    private let testToken = "test_session_token_m5"
+    private let service = "com.ntm.NTMDashboard.session"
+
+    override func tearDown() {
+        super.tearDown()
+        KeychainService.deleteToken(for: testURL)
+    }
+
+    func testSavedTokenUsesThisDeviceOnlyAccessibility() {
+        KeychainService.saveToken(testToken, for: testURL)
+
+        // Query specifically for ThisDeviceOnly — if the item was saved with a
+        // different accessibility class, this query returns nothing.
+        let query: [CFString: Any] = [
+            kSecClass: kSecClassGenericPassword,
+            kSecAttrService: service,
+            kSecAttrAccount: testURL,
+            kSecAttrAccessible: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+            kSecReturnData: true,
+            kSecMatchLimit: kSecMatchLimitOne
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        XCTAssertEqual(status, errSecSuccess,
+                       "Token must be stored with kSecAttrAccessibleWhenUnlockedThisDeviceOnly")
+
+        if let data = result as? Data, let retrieved = String(data: data, encoding: .utf8) {
+            XCTAssertEqual(retrieved, testToken)
+        } else {
+            XCTFail("Retrieved item is not a valid UTF-8 string")
+        }
+    }
+
+    func testLoadTokenRoundtrip() {
+        KeychainService.saveToken(testToken, for: testURL)
+        let loaded = KeychainService.loadToken(for: testURL)
+        XCTAssertEqual(loaded, testToken)
     }
 }
