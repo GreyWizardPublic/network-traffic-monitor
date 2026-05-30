@@ -87,9 +87,9 @@ static std::array<std::uint8_t, 16> ipv6Bytes(const char *colon)
 // 1. Wire-protocol constants (regression guard)
 // ═══════════════════════════════════════════════════════════════════════════
 
-TEST_CASE("proto: kWireProtoVersion is 3")
+TEST_CASE("proto: kWireProtoVersion is 4")
 {
-    REQUIRE_EQ(ntm::kWireProtoVersion, 3u);
+    REQUIRE_EQ(ntm::kWireProtoVersion, 4u);
 }
 
 TEST_CASE("proto: kDefaultPort is 5555")
