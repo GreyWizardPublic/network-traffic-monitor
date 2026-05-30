@@ -67,6 +67,27 @@ TEST_CASE("cookieFromHeader: value contains equals sign")
                std::string{"abc==def"});
 }
 
+// C-1 regression tests — cookie-name prefix confusion (CWE-1023)
+TEST_CASE("cookieFromHeader: does not match suffix-of-longer-name (C-1 regression)")
+{
+    REQUIRE_EQ(ntm::cookieFromHeader("evil_ntm_session=attacker; ntm_session=good",
+                                     "ntm_session"),
+               std::string{"good"});
+}
+
+TEST_CASE("cookieFromHeader: hostile prefix only returns empty (C-1 regression)")
+{
+    REQUIRE_EQ(ntm::cookieFromHeader("evil_ntm_admin=attacker", "ntm_admin"),
+               std::string{});
+}
+
+TEST_CASE("cookieFromHeader: hostile name surrounds real cookie (C-1 regression)")
+{
+    REQUIRE_EQ(ntm::cookieFromHeader("a=1; xntm_session=bad; ntm_session=real; b=2",
+                                     "ntm_session"),
+               std::string{"real"});
+}
+
 // ============================================================================
 // sessionFromHeaders — Authorization bearer takes priority over cookie
 // ============================================================================
