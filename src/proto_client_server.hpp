@@ -16,7 +16,8 @@ namespace ntm
 // connection-lifecycle rule changes. See docs/wire-protocol.md § 6.
 // Lockstep consumers: ntm-server, ntm-client (C++), NTMClient (iOS).
 // v3: added bidirectional C (control) and L (log) line families; server→client direction.
-inline constexpr unsigned kWireProtoVersion = 3;
+// v4: added C update_now and L upd response family; server-pushed binary auto-update.
+inline constexpr unsigned kWireProtoVersion = 4;
 
 // HTTPS API protocol version (integer). Bump when endpoint schemas change.
 // See docs/api-protocol.md § 5 for change classification rules.
@@ -26,7 +27,8 @@ inline constexpr unsigned kWireProtoVersion = 3;
 // v10: added admin hide-entities endpoints; /api/summary filters hidden clients/ifaces.
 // v11: added /api/admin/client/config endpoint; clients report cfg_* fields in H-lines.
 // v12: added remote log management endpoints (/admin/clients/<id>/logs*); wire-proto v3 required.
-inline constexpr unsigned kApiVersion = 12;
+// v13: added /api/admin/clients/<id>/update[/status]; removed force field from /api/update/check.
+inline constexpr unsigned kApiVersion = 13;
 
 // Default TCP port — serves both ntm-client data ingestion and the HTTPS
 // dashboard when port consolidation is in use (see docs/wire-protocol.md § 2).

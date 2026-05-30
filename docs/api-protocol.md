@@ -1144,9 +1144,68 @@ recreates it immediately to capture subsequent log output).
 
 ---
 
-## 19. Stability Contract
+## 19. Remote Update Push (admin)
 
-- All fields documented in § 10–18 are **stable at `api_version: 12`**.
+New in `api_version: 13`. Requires admin auth. All endpoints use
+the per-client id format (64 lowercase hex chars = Ed25519 pubkey).
+
+### `POST /api/admin/clients/<id>/update`
+
+Push an immediate update to the named client over its established wire
+socket. The server allocates a `req_id`, sends `C update_now <req_id>`,
+seeds a transient `UpdateStatus` entry, and starts a 10-minute watchdog.
+
+**Request body:** none (client id is in the URL path).
+
+**Response `200`:**
+```json
+{ "ok": true, "req_id": "a1b2c3d4e5f67890" }
+```
+
+**Error responses:**
+
+| Status | Reason |
+|---|---|
+| `400` | Invalid `<id>` |
+| `404` | Client ID not found in AllowedClientsStore |
+| `409` | Client is not currently connected (`client_offline`) |
+
+### `GET /api/admin/clients/<id>/update/status`
+
+Poll for the current update status of the named client.
+
+**Response `200`:**
+```json
+{
+  "req_id": "a1b2c3d4e5f67890",
+  "stage": "verifying_signature",
+  "started_at": 1717087200,
+  "updated_at": 1717087215,
+  "finished_at": null,
+  "error": null,
+  "new_version": null,
+  "terminal": false
+}
+```
+
+Returns `{}` (empty object) if no update has been triggered or the last
+terminal entry has expired (5-minute idle TTL). `stage` values match the
+`L upd` stage names defined in `docs/wire-protocol.md §5.4`, plus
+`sent` (C-line dispatched, ack not yet received) and `timeout`
+(10-minute watchdog fired). `terminal` is `true` when the final
+outcome is known (done / err / noop / timeout).
+
+**Error responses:**
+
+| Status | Reason |
+|---|---|
+| `400` | Invalid `<id>` |
+
+---
+
+## 20. Stability Contract
+
+- All fields documented in § 10–19 are **stable at `api_version: 13`**.
   No field will be removed or renamed without a version bump.
 - New **optional** fields may be added at any `api_version` without bumping;
   clients must tolerate extra fields.
@@ -1172,4 +1231,8 @@ recreates it immediately to capture subsequent log output).
   The admin UI should gracefully handle `404` by hiding the Client Configuration panel.
 - Servers at `api_version: 11` (ntm-server < 1.25.0) do not have the remote log management
   endpoints (§ 18). The admin UI should gracefully handle `404` by hiding the Logs panel.
+- Servers at `api_version: 12` (ntm-server < 1.26.0) do not have the remote update push
+  endpoints (§ 19) and still include the `force` field in `/api/update/check` responses.
+  The admin UI should gracefully handle `404` from `/api/admin/clients/<id>/update` by
+  falling back to the legacy per-client Force button behaviour.
 - The protocol doc is updated **before** the commit that changes either side.
