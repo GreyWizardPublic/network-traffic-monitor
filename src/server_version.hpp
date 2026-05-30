@@ -4,4 +4,4 @@
 // See docs/agent-framework.md §5 for versioning rules; docs/project-rules.md §3 for the module list.
 // Wire protocol spoken: kWireProtoVersion (src/proto_client_server.hpp)
 // API protocol spoken:  kApiVersion       (src/proto_client_server.hpp)
-inline constexpr char kServerVersion[] = "1.26.0.2";
+inline constexpr char kServerVersion[] = "1.26.0.3";

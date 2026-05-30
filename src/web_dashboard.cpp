@@ -2465,6 +2465,11 @@ async function triggerUpdate(clientId,btn){
       setTimeout(function(){updPillIdle(btn);},4000);
       return;
     }
+    if(r.status===429){
+      updPillErr(btn,'✗ Rate limited','Too many requests — wait a moment and try again');
+      setTimeout(function(){updPillIdle(btn);},5000);
+      return;
+    }
     const d=await r.json();
     if(r.ok&&d.ok){
       updPillBusy(btn,'Sent…');
@@ -2843,7 +2848,12 @@ void registerWebHandlers(NtmHttpServer &svr,
             const std::string ip    = effectiveClientIP(req, config);
             const std::string &path = req.path;
 
-            if (!rateLimiter.tryAcquire(ip))
+            // Global rate limiter applies only to unauthenticated paths (login,
+            // passkey registration, WebAuthn challenge, etc.).  Authenticated admin
+            // sessions must not be throttled here — the 1 s update-status poller
+            // alone exceeds 30 RPM and would lock out the admin mid-update.
+            // Sensitive authenticated endpoints have their own per-endpoint limiters.
+            if (isAuthExemptPath(path) && !rateLimiter.tryAcquire(ip))
             {
                 res.status = 429;
                 res.set_header("Retry-After", "60");
