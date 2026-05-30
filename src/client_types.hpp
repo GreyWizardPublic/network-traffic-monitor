@@ -68,6 +68,11 @@ struct ClientConfig
     // Config keys: log_dir=<path>  log_level=Info|Warn|Err
     std::string log_dir;
     std::string log_level{"Info"};
+
+    // Set at startup from the --daemon / --service CLI flag; not a config-file key.
+    // Used by subsystems (e.g. updater) that call ntmLog() but don't have the
+    // daemon flag in scope.
+    bool is_daemon{false};
 };
 
 } // namespace ntm

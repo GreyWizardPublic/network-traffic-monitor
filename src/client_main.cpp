@@ -280,6 +280,7 @@ int main(int argc, char *argv[])
     opts.identityPath      = identityPath;
     opts.tlsCaPath         = tlsCaPath;
     opts.tlsServerCertPath = tlsServerCertPath;
+    opts.is_daemon         = daemonMode;
 
 #ifdef _WIN32
     if (serviceMode)

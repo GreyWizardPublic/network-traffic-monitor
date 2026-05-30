@@ -491,7 +491,15 @@ private:
         {
             if (!cfg_.auto_update)
             {
-                sendErr("unavailable", "auto-update-disabled");
+                // Respond via the L upd protocol so the server can update the
+                // UpdateStatus registry and the admin pill shows a clear error
+                // instead of being stuck at "Sent" until the 10-min watchdog.
+                const std::string noop = std::string(kLogRespLinePrefix)
+                    + "upd " + reqId + " noop auto_update_disabled\n";
+                deflateAndWrite(noop.data(), noop.size());
+                platform::ntmLog(platform::LogLevel::Warn, isDaemon_,
+                    "ntm-client: update_now received but auto_update is disabled"
+                    " — add auto_update=true to config to enable");
                 return;
             }
 
