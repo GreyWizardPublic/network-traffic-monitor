@@ -168,6 +168,19 @@ icacls $SecretsDir /inheritance:r `
     /grant:r "NT SERVICE\${ServiceName}:(OI)(CI)R" `
     /deny "BUILTIN\Users:(OI)(CI)(RX)" | Out-Null
 
+# If the identity key is already present, set ownership to Administrators and
+# restrict permissions.  Without this the file is owned by whoever copied it
+# (typically the installing user), and the client's ownership check rejects it
+# when running as LocalSystem / NT SERVICE\ntm-client.
+$KeyFile = "$SecretsDir\client_private.pem"
+if (Test-Path $KeyFile) {
+    Write-Host "[setup] Fixing identity key ownership and permissions..." -ForegroundColor Yellow
+    & takeown.exe /F $KeyFile /A | Out-Null
+    icacls $KeyFile /inheritance:r `
+        /grant:r "SYSTEM:(F)" `
+        /grant:r "Administrators:(R)" | Out-Null
+}
+
 # ── Create a minimal config if none exists ─────────────────────────────────────
 if (-not (Test-Path $ConfigPath)) {
     Write-Host "[setup] Creating placeholder config at $ConfigPath..." -ForegroundColor Yellow
@@ -201,6 +214,9 @@ Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Cyan
 Write-Host "  1. Edit $ConfigPath (set server, port, identity)."
 Write-Host "  2. Place your Ed25519 key in $SecretsDir\client_private.pem"
+Write-Host "     IMPORTANT: after copying the key, fix its ownership (run as Administrator):"
+Write-Host "       takeown /F `"$SecretsDir\client_private.pem`" /A"
+Write-Host "       icacls `"$SecretsDir\client_private.pem`" /inheritance:r /grant:r `"SYSTEM:(F)`" /grant:r `"Administrators:(R)`""
 Write-Host "  3. Run: Restart-Service $ServiceName"
 Write-Host "  4. Check: Get-Service $ServiceName"
 Write-Host ""
