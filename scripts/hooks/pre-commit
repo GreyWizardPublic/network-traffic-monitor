@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# pre-commit — enforce version bumps for ntm-server and ntm-client.
+#
+# Installed automatically by cmake (core.hooksPath = scripts/hooks).
+# On a fresh clone, run `cmake -B build -S .` once to activate.
+#
+# Policy (docs/agent-framework.md §5):
+#   Every commit that touches module source must also stage the relevant
+#   *_version.hpp file. No exceptions, no matter how small the change.
+#
+# Classification:
+#   Server-only  →  src/server_core.*, src/web_dashboard.*, src/webauthn.*
+#   Client-only  →  src/client*.*, src/updater.*, src/flow_aggregator.*
+#   Both         →  any other src/*.cpp / src/*.hpp, CMakeLists.txt
+#   Exempt       →  tests/, docs/, scripts/, ios/, *.md, src/ntm_test.hpp,
+#                   src/*_version.hpp (the version files themselves)
+
+set -euo pipefail
+
+staged=$(git diff --cached --name-only 2>/dev/null) || staged=""
+
+needs_server=0
+needs_client=0
+has_server_bump=0
+has_client_bump=0
+
+while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+
+    # Version files themselves — record the bump; do not trigger a requirement.
+    [[ "$f" == "src/server_version.hpp" ]] && { has_server_bump=1; continue; }
+    [[ "$f" == "src/client_version.hpp" ]] && { has_client_bump=1; continue; }
+
+    # Exempt paths — changes here never require a version bump.
+    case "$f" in
+        tests/*|docs/*|scripts/*|ios/*|*.md|.gitignore|.github/*)
+            continue ;;
+        src/ntm_test.hpp|src/proto_client_server.hpp.in)
+            # ntm_test.hpp is test infrastructure only; not shipped.
+            # (proto_client_server.hpp itself is shared and handled below.)
+            [[ "$f" == "src/ntm_test.hpp" ]] && continue ;;
+    esac
+
+    # CMakeLists.txt changes affect both compiled binaries.
+    if [[ "$f" == "CMakeLists.txt" ]]; then
+        needs_server=1; needs_client=1; continue
+    fi
+
+    # Only classify files under src/ from here on.
+    [[ "$f" == src/* ]] || continue
+
+    # Server-only sources.
+    if [[ "$f" =~ ^src/(server_core\.|web_dashboard\.|webauthn\.) ]]; then
+        needs_server=1; continue
+    fi
+
+    # Client-only sources.
+    if [[ "$f" =~ ^src/(client[^/]*\.(cpp|hpp)|updater\.(cpp|hpp)|flow_aggregator\.hpp) ]]; then
+        needs_client=1; continue
+    fi
+
+    # Everything else in src/ (shared headers, new files, etc.) touches both.
+    needs_server=1
+    needs_client=1
+
+done <<< "$staged"
+
+# ── Report missing bumps ───────────────────────────────────────────────────
+fail=0
+
+if (( needs_server && ! has_server_bump )); then
+    echo "pre-commit: ERROR — server source changed but src/server_version.hpp is not staged." >&2
+    fail=1
+fi
+if (( needs_client && ! has_client_bump )); then
+    echo "pre-commit: ERROR — client source changed but src/client_version.hpp is not staged." >&2
+    fail=1
+fi
+
+if (( fail )); then
+    echo "" >&2
+    echo "  Bump the version(s), stage the file(s), then commit again." >&2
+    echo "  Versioning rules: docs/agent-framework.md §5" >&2
+    exit 1
+fi
+
+exit 0
