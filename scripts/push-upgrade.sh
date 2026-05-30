@@ -224,25 +224,40 @@ info "Auth proof ready (${#AUTH_PROOF_B64} b64 chars)"
 # ---------------------------------------------------------------------------
 # Step 3: Push binary + signature + auth proof to server
 # ---------------------------------------------------------------------------
+# BOOTSTRAP-WORKAROUND: the running server has the cpp-httplib 0.46.0 getField()
+# bug (only searches req.form.files).  Write text fields to temp files and upload
+# via @path;filename=key so httplib routes them into req.form.files.
+# Remove once ntm-server 1.25.0.0 (with the getField fix) is live.
+VERSION_FFILE=$(mktemp /tmp/ntm_upgrade_version.XXXXXX)
+NONCE_FFILE=$(mktemp /tmp/ntm_upgrade_nonce.XXXXXX)
+AUTH_PROOF_FFILE=$(mktemp /tmp/ntm_upgrade_authproof2.XXXXXX)
+trap 'rm -f "$AUTH_MSG_FILE" "$AUTH_PROOF_FILE" "$VERSION_FFILE" "$NONCE_FFILE" "$AUTH_PROOF_FFILE"' EXIT
+printf '%s' "$VERSION"       > "$VERSION_FFILE"
+printf '%s' "$NONCE"         > "$NONCE_FFILE"
+printf '%s' "$AUTH_PROOF_B64" > "$AUTH_PROOF_FFILE"
+
 # On Windows/MSYS2, MinGW curl misparses POSIX paths (/c/Users/...) when a
-# ;type= suffix is appended to -F @file fields (curl error 26). Converting to
-# Windows mixed paths (C:/Users/...) via cygpath -m avoids the issue.
-# On Linux, cygpath is absent and BINARY_FOR_CURL == BINARY.
-# Note: push-upgrade.sh is primarily used from Linux; the cygpath guard is
-# included for completeness and symmetry with push-client.sh.
+# ;type= or ;filename= suffix is appended to -F @file fields (curl error 26).
+# On Linux, cygpath is absent and all *_FOR_CURL variables equal the original.
 if command -v cygpath >/dev/null 2>&1; then
     BINARY_FOR_CURL=$(cygpath -m "$BINARY")
     SIG_FOR_CURL=$(cygpath -m "$SIG_FILE")
+    VERSION_FOR_CURL=$(cygpath -m "$VERSION_FFILE")
+    NONCE_FOR_CURL=$(cygpath -m "$NONCE_FFILE")
+    AUTH_PROOF_FOR_CURL=$(cygpath -m "$AUTH_PROOF_FFILE")
 else
     BINARY_FOR_CURL="$BINARY"
     SIG_FOR_CURL="$SIG_FILE"
+    VERSION_FOR_CURL="$VERSION_FFILE"
+    NONCE_FOR_CURL="$NONCE_FFILE"
+    AUTH_PROOF_FOR_CURL="$AUTH_PROOF_FFILE"
 fi
 
 info "Uploading binary and signature to $BASE_URL/admin/upgrade/push ..."
 PUSH_RESP=$(curl --silent --show-error --fail \
-    -F "version=$VERSION" \
-    -F "nonce=$NONCE" \
-    -F "auth_proof=$AUTH_PROOF_B64" \
+    -F "version=@$VERSION_FOR_CURL;filename=version" \
+    -F "nonce=@$NONCE_FOR_CURL;filename=nonce" \
+    -F "auth_proof=@$AUTH_PROOF_FOR_CURL;filename=auth_proof" \
     -F "binary=@$BINARY_FOR_CURL;type=application/octet-stream" \
     -F "signature=@$SIG_FOR_CURL;type=application/octet-stream" \
     "$BASE_URL/admin/upgrade/push") \
