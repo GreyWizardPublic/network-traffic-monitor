@@ -39,9 +39,11 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <tuple>
 
@@ -55,6 +57,7 @@ namespace fs = std::filesystem;
 // ---------------------------------------------------------------------------
 
 static std::atomic<bool> g_updaterRunning{false};
+static std::atomic<bool> g_updateInProgress{false};
 static std::thread       g_updaterThread;
 static char            **g_argv{nullptr};
 
@@ -608,6 +611,279 @@ static std::int64_t epochNow()
         std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
+void doOneCheckCycle(const ClientConfig &config,
+                     UpdateTrigger trigger,
+                     const UpdateCallbacks &cb)
+{
+    // Serialise: only one update cycle at a time across periodic + push paths.
+    bool expected = false;
+    if (!g_updateInProgress.compare_exchange_strong(expected, true))
+    {
+        if (cb.onNoop) cb.onNoop("in_progress");
+        return;
+    }
+    struct InProgressGuard {
+        ~InProgressGuard() { g_updateInProgress.store(false); }
+    } ipGuard;
+
+    const std::string dir = exeDir();
+    if (dir.empty())
+    {
+        std::cerr << "ntm-client: updater: cannot determine exe directory\n";
+        if (cb.onError) cb.onError("network", "cannot-determine-exe-dir");
+        return;
+    }
+
+    const std::string pubkeyHex = pubkeyHexFromPem(config.identityPath);
+    if (pubkeyHex.empty())
+    {
+        std::cerr << "ntm-client: updater: cannot derive pubkey from identity\n";
+        if (cb.onError) cb.onError("network", "cannot-derive-pubkey");
+        return;
+    }
+
+    // ── Stage: checking ──────────────────────────────────────────────────────
+    if (cb.onStage) cb.onStage("checking");
+
+    std::string path = "/api/update/check?platform=";
+    path += kClientPlatform;
+    path += "&version=";
+    path += kClientVersion;
+    path += "&pubkey=";
+    path += pubkeyHex;
+
+    auto [status, body] = httpsGet(config.server, config.port, path,
+                                   config.tlsCaPath, config.tlsServerCertPath,
+                                   config.verbose);
+
+    if (trigger == UpdateTrigger::Periodic)
+        writeLastCheck(dir, epochNow());
+
+    if (status == 0)
+    {
+        std::cerr << "ntm-client: updater: check failed (connection error)\n";
+        if (cb.onError) cb.onError("network", "connection-error");
+        return;
+    }
+    if (status != 200)
+    {
+        std::cerr << "ntm-client: updater: check failed (HTTP " << status << ")\n";
+        if (cb.onError) cb.onError("network", "http-" + std::to_string(status));
+        return;
+    }
+
+    const bool available = jsonBool(body, "update_available", false);
+
+    if (!available)
+    {
+        if (config.verbose)
+            std::cerr << "ntm-client: updater: no update available\n";
+        if (cb.onNoop) cb.onNoop("no_update_available");
+        return;
+    }
+
+    const std::string newVer = ntm::http_util::jsonStr(body, "version");
+    const std::string sha256 = ntm::http_util::jsonStr(body, "sha256");
+    const std::int64_t size  = jsonInt(body, "size", 0);
+
+    if (newVer.empty() || sha256.size() != 64)
+    {
+        std::cerr << "ntm-client: updater: malformed check response\n";
+        if (cb.onError) cb.onError("network", "malformed-check-response");
+        return;
+    }
+
+    constexpr std::int64_t kMaxUpdateBytes = 64LL * 1024 * 1024;
+    if (size > kMaxUpdateBytes)
+    {
+        std::cerr << "ntm-client: updater: server reported size " << size
+                  << " exceeds 64 MiB cap; refusing update\n";
+        if (cb.onError) cb.onError("network", "size-cap-exceeded");
+        return;
+    }
+
+    std::cerr << "ntm-client: updater: update available — " << newVer << "\n";
+
+#ifdef _WIN32
+    const std::string stagingDir  = updateStagingDir();
+    const std::string pendingPath = stagingDir + "/ntm-client-pending.exe";
+#else
+    const std::string pendingPath = dir + "/ntm-client.pending";
+#endif
+    std::error_code ec;
+    fs::remove(pendingPath, ec);
+
+    // ── Stage: downloading_binary ────────────────────────────────────────────
+    if (cb.onStage) cb.onStage("downloading_binary");
+
+    std::string dlPath = "/api/update/download?platform=";
+    dlPath += kClientPlatform;
+    dlPath += "&pubkey=";
+    dlPath += pubkeyHex;
+
+    int dlStatus = httpsGetToFile(config.server, config.port, dlPath,
+                                  config.tlsCaPath, config.tlsServerCertPath,
+                                  pendingPath, size, config.verbose);
+    if (dlStatus != 200)
+    {
+        std::cerr << "ntm-client: updater: download failed (HTTP " << dlStatus << ")\n";
+        fs::remove(pendingPath, ec);
+        if (cb.onError) cb.onError("downloading_binary", "http-" + std::to_string(dlStatus));
+        return;
+    }
+
+    // ── Stage: verifying_sha256 ──────────────────────────────────────────────
+    if (cb.onStage) cb.onStage("verifying_sha256");
+
+    std::string gotHash;
+    if (!sha256FileHex(pendingPath, gotHash) || gotHash != sha256)
+    {
+        std::cerr << "ntm-client: updater: SHA-256 mismatch — discarding download\n";
+        fs::remove(pendingPath, ec);
+        if (cb.onError) cb.onError("verifying_sha256", "hash-mismatch");
+        return;
+    }
+
+    std::cerr << "ntm-client: updater: verified " << newVer << " (SHA-256 OK)\n";
+
+    // ── Stage: downloading_signature ─────────────────────────────────────────
+    if (cb.onStage) cb.onStage("downloading_signature");
+
+    const std::string pendingSigPath = pendingPath + ".sig";
+    { std::error_code ec2; fs::remove(pendingSigPath, ec2); }
+
+    std::string sigDlPath = "/api/update/download_sig?platform=";
+    sigDlPath += kClientPlatform;
+    sigDlPath += "&pubkey=";
+    sigDlPath += pubkeyHex;
+
+    const std::int64_t expectedSigSize = jsonInt(body, "sig_size", 0);
+    int sigStatus = httpsGetToFile(config.server, config.port, sigDlPath,
+                                   config.tlsCaPath, config.tlsServerCertPath,
+                                   pendingSigPath,
+                                   expectedSigSize > 0 ? expectedSigSize : 10 * 1024 * 1024,
+                                   config.verbose);
+    if (sigStatus != 200)
+    {
+        std::cerr << "ntm-client: updater: signature download failed (HTTP " << sigStatus
+                  << ") — discarding update\n";
+        fs::remove(pendingPath, ec);
+        fs::remove(pendingSigPath, ec);
+        if (cb.onError) cb.onError("downloading_signature", "http-" + std::to_string(sigStatus));
+        return;
+    }
+
+    // ── Stage: verifying_signature ───────────────────────────────────────────
+    if (cb.onStage) cb.onStage("verifying_signature");
+
+    {
+        std::vector<std::uint8_t> binData, sigData;
+        auto readVec = [](const std::string &p, std::vector<std::uint8_t> &out) -> bool {
+            FILE *f = std::fopen(p.c_str(), "rb");
+            if (!f) return false;
+            std::fseek(f, 0, SEEK_END);
+            long sz = std::ftell(f); std::rewind(f);
+            if (sz <= 0) { std::fclose(f); return false; }
+            out.resize(static_cast<std::size_t>(sz));
+            bool ok = std::fread(out.data(), 1, out.size(), f) == out.size();
+            std::fclose(f);
+            return ok;
+        };
+
+        if (!readVec(pendingPath, binData) || !readVec(pendingSigPath, sigData))
+        {
+            std::cerr << "ntm-client: updater: cannot read pending files for verification\n";
+            fs::remove(pendingPath, ec);
+            fs::remove(pendingSigPath, ec);
+            if (cb.onError) cb.onError("verifying_signature", "io-read-error");
+            return;
+        }
+
+        std::string sigVerErr;
+        if (!ntm::signing::verifyClientSignatureBytes(binData, sigData, sigVerErr))
+        {
+            std::cerr << "ntm-client: updater: ML-DSA-65 verification FAILED — "
+                         "discarding update (" << sigVerErr << ")\n";
+            fs::remove(pendingPath, ec);
+            fs::remove(pendingSigPath, ec);
+            if (cb.onError) cb.onError("verifying_signature", sigVerErr);
+            return;
+        }
+        std::cerr << "ntm-client: updater: ML-DSA-65 signature verified OK\n";
+    }
+
+    // ── Stage: applying ──────────────────────────────────────────────────────
+    if (cb.onStage) cb.onStage("applying");
+
+#ifdef _WIN32
+    if (!applyUpdateWindows(dir, pendingPath, pendingSigPath))
+    {
+        std::cerr << "ntm-client: updater: failed to apply update\n";
+        fs::remove(pendingPath, ec);
+        if (cb.onError) cb.onError("applying", "apply-failed");
+        return;
+    }
+
+    const std::string targetExe = dir + "/ntm-client.exe";
+    if (!smokeTestNewBinary(targetExe))
+    {
+        std::cerr << "ntm-client: updater: smoke test failed; rolling back to previous binary\n";
+        const std::wstring wTarget(targetExe.begin(), targetExe.end());
+        const std::wstring wOldExe((dir + "/ntm-client.exe.old").begin(),
+                                   (dir + "/ntm-client.exe.old").end());
+        MoveFileExW(wOldExe.c_str(), wTarget.c_str(),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+        fs::remove(pendingPath, ec);
+        if (cb.onError) cb.onError("applying", "smoke-test-failed");
+        return;
+    }
+
+#ifdef NTM_REQUIRE_AUTHENTICODE
+    {
+        std::wstring wexe(targetExe.begin(), targetExe.end());
+        if (!verifyAuthenticode(wexe))
+        {
+            std::cerr << "ntm-client: updater: Authenticode verification failed; rolling back\n";
+            const std::wstring wTarget(targetExe.begin(), targetExe.end());
+            const std::wstring wOldExe((dir + "/ntm-client.exe.old").begin(),
+                                       (dir + "/ntm-client.exe.old").end());
+            MoveFileExW(wOldExe.c_str(), wTarget.c_str(),
+                        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+            fs::remove(pendingPath, ec);
+            if (cb.onError) cb.onError("applying", "authenticode-failed");
+            return;
+        }
+    }
+#endif  // NTM_REQUIRE_AUTHENTICODE
+
+    // ── Stage: restarting ────────────────────────────────────────────────────
+    if (cb.onStage) cb.onStage("restarting");
+    if (cb.onDone)  cb.onDone(newVer);
+    std::cerr << "ntm-client: updater: update applied; restarting\n";
+    ExitProcess(0);
+#else
+    if (!applyUpdateLinux(dir))
+    {
+        std::cerr << "ntm-client: updater: failed to apply update\n";
+        fs::remove(pendingPath, ec);
+        if (cb.onError) cb.onError("applying", "apply-failed");
+        return;
+    }
+
+    // ── Stage: restarting ────────────────────────────────────────────────────
+    if (cb.onStage) cb.onStage("restarting");
+    if (cb.onDone)  cb.onDone(newVer);
+    std::cerr << "ntm-client: updater: update applied; exec-self to hot-reload\n";
+    if (g_argv)
+    {
+        ::execv(selfExePath().c_str(), g_argv);
+        // execv replaces the process; only returns on failure.
+    }
+    std::cerr << "ntm-client: updater: exec-self failed; binary updated for next restart\n";
+    if (cb.onError) cb.onError("exec", "execv-failed");
+#endif
+}
+
 static void runUpdater(ClientConfig config)
 {
     const std::string dir = exeDir();
@@ -647,234 +923,7 @@ static void runUpdater(ClientConfig config)
 
         if (now - lastCheck < checkInterval) continue;
 
-        // Build check URL.
-        std::string path = "/api/update/check?platform=";
-        path += kClientPlatform;
-        path += "&version=";
-        path += kClientVersion;
-        path += "&pubkey=";
-        path += pubkeyHex;
-
-        auto [status, body] = httpsGet(config.server, config.port, path,
-                                       config.tlsCaPath, config.tlsServerCertPath,
-                                       config.verbose);
-
-        writeLastCheck(stateDir, epochNow());
-
-        if (status == 0)
-        {
-            std::cerr << "ntm-client: updater: check failed (connection error)\n";
-            continue;
-        }
-        if (status != 200)
-        {
-            std::cerr << "ntm-client: updater: check failed (HTTP " << status << ")\n";
-            continue;
-        }
-
-        const bool available = jsonBool(body, "update_available", false);
-        const bool force      = jsonBool(body, "force",            false);
-
-        if (!available && !force)
-        {
-            if (config.verbose)
-                std::cerr << "ntm-client: updater: no update available\n";
-            continue;
-        }
-        if (force && !available)
-        {
-            // Server flagged force but has no binary in update_dir yet.
-            std::cerr << "ntm-client: updater: force flag set but no binary available on server\n";
-            continue;
-        }
-
-        const std::string newVer = ntm::http_util::jsonStr(body, "version");
-        const std::string sha256 = ntm::http_util::jsonStr(body, "sha256");
-        // "size" is an optional download-cap hint; 0 means read until EOF.
-        const std::int64_t size  = jsonInt(body, "size", 0);
-
-        if (newVer.empty() || sha256.size() != 64)
-        {
-            std::cerr << "ntm-client: updater: malformed check response\n";
-            continue;
-        }
-
-        // H-2: enforce download size cap on all platforms.
-        {
-            constexpr std::int64_t kMaxUpdateBytes = 64LL * 1024 * 1024;
-            if (size > kMaxUpdateBytes)
-            {
-                std::cerr << "ntm-client: updater: server reported size " << size
-                          << " exceeds 64 MiB cap; refusing update\n";
-                continue;
-            }
-        }
-
-        std::cerr << "ntm-client: updater: update available — " << newVer
-                  << (force ? " (forced)" : "") << "\n";
-
-        // Download path — Windows uses a separate staging dir so the service
-        // never needs write access to the install directory during download.
-#ifdef _WIN32
-        const std::string stagingDir  = updateStagingDir();
-        const std::string pendingPath = stagingDir + "/ntm-client-pending.exe";
-#else
-        const std::string pendingPath = dir + "/ntm-client.pending";
-#endif
-        // Remove stale pending file.
-        std::error_code ec;
-        fs::remove(pendingPath, ec);
-
-        // Build download URL.
-        std::string dlPath = "/api/update/download?platform=";
-        dlPath += kClientPlatform;
-        dlPath += "&pubkey=";
-        dlPath += pubkeyHex;
-
-        int dlStatus = httpsGetToFile(config.server, config.port, dlPath,
-                                      config.tlsCaPath, config.tlsServerCertPath,
-                                      pendingPath, size, config.verbose);
-        if (dlStatus != 200)
-        {
-            std::cerr << "ntm-client: updater: download failed (HTTP " << dlStatus << ")\n";
-            fs::remove(pendingPath, ec);
-            continue;
-        }
-
-        // Verify SHA-256.
-        std::string gotHash;
-        if (!sha256FileHex(pendingPath, gotHash) || gotHash != sha256)
-        {
-            std::cerr << "ntm-client: updater: SHA-256 mismatch — discarding download\n";
-            fs::remove(pendingPath, ec);
-            continue;
-        }
-
-        std::cerr << "ntm-client: updater: verified " << newVer << " (SHA-256 OK)\n";
-
-        // Download signature file.
-        const std::string pendingSigPath = pendingPath + ".sig";
-        {
-            std::error_code ec2;
-            fs::remove(pendingSigPath, ec2);
-        }
-
-        std::string sigDlPath = "/api/update/download_sig?platform=";
-        sigDlPath += kClientPlatform;
-        sigDlPath += "&pubkey=";
-        sigDlPath += pubkeyHex;
-
-        const std::int64_t expectedSigSize = jsonInt(body, "sig_size", 0);
-        int sigStatus = httpsGetToFile(config.server, config.port, sigDlPath,
-                                       config.tlsCaPath, config.tlsServerCertPath,
-                                       pendingSigPath,
-                                       expectedSigSize > 0 ? expectedSigSize : 10 * 1024 * 1024,
-                                       config.verbose);
-        if (sigStatus != 200)
-        {
-            std::cerr << "ntm-client: updater: signature download failed (HTTP " << sigStatus
-                      << ") — discarding update\n";
-            fs::remove(pendingPath, ec);
-            fs::remove(pendingSigPath, ec);
-            continue;
-        }
-
-        // Verify ML-DSA-65 signature before applying.
-        {
-            // Read both files into memory for in-memory verification.
-            std::vector<std::uint8_t> binData, sigData;
-            auto readVec = [](const std::string &path, std::vector<std::uint8_t> &out) -> bool {
-                FILE *f = std::fopen(path.c_str(), "rb");
-                if (!f) return false;
-                std::fseek(f, 0, SEEK_END);
-                long sz = std::ftell(f); std::rewind(f);
-                if (sz <= 0) { std::fclose(f); return false; }
-                out.resize(static_cast<std::size_t>(sz));
-                bool ok = std::fread(out.data(), 1, out.size(), f) == out.size();
-                std::fclose(f);
-                return ok;
-            };
-
-            if (!readVec(pendingPath, binData) || !readVec(pendingSigPath, sigData))
-            {
-                std::cerr << "ntm-client: updater: cannot read pending files for verification\n";
-                fs::remove(pendingPath, ec);
-                fs::remove(pendingSigPath, ec);
-                continue;
-            }
-
-            std::string sigVerErr;
-            if (!ntm::signing::verifyClientSignatureBytes(binData, sigData, sigVerErr))
-            {
-                std::cerr << "ntm-client: updater: ML-DSA-65 verification FAILED — "
-                             "discarding update (" << sigVerErr << ")\n";
-                fs::remove(pendingPath, ec);
-                fs::remove(pendingSigPath, ec);
-                continue;
-            }
-            std::cerr << "ntm-client: updater: ML-DSA-65 signature verified OK\n";
-        }
-
-        // Apply.
-#ifdef _WIN32
-        if (!applyUpdateWindows(dir, pendingPath, pendingSigPath))
-        {
-            std::cerr << "ntm-client: updater: failed to apply update\n";
-            fs::remove(pendingPath, ec);
-            continue;
-        }
-
-        // Smoke-test the new binary before committing to the restart.
-        // Runs --version; verifies the sig is intact and the exe is launchable.
-        const std::string targetExe = dir + "/ntm-client.exe";
-        if (!smokeTestNewBinary(targetExe))
-        {
-            std::cerr << "ntm-client: updater: smoke test failed; rolling back to previous binary\n";
-            const std::wstring wTarget(targetExe.begin(), targetExe.end());
-            const std::wstring wOldExe((dir + "/ntm-client.exe.old").begin(),
-                                       (dir + "/ntm-client.exe.old").end());
-            MoveFileExW(wOldExe.c_str(), wTarget.c_str(),
-                        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
-            fs::remove(pendingPath, ec);
-            continue;
-        }
-
-#ifdef NTM_REQUIRE_AUTHENTICODE
-        {
-            std::wstring wexe(targetExe.begin(), targetExe.end());
-            if (!verifyAuthenticode(wexe))
-            {
-                std::cerr << "ntm-client: updater: Authenticode verification failed; rolling back\n";
-                const std::wstring wTarget(targetExe.begin(), targetExe.end());
-                const std::wstring wOldExe((dir + "/ntm-client.exe.old").begin(),
-                                           (dir + "/ntm-client.exe.old").end());
-                MoveFileExW(wOldExe.c_str(), wTarget.c_str(),
-                            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
-                fs::remove(pendingPath, ec);
-                continue;
-            }
-        }
-#endif  // NTM_REQUIRE_AUTHENTICODE
-
-        std::cerr << "ntm-client: updater: update applied; restarting\n";
-        // Exit so Task Scheduler / SCM restarts with new binary.
-        ExitProcess(0);
-#else
-        if (!applyUpdateLinux(dir))
-        {
-            std::cerr << "ntm-client: updater: failed to apply update\n";
-            fs::remove(pendingPath, ec);
-            continue;
-        }
-        std::cerr << "ntm-client: updater: update applied; exec-self to hot-reload\n";
-        // Exec the new binary in-place. argv[0] will show the correct path.
-        if (g_argv)
-        {
-            ::execv(selfExePath().c_str(), g_argv);
-            // execv replaces the process; only returns on failure.
-        }
-        std::cerr << "ntm-client: updater: exec-self failed; binary updated for next restart\n";
-#endif
+        doOneCheckCycle(config, UpdateTrigger::Periodic, {});
     }
 }
 

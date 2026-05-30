@@ -138,9 +138,7 @@ struct UpdateManifestEntry {
 static std::mutex g_manifestMtx;
 static std::vector<UpdateManifestEntry> g_manifest;
 
-// Per-client force-update set: 64-hex pubkeys flagged for next check.
-static std::mutex g_forceMtx;
-static std::unordered_set<std::string> g_forceUpdateClients;
+// (wire-3 era force-update flag removed — wire-4 uses C update_now C-line instead)
 
 // Builds /api/summary JSON for the demo server.
 // ---------------------------------------------------------------------------
@@ -2092,7 +2090,7 @@ async function loadClients(){
           if(latest){
             if(semverGt(latest.version,x.version||'0.0.0')){
               updCell='<span style="color:#c84">&#9650; v'+esc(latest.version)+'</span> '
-                +'<button onclick="doForceUpdate(\''+esc(x.client_id)+'\',this)" '
+                +'<button id="updbtn_'+esc(x.client_id)+'" onclick="triggerUpdate(\''+esc(x.client_id)+'\',this)" '
                 +'style="font-size:0.75em;padding:2px 8px;background:#3a1a00;color:#c84;'
                 +'border:1px solid #5a3000;border-radius:2px;cursor:pointer;font-family:monospace">Force</button>';
               rowBg='background:#1a1400';
@@ -2378,51 +2376,108 @@ function semverGt(a,b){
   return false;
 }
 
-async function doForceUpdate(clientId, btn){
+// Wire-4: triggerUpdate replaces doForceUpdate.
+// btn is the pill element; clientId is the 64-hex Ed25519 pubkey.
+// State machine: idle → sent → ack → <stage> → done/err/noop/timeout.
+const g_updPollers={};
+function updPillStyle(btn,text,color,bg,border){
+  btn.textContent=text;
+  btn.style.color=color;
+  btn.style.background=bg;
+  btn.style.borderColor=border;
+}
+function updPillIdle(btn){
+  btn.disabled=false;
+  updPillStyle(btn,'Force','#c84','#3a1a00','#5a3000');
+  btn.title='';
+}
+function updPillBusy(btn,text){
   btn.disabled=true;
-  btn.textContent='Sending…';
-  btn.style.color='#888';
-  btn.style.borderColor='#444';
-  btn.style.background='#1a1a1a';
+  updPillStyle(btn,text,'#888','#1a1a1a','#444');
+}
+function updPillOk(btn,text){
+  btn.disabled=true;
+  updPillStyle(btn,text,'#4c4','#0d1a0d','#3a5a3a');
+}
+function updPillErr(btn,text,tip){
+  btn.disabled=false;
+  updPillStyle(btn,text,'#c44','#1a0d0d','#5a2a2a');
+  btn.title=tip||'';
+}
+const kUpdStageLabel={
+  sent:'Sent…',ack:'Ack',
+  checking:'Checking…',
+  downloading_binary:'Downloading binary',
+  verifying_sha256:'Verifying SHA-256',
+  downloading_signature:'Downloading sig',
+  verifying_signature:'Verifying sig',
+  applying:'Applying…',
+  restarting:'Restarting…',
+  timeout:'✗ Timeout (10 min)'
+};
+function stopUpdPoller(clientId){
+  if(g_updPollers[clientId]){clearInterval(g_updPollers[clientId]);delete g_updPollers[clientId];}
+}
+async function pollUpdStatus(clientId,reqId,btn){
   try{
-    const r=await fetch('/api/admin/update/force',{
-      method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pubkey:clientId})
-    });
+    const r=await fetch('/api/admin/clients/'+clientId+'/update/status');
+    if(!r.ok){stopUpdPoller(clientId);updPillErr(btn,'✗ Poll error','HTTP '+r.status);return;}
+    const s=await r.json();
+    if(!s||!s.req_id||s.req_id!==reqId)return;
+    const stage=s.stage||'';
+    if(stage.startsWith('done')||stage==='done'){
+      stopUpdPoller(clientId);
+      updPillOk(btn,'✓ Updated to '+(s.new_version||'new'));
+      setTimeout(function(){updPillIdle(btn);},5000);
+    } else if(stage.startsWith('noop_')){
+      stopUpdPoller(clientId);
+      const reason=stage.slice(5);
+      if(reason==='already_current'||reason==='no_update_available'){
+        updPillOk(btn,'Already current');
+      }else{
+        updPillErr(btn,'✗ '+reason,'');
+      }
+      setTimeout(function(){updPillIdle(btn);},3000);
+    } else if(stage.startsWith('err_')){
+      stopUpdPoller(clientId);
+      const errStage=stage.slice(4);
+      updPillErr(btn,'✗ Error: '+errStage,s.error||'');
+    } else if(stage==='timeout'){
+      stopUpdPoller(clientId);
+      updPillErr(btn,'✗ Timeout (10 min)','');
+    } else {
+      const label=kUpdStageLabel[stage]||stage;
+      updPillBusy(btn,label);
+    }
+  }catch(e){
+    stopUpdPoller(clientId);
+    updPillErr(btn,'✗ Poll failed',e.message);
+  }
+}
+async function triggerUpdate(clientId,btn){
+  stopUpdPoller(clientId);
+  updPillBusy(btn,'Sending…');
+  try{
+    const r=await fetch('/api/admin/clients/'+clientId+'/update',{method:'POST'});
     if(handleAdminExpiry(r.status))return;
+    if(r.status===409){
+      updPillErr(btn,'Client offline','Client offline — try again when reconnected');
+      setTimeout(function(){updPillIdle(btn);},4000);
+      return;
+    }
     const d=await r.json();
     if(r.ok&&d.ok){
-      btn.textContent='✓ Flagged';
-      btn.style.color='#4c4';
-      btn.style.borderColor='#3a5a3a';
-      btn.style.background='#0d1a0d';
-      // Keep disabled — flag is one-shot; table refresh will restore button if still needed
+      updPillBusy(btn,'Sent…');
+      const reqId=d.req_id;
+      g_updPollers[clientId]=setInterval(function(){pollUpdStatus(clientId,reqId,btn);},1000);
     }else{
-      btn.textContent='✗ Failed';
-      btn.style.color='#c44';
-      btn.style.borderColor='#5a2a2a';
-      btn.style.background='#1a0d0d';
-      // Re-enable after 3 s so operator can retry
-      setTimeout(function(){
-        btn.disabled=false;
-        btn.textContent='Force';
-        btn.style.color='#c84';
-        btn.style.borderColor='#5a3000';
-        btn.style.background='#3a1a00';
-      },3000);
+      updPillErr(btn,'✗ Failed',d.error||'Error');
+      setTimeout(function(){updPillIdle(btn);},3000);
       document.getElementById('msg').textContent='✗ Force update failed: '+(d.error||'Error');
     }
   }catch(e){
-    btn.textContent='✗ Error';
-    btn.style.color='#c44';
-    btn.style.borderColor='#5a2a2a';
-    btn.style.background='#1a0d0d';
-    setTimeout(function(){
-      btn.disabled=false;
-      btn.textContent='Force';
-      btn.style.color='#c84';
-      btn.style.borderColor='#5a3000';
-      btn.style.background='#3a1a00';
-    },3000);
+    updPillErr(btn,'✗ Error',e.message);
+    setTimeout(function(){updPillIdle(btn);},3000);
     document.getElementById('msg').textContent='✗ Request failed: '+esc(e.message);
   }
 }
@@ -3728,18 +3783,6 @@ void registerWebHandlers(NtmHttpServer &svr,
                     }
                 }
 
-                // Check force-update flag.
-                bool force = false;
-                {
-                    std::lock_guard<std::mutex> lk(g_forceMtx);
-                    auto it = g_forceUpdateClients.find(pubkeyHex);
-                    if (it != g_forceUpdateClients.end())
-                    {
-                        force = true;
-                        g_forceUpdateClients.erase(it);
-                    }
-                }
-
                 // Find latest manifest entry for this platform.
                 UpdateManifestEntry best;
                 bool found = false;
@@ -3758,17 +3801,16 @@ void registerWebHandlers(NtmHttpServer &svr,
                     }
                 }
 
-                std::string resp = "{\"force\":";
-                resp += force ? "true" : "false";
+                std::string resp = "{";
 
-                if (!found || (!force && !version.empty() && semverCmp(best.version, version) <= 0))
+                if (!found || (!version.empty() && semverCmp(best.version, version) <= 0))
                 {
-                    resp += ",\"update_available\":false}\n";
+                    resp += "\"update_available\":false}\n";
                     res.set_content(resp, "application/json");
                     return;
                 }
 
-                resp += ",\"update_available\":true";
+                resp += "\"update_available\":true";
                 resp += ",\"version\":\"";  resp += jsonEsc(best.version);  resp += "\"";
                 resp += ",\"sha256\":\"";   resp += jsonEsc(best.sha256hex); resp += "\"";
                 resp += ",\"filename\":\""; resp += jsonEsc(best.filename);  resp += "\"";
@@ -3943,26 +3985,37 @@ void registerWebHandlers(NtmHttpServer &svr,
                 });
         }
 
-        // POST /api/admin/update/force — flag a client for forced update on next check.
-        if (adminAvailable)
+        // Wire-4 update push endpoints.
+        // POST /api/admin/clients/:client_id/update — push update_now to a connected client.
+        // GET  /api/admin/clients/:client_id/update/status — poll update progress.
+        if (adminAvailable && config.ctrl_channels && config.clients_store && config.update_registry)
         {
-            svr.Post("/api/admin/update/force",
-                [&config](const httplib::Request &req, httplib::Response &res)
+            auto validateUpdClientId = [](const httplib::Request &req,
+                                          httplib::Response &res) -> std::string
+            {
+                auto it = req.path_params.find("client_id");
+                if (it == req.path_params.end() || it->second.size() != 64 ||
+                    it->second.find_first_not_of("0123456789abcdef") != std::string::npos)
                 {
-                    const std::string pubkeyHex = jsonGetString(req.body, "pubkey");
-                    if (pubkeyHex.size() != 64)
+                    res.status = 400;
+                    res.set_content("{\"error\":\"invalid client_id\"}\n", "application/json");
+                    return {};
+                }
+                return it->second;
+            };
+
+            svr.Post("/api/admin/clients/:client_id/update",
+                [&config, validateUpdClientId](const httplib::Request &req, httplib::Response &res)
+                {
+                    const std::string clientId = validateUpdClientId(req, res);
+                    if (clientId.empty()) return;
+
+                    // Verify the client is in AllowedClientsStore.
+                    const std::string rawKey = hexToRaw32(clientId);
+                    if (rawKey.empty())
                     {
                         res.status = 400;
-                        res.set_content("{\"error\":\"pubkey must be 64 hex characters\"}\n",
-                                        "application/json");
-                        return;
-                    }
-                    // Verify the client exists in AllowedClientsStore.
-                    const std::string rawKey = hexToRaw32(pubkeyHex);
-                    if (rawKey.empty() || !config.clients_store)
-                    {
-                        res.status = 400;
-                        res.set_content("{\"error\":\"invalid pubkey\"}\n", "application/json");
+                        res.set_content("{\"error\":\"invalid client_id\"}\n", "application/json");
                         return;
                     }
                     {
@@ -3970,19 +4023,97 @@ void registerWebHandlers(NtmHttpServer &svr,
                         if (!config.clients_store->keys.count(rawKey))
                         {
                             res.status = 404;
-                            res.set_content("{\"error\":\"client not in allowed list\"}\n",
-                                            "application/json");
+                            res.set_content("{\"error\":\"client not found\"}\n", "application/json");
                             return;
                         }
                     }
+
+                    // Check client is currently connected (has a wire channel).
+                    auto ch = config.ctrl_channels->get(clientId);
+                    if (!ch)
                     {
-                        std::lock_guard<std::mutex> lk(g_forceMtx);
-                        g_forceUpdateClients.insert(pubkeyHex);
+                        res.status = 409;
+                        res.set_content("{\"error\":\"client_offline\"}\n", "application/json");
+                        return;
                     }
-                    serverLog(LogLevel::Warn,
-                              "ntm-server: force update flagged for client %.16s…",
-                              pubkeyHex.c_str());
-                    res.set_content("{\"ok\":true}\n", "application/json");
+
+                    const std::string reqId = generateReqId();
+
+                    // Seed initial status.
+                    UpdateStatus us;
+                    us.req_id      = reqId;
+                    us.stage       = "sent";
+                    us.started_at  = std::chrono::steady_clock::now();
+                    us.updated_at  = us.started_at;
+                    us.terminal    = false;
+                    config.update_registry->set(clientId, us);
+
+                    // Send C update_now.
+                    {
+                        std::lock_guard<std::mutex> lk(ch->writeMtx);
+                        ch->writeCtrlLine("C update_now " + reqId);
+                    }
+
+                    serverLog(LogLevel::Info,
+                              "ntm-server: update push dispatched to client %.16s… req=%s",
+                              clientId.c_str(), reqId.c_str());
+
+                    // Spawn 10-minute watchdog (detached; captures shared_ptrs by value).
+                    auto reg = config.update_registry;
+                    std::thread([reg, clientId, reqId]() {
+                        std::this_thread::sleep_for(std::chrono::minutes(10));
+                        UpdateStatus cur = reg->get(clientId);
+                        if (!cur.req_id.empty() && cur.req_id == reqId && !cur.terminal)
+                        {
+                            reg->applyUpdLine(clientId, reqId, "timeout", "watchdog", "", true);
+                            serverLog(LogLevel::Warn,
+                                      "ntm-server: update push timeout client=%.16s… req=%s",
+                                      clientId.c_str(), reqId.c_str());
+                        }
+                    }).detach();
+
+                    std::string body = "{\"ok\":true,\"req_id\":\"";
+                    body += jsonEsc(reqId);
+                    body += "\"}\n";
+                    res.set_content(body, "application/json");
+                });
+
+            svr.Get("/api/admin/clients/:client_id/update/status",
+                [&config, validateUpdClientId](const httplib::Request &req, httplib::Response &res)
+                {
+                    const std::string clientId = validateUpdClientId(req, res);
+                    if (clientId.empty()) return;
+
+                    const UpdateStatus s = config.update_registry->get(clientId);
+                    if (s.req_id.empty())
+                    {
+                        res.set_content("{}\n", "application/json");
+                        return;
+                    }
+
+                    const auto epochSec = [](const std::chrono::steady_clock::time_point &tp) -> long long {
+                        return std::chrono::duration_cast<std::chrono::seconds>(
+                            tp.time_since_epoch()).count();
+                    };
+
+                    std::string body = "{\"req_id\":\"";
+                    body += jsonEsc(s.req_id);
+                    body += "\",\"stage\":\"";
+                    body += jsonEsc(s.stage);
+                    body += "\",\"started_at\":";
+                    body += std::to_string(epochSec(s.started_at));
+                    body += ",\"updated_at\":";
+                    body += std::to_string(epochSec(s.updated_at));
+                    body += ",\"error\":";
+                    if (s.error.empty()) body += "null";
+                    else { body += "\""; body += jsonEsc(s.error); body += "\""; }
+                    body += ",\"new_version\":";
+                    if (s.new_version.empty()) body += "null";
+                    else { body += "\""; body += jsonEsc(s.new_version); body += "\""; }
+                    body += ",\"terminal\":";
+                    body += s.terminal ? "true" : "false";
+                    body += "}\n";
+                    res.set_content(body, "application/json");
                 });
         }
     }
