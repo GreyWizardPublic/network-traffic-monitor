@@ -215,6 +215,11 @@ int main(int argc, char *argv[])
     const char *id = identityPath.empty() ? "(none)" : identityPath.c_str();
     const char *ca = tlsCaPath.empty() ? "(none)" : tlsCaPath.c_str();
     const char *sc = tlsServerCertPath.empty() ? "(none)" : tlsServerCertPath.c_str();
+#ifdef _WIN32
+    // Service mode uses PROGRAMDATA (no user profile for NT SERVICE\ntm-client).
+    // Treat serviceMode as daemonMode for all log-dir / log-routing decisions.
+    if (serviceMode) daemonMode = true;
+#endif
 #ifndef _WIN32
     if (daemonMode)
         openlog("ntm-client", LOG_PID, LOG_DAEMON);
