@@ -4,6 +4,21 @@ project(NetworkTrafficMonitor LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Install git pre-commit hook on configure so a fresh clone self-activates.
+if(EXISTS "${CMAKE_SOURCE_DIR}/.git")
+    execute_process(
+        COMMAND git config core.hooksPath scripts/hooks
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        RESULT_VARIABLE _hooks_result
+        OUTPUT_QUIET ERROR_QUIET
+    )
+    if(_hooks_result EQUAL 0)
+        message(STATUS "git pre-commit hook active (scripts/hooks/)")
+    else()
+        message(WARNING "Could not set git core.hooksPath — version-bump hook not installed")
+    endif()
+endif()
+
 find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
 
