@@ -210,24 +210,51 @@ info "Auth proof ready (${#AUTH_PROOF_B64} b64 chars)"
 # ---------------------------------------------------------------------------
 # Step 3: Push binary + signature + auth proof to server
 # ---------------------------------------------------------------------------
+# cpp-httplib 0.46.0 (upgraded in security PR 7) separates multipart data:
+# text fields (no filename in Content-Disposition) → req.form.fields
+# file uploads (with filename)                     → req.form.files
+# The server's getField() helper only searches req.form.files, so text fields
+# sent via plain -F "key=value" are invisible to it.  Work-around: write each
+# text field to a temp file and upload it via @path;filename=key so that
+# cpp-httplib routes it into req.form.files where the server looks.
+# HARMONIZE-LINUX: remove this workaround once the Linux Agent fixes
+# web_dashboard.cpp getField() to also search req.form.fields (see handoff).
+PLATFORM_FFILE=$(mktemp /tmp/ntm_push_platform.XXXXXX)
+VERSION_FFILE=$(mktemp /tmp/ntm_push_version.XXXXXX)
+NONCE_FFILE=$(mktemp /tmp/ntm_push_nonce.XXXXXX)
+AUTH_PROOF_FFILE=$(mktemp /tmp/ntm_push_authproof.XXXXXX)
+trap 'rm -f "$AUTH_MSG_FILE" "$AUTH_PROOF_FILE" "$PLATFORM_FFILE" "$VERSION_FFILE" "$NONCE_FFILE" "$AUTH_PROOF_FFILE"' EXIT
+printf '%s' "$PLATFORM"      > "$PLATFORM_FFILE"
+printf '%s' "$VERSION"       > "$VERSION_FFILE"
+printf '%s' "$NONCE"         > "$NONCE_FFILE"
+printf '%s' "$AUTH_PROOF_B64" > "$AUTH_PROOF_FFILE"
+
 # On Windows/MSYS2, MinGW curl misparses POSIX paths (/c/Users/...) when a
-# ;type= suffix is appended to -F @file fields (curl error 26). Converting to
-# Windows mixed paths (C:/Users/...) via cygpath -m avoids the issue.
-# On Linux, cygpath is absent and BINARY_FOR_CURL == BINARY.
+# ;type= or ;filename= suffix is appended to -F @file fields (curl error 26).
+# Converting to Windows mixed paths (C:/Users/...) via cygpath -m avoids this.
+# On Linux, cygpath is absent and all *_FOR_CURL variables equal the original.
 if command -v cygpath >/dev/null 2>&1; then
     BINARY_FOR_CURL=$(cygpath -m "$BINARY")
     SIG_FOR_CURL=$(cygpath -m "$SIG_FILE")
+    PLATFORM_FOR_CURL=$(cygpath -m "$PLATFORM_FFILE")
+    VERSION_FOR_CURL=$(cygpath -m "$VERSION_FFILE")
+    NONCE_FOR_CURL=$(cygpath -m "$NONCE_FFILE")
+    AUTH_PROOF_FOR_CURL=$(cygpath -m "$AUTH_PROOF_FFILE")
 else
     BINARY_FOR_CURL="$BINARY"
     SIG_FOR_CURL="$SIG_FILE"
+    PLATFORM_FOR_CURL="$PLATFORM_FFILE"
+    VERSION_FOR_CURL="$VERSION_FFILE"
+    NONCE_FOR_CURL="$NONCE_FFILE"
+    AUTH_PROOF_FOR_CURL="$AUTH_PROOF_FFILE"
 fi
 
 info "Uploading binary and signature to $BASE_URL/admin/client/push ..."
 PUSH_RESP=$(curl --silent --show-error --fail \
-    -F "platform=$PLATFORM" \
-    -F "version=$VERSION" \
-    -F "nonce=$NONCE" \
-    -F "auth_proof=$AUTH_PROOF_B64" \
+    -F "platform=@$PLATFORM_FOR_CURL;filename=platform" \
+    -F "version=@$VERSION_FOR_CURL;filename=version" \
+    -F "nonce=@$NONCE_FOR_CURL;filename=nonce" \
+    -F "auth_proof=@$AUTH_PROOF_FOR_CURL;filename=auth_proof" \
     -F "binary=@$BINARY_FOR_CURL;type=application/octet-stream" \
     -F "signature=@$SIG_FOR_CURL;type=application/octet-stream" \
     "$BASE_URL/admin/client/push") \
