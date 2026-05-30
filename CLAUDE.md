@@ -57,6 +57,25 @@ and **cross-agent work** (see [Cross-agent handoff](#cross-agent-handoff)).
    files directly. If a cross-domain change is needed, use the PR handoff
    workflow (see [Cross-agent handoff](#cross-agent-handoff) below).
 
+   **Shared project files — `CLAUDE.md` and `.gitignore`**
+
+   These two files are project-wide and are not owned exclusively by any agent.
+   Each agent **may edit them directly on their own prefixed branch** for content
+   that falls squarely within their domain — no cross-agent handoff is needed:
+
+   | Agent | May add/update in `CLAUDE.md` | May add to `.gitignore` |
+   |---|---|---|
+   | Arch Linux Agent | Linux/server sections | Linux build outputs, server artefacts |
+   | Swift Agent | iOS/macOS sections | iOS build outputs, signing material (`.p8`, `.p12`, `*.mobileprovision`, etc.) |
+   | Windows Agent | Windows sections | Windows build outputs, Windows-specific artefacts |
+
+   Open a normal `<prefix>/<description>` PR and merge independently, exactly as
+   you would for any other in-domain change.
+
+   A cross-agent handoff **is** still required when an agent needs to correct or
+   extend *another agent's existing* section (e.g., the Linux Agent fixing a
+   factual error in the iOS cert reference).
+
 3. **Open a PR** targeting `main` when the work is ready. PR description must
    include build instructions and a test checklist appropriate to the domain.
 
