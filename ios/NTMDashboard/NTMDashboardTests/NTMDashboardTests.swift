@@ -676,9 +676,9 @@ final class CertificatePinnerTests: XCTestCase {
 
 final class ProtocolVersionTests: XCTestCase {
 
-    // api-protocol.md § Change log: current API version is 10
-    func testSupportedApiVersionIsElevenPerSpec() {
-        XCTAssertEqual(NTMProtocol.supportedApiVersion, 11)
+    // api-protocol.md § Change log: current API version is 12
+    func testSupportedApiVersionIsTwelvePerSpec() {
+        XCTAssertEqual(NTMProtocol.supportedApiVersion, 12)
     }
 
     // api-protocol.md § 3: api_version 1 has no /auth/* endpoints
@@ -686,10 +686,10 @@ final class ProtocolVersionTests: XCTestCase {
         XCTAssertEqual(NTMProtocol.minCompatibleApiVersion, 2)
     }
 
-    // wire-protocol.md: kWireProtoVersion = 2
-    func testSupportedWireProtoVersionIsTwo() {
-        XCTAssertEqual(NTMProtocol.supportedWireProtoVersion, 2,
-                       "wire-protocol.md states kWireProtoVersion = 2")
+    // wire-protocol.md: kWireProtoVersion = 3
+    func testSupportedWireProtoVersionIsThree() {
+        XCTAssertEqual(NTMProtocol.supportedWireProtoVersion, 3,
+                       "wire-protocol.md states kWireProtoVersion = 3")
     }
 }
 
@@ -836,7 +836,7 @@ final class DashboardViewModelApiVersionTests: XCTestCase {
     }
 
     func testApiVersionAboveSupportedIsNonBlockingWarning() async {
-        let vm = DashboardViewModel(fetcher: MockSummaryFetcher(result: .success(makeSnap(api: 12))))
+        let vm = DashboardViewModel(fetcher: MockSummaryFetcher(result: .success(makeSnap(api: 13))))
         await vm.refresh()
         XCTAssertFalse(vm.apiVersionBlocking,  "newer server: warn but don't block")
         XCTAssertNotNil(vm.apiVersionWarning,  "newer server: warning must be set")
