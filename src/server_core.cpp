@@ -2230,7 +2230,8 @@ static void httpWebThread(int connFd,
         // Wrap the pre-accepted SSL in an httplib SSLSocketStream so the HTTP
         // parser can read/write without knowing about our multiplexed accept loop.
         // Timeouts: 30s read / 30s write — same as httplib's default for HTTPS.
-        httplib::detail::SSLSocketStream strm(connFd, ssl, 30, 0, 30, 0);
+        httplib::detail::SSLSocketStream strm(connFd,
+            static_cast<httplib::tls::session_t>(ssl), 30, 0, 30, 0);
 
         std::string localAddr;
         int localPort = 0;

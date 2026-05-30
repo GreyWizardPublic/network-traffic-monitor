@@ -3889,8 +3889,8 @@ void registerWebHandlers(NtmHttpServer &svr,
 
                 // Helper: extract multipart field by name
                 auto getField = [&](const std::string &name) -> std::string {
-                    auto it = req.files.find(name);
-                    return (it == req.files.end()) ? "" : it->second.content;
+                    auto it = req.form.files.find(name);
+                    return (it == req.form.files.end()) ? "" : it->second.content;
                 };
 
                 const std::string versionStr  = getField("version");
@@ -4088,8 +4088,8 @@ void registerWebHandlers(NtmHttpServer &svr,
                 }
 
                 auto getField = [&](const std::string &name) -> std::string {
-                    auto it = req.files.find(name);
-                    return (it == req.files.end()) ? "" : it->second.content;
+                    auto it = req.form.files.find(name);
+                    return (it == req.form.files.end()) ? "" : it->second.content;
                 };
 
                 const std::string platformStr   = getField("platform");
