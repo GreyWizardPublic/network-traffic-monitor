@@ -1912,15 +1912,15 @@ button{font-family:monospace;font-size:0.82em;padding:5px 14px;border-radius:3px
     <button onclick="loadLogs()" style="font-family:monospace;font-size:0.78em;padding:3px 10px;border-radius:3px;border:1px solid #3a5a8a;background:#0d1828;color:#7af;cursor:pointer">&#8635; Refresh</button>
   </div>
   <div id="logs_offline_msg" style="display:none;color:#a85;font-size:0.82em;padding:6px 0">Client offline &mdash; log management unavailable.</div>
-  <div id="logs_level_row" style="display:none;display:flex;align-items:center;gap:10px;margin-bottom:12px">
+  <div id="logs_level_row" style="display:none;align-items:center;gap:10px;margin-bottom:12px">
     <span style="font-size:0.82em;color:#aaa">Log level:</span>
     <select id="logs_level_sel" style="font-family:monospace;font-size:0.82em;padding:4px 8px;background:#0e0e14;color:#ccc;border:1px solid #3a3a5a;border-radius:3px">
       <option value="Info">Info</option>
       <option value="Warn">Warn</option>
       <option value="Err">Err</option>
     </select>
-    <button onclick="applyLogLevel()" style="font-family:monospace;font-size:0.82em;padding:4px 12px;border-radius:3px;border:1px solid #3a5a3a;background:#0d1808;color:#8c8;cursor:pointer">Apply</button>
-    <span id="logs_level_msg" style="font-size:0.78em;color:#aaa"></span>
+    <button id="logs_apply_btn" onclick="applyLogLevel()" style="font-family:monospace;font-size:0.82em;padding:4px 12px;border-radius:3px;border:1px solid #3a5a3a;background:#0d1808;color:#8c8;cursor:pointer">Apply</button>
+    <span id="logs_level_msg" style="font-size:0.82em;font-weight:bold;transition:opacity 0.4s"></span>
   </div>
   <div id="logs_content" style="display:none">
     <div style="font-size:0.78em;color:#666;margin-bottom:6px">Log files (3 days retained, 50 MB max each):</div>
@@ -2307,13 +2307,36 @@ async function loadLogs(){
   }
 }
 
+let _logLevelFadeTimer=null;
+function showLogLevelMsg(text,isErr){
+  const msg=document.getElementById('logs_level_msg');
+  const btn=document.getElementById('logs_apply_btn');
+  if(_logLevelFadeTimer){clearTimeout(_logLevelFadeTimer);_logLevelFadeTimer=null;}
+  msg.style.opacity='1';
+  msg.style.color=isErr?'#e66':'#6d6';
+  msg.textContent=text;
+  btn.disabled=false;
+  btn.style.opacity='1';
+  if(!isErr){
+    _logLevelFadeTimer=setTimeout(function(){
+      msg.style.opacity='0';
+      _logLevelFadeTimer=setTimeout(function(){msg.textContent='';},400);
+    },3000);
+  }
+}
 async function applyLogLevel(){
   if(!selectedClient)return;
   const hexId=logsHexId();
   if(!hexId)return;
   const level=document.getElementById('logs_level_sel').value;
+  const btn=document.getElementById('logs_apply_btn');
   const msg=document.getElementById('logs_level_msg');
+  if(_logLevelFadeTimer){clearTimeout(_logLevelFadeTimer);_logLevelFadeTimer=null;}
+  msg.style.opacity='1';
+  msg.style.color='#aaa';
   msg.textContent='Applying…';
+  btn.disabled=true;
+  btn.style.opacity='0.5';
   document.getElementById('logs_err').textContent='';
   try{
     const r=await fetch('/api/admin/clients/'+encodeURIComponent(hexId)+'/loglevel',{
@@ -2321,12 +2344,12 @@ async function applyLogLevel(){
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({level})
     });
-    if(handleAdminExpiry(r.status)){msg.textContent='';return;}
+    if(handleAdminExpiry(r.status)){showLogLevelMsg('',false);return;}
     const d=await r.json();
-    if(r.ok&&d.ok){msg.textContent='✓ Level set to '+esc(d.level);}
-    else{msg.textContent='';document.getElementById('logs_err').textContent='✗ '+(d.error||'Unknown error');}
+    if(r.ok&&d.ok){showLogLevelMsg('✓ Level set to '+esc(d.level),false);}
+    else{showLogLevelMsg('✗ '+(d.error||'Unknown error'),true);}
   }catch(e){
-    msg.textContent='';document.getElementById('logs_err').textContent='✗ Request failed: '+esc(e.message);
+    showLogLevelMsg('✗ Request failed: '+esc(e.message),true);
   }
 }
 
