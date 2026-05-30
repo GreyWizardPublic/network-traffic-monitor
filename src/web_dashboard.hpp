@@ -88,6 +88,10 @@ struct WebConfig
     // Stored as shared_ptr<void> to avoid including ip_range_resolver.hpp here.
     // Actually: ntm::IPDataUpdater*  (non-owning; outlived by the server loop).
     std::shared_ptr<void> ip_data_updater;
+
+    // Wire-protocol v3 control channels: maps clientId → per-client channel used
+    // by the log-management admin endpoints.  Null = log management disabled.
+    std::shared_ptr<ClientControlChannels> ctrl_channels;
 };
 
 // Thin httplib::Server subclass that makes process_request() publicly accessible.

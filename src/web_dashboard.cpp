@@ -16,7 +16,9 @@
 #include <atomic>
 #include <cerrno>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <deque>
 #include <filesystem>
@@ -98,6 +100,17 @@ static std::string generateAdminProofToken()
     tok.reserve(7 + 32);
     for (auto b : buf) { char h[3]; std::snprintf(h, sizeof(h), "%02x", b); tok += h; }
     return tok;
+}
+
+// Generate a short random request-id for C-line log management commands.
+static std::string generateReqId()
+{
+    unsigned char buf[8];
+    RAND_bytes(buf, sizeof(buf));
+    char hex[17]{};
+    for (int i = 0; i < 8; ++i)
+        std::snprintf(hex + i * 2, 3, "%02x", buf[i]);
+    return std::string(hex, 16);
 }
 
 static bool checkAdminProofToken(const std::string &token)
@@ -1894,6 +1907,37 @@ button{font-family:monospace;font-size:0.82em;padding:5px 14px;border-radius:3px
   <div class="err-msg" id="purge_error" style="margin-top:8px"></div>
 </div>
 
+<!-- ── Logs panel (shown when a client is selected) ─────────────────────── -->
+<div id="logs_panel" style="display:none;margin-top:14px" class="panel">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <span style="font-size:0.85em;color:#7af">Logs &mdash; <span id="logs_client_name" style="color:#ccc;font-size:0.95em"></span></span>
+    <button onclick="loadLogs()" style="font-family:monospace;font-size:0.78em;padding:3px 10px;border-radius:3px;border:1px solid #3a5a8a;background:#0d1828;color:#7af;cursor:pointer">&#8635; Refresh</button>
+  </div>
+  <div id="logs_offline_msg" style="display:none;color:#a85;font-size:0.82em;padding:6px 0">Client offline &mdash; log management unavailable.</div>
+  <div id="logs_content" style="display:none">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+      <span style="font-size:0.82em;color:#aaa">Log level:</span>
+      <select id="logs_level_sel" style="font-family:monospace;font-size:0.82em;padding:4px 8px;background:#0e0e14;color:#ccc;border:1px solid #3a3a5a;border-radius:3px">
+        <option value="Info">Info</option>
+        <option value="Warn">Warn</option>
+        <option value="Err">Err</option>
+      </select>
+      <button onclick="applyLogLevel()" style="font-family:monospace;font-size:0.82em;padding:4px 12px;border-radius:3px;border:1px solid #3a5a3a;background:#0d1808;color:#8c8;cursor:pointer">Apply</button>
+      <span id="logs_level_msg" style="font-size:0.78em;color:#aaa"></span>
+    </div>
+    <div style="font-size:0.78em;color:#666;margin-bottom:6px">Log files (3 days retained, 50 MB max each):</div>
+    <table id="logs_file_tbl" style="width:100%">
+      <thead><tr><th style="text-align:left">File</th><th style="text-align:right">Size</th><th style="text-align:right">Actions</th></tr></thead>
+      <tbody id="logs_file_body"><tr><td colspan="3" style="color:#555">Loading&#8230;</td></tr></tbody>
+    </table>
+    <div style="margin-top:10px;display:flex;gap:10px">
+      <button onclick="doDeleteAllLogs()" style="font-family:monospace;font-size:0.82em;padding:4px 12px;border-radius:3px;border:1px solid #5a3a3a;background:#180d0d;color:#c88;cursor:pointer">Delete ALL Files</button>
+    </div>
+  </div>
+  <div id="logs_no_logging" style="display:none;color:#666;font-size:0.82em;padding:4px 0">File logging not active on this client.</div>
+  <div class="err-msg" id="logs_err" style="margin-top:8px"></div>
+</div>
+
 <div id="result_panel" style="display:none" class="ok-panel">
   <div class="ok-title">&#10003;&nbsp; <span id="result_client"></span> &mdash; data purged successfully.</div>
   <div class="ok-sub">Data will accumulate fresh from the next client connection.</div>
@@ -2150,12 +2194,17 @@ function selectClient(name){
   document.getElementById('purge_error').textContent='';
   document.getElementById('purge_btn').disabled=false;
   document.getElementById('purge_btn').textContent='Purge Client Data';
+  // Show logs panel and load log state for this client.
+  document.getElementById('logs_panel').style.display='';
+  document.getElementById('logs_client_name').textContent=name;
+  loadLogs();
 }
 
 function cancelSelect(){
   selectedClient=null;
   document.querySelectorAll('#client_body tr').forEach(tr=>tr.className='selectable');
   document.getElementById('confirm_panel').style.display='none';
+  document.getElementById('logs_panel').style.display='none';
 }
 
 async function doPurge(){
@@ -2190,8 +2239,113 @@ function resetView(){
   selectedClient=null;
   document.getElementById('result_panel').style.display='none';
   document.getElementById('confirm_panel').style.display='none';
+  document.getElementById('logs_panel').style.display='none';
   document.querySelectorAll('#client_body tr').forEach(tr=>tr.className='selectable');
   loadClients();
+}
+
+// ── Log management ───────────────────────────────────────────────────────
+function fmtFileSize(b){
+  b=parseInt(b)||0;
+  if(b<1024)return b+' B';
+  if(b<1048576)return(b/1024).toFixed(1)+' KB';
+  if(b<1073741824)return(b/1048576).toFixed(1)+' MB';
+  return(b/1073741824).toFixed(2)+' GB';
+}
+
+async function loadLogs(){
+  if(!selectedClient)return;
+  document.getElementById('logs_err').textContent='';
+  document.getElementById('logs_offline_msg').style.display='none';
+  document.getElementById('logs_content').style.display='none';
+  document.getElementById('logs_no_logging').style.display='none';
+  document.getElementById('logs_file_body').innerHTML='<tr><td colspan="3" style="color:#555">Loading&#8230;</td></tr>';
+  try{
+    const r=await fetch('/api/admin/clients/'+encodeURIComponent(selectedClient)+'/logs');
+    if(handleAdminExpiry(r.status))return;
+    const d=await r.json();
+    if(!r.ok){document.getElementById('logs_err').textContent='✗ '+(d.error||'Unknown error');return;}
+    if(!d.connected){
+      document.getElementById('logs_offline_msg').style.display='';
+      return;
+    }
+    if(!d.file_logging){
+      document.getElementById('logs_no_logging').style.display='';
+      return;
+    }
+    // Set level dropdown to current level.
+    const sel=document.getElementById('logs_level_sel');
+    if(d.level&&['Info','Warn','Err'].includes(d.level))sel.value=d.level;
+    // Render file list.
+    const tbody=document.getElementById('logs_file_body');
+    if(!d.files||d.files.length===0){
+      tbody.innerHTML='<tr><td colspan="3" style="color:#555">No log files on disk.</td></tr>';
+    }else{
+      tbody.innerHTML=d.files.map(f=>'<tr>'
+        +'<td style="font-family:monospace;font-size:0.82em">'+esc(f.name)+'</td>'
+        +'<td style="text-align:right;font-size:0.82em;color:#aaa">'+fmtFileSize(f.size)+'</td>'
+        +'<td style="text-align:right;white-space:nowrap">'
+        +'<a href="/api/admin/clients/'+encodeURIComponent(selectedClient)+'/logs/'+encodeURIComponent(f.name)+'" download="'+esc(f.name)+'" style="font-family:monospace;font-size:0.78em;padding:2px 8px;border-radius:2px;border:1px solid #3a5a8a;background:#0d1828;color:#7af;text-decoration:none;margin-right:4px">Download</a>'
+        +'<button onclick="doDeleteLog(\''+esc(f.name)+'\')" style="font-family:monospace;font-size:0.78em;padding:2px 8px;border-radius:2px;border:1px solid #5a3a3a;background:#180d0d;color:#c88;cursor:pointer">Del</button>'
+        +'</td></tr>').join('');
+    }
+    document.getElementById('logs_content').style.display='';
+  }catch(e){
+    document.getElementById('logs_err').textContent='✗ Request failed: '+esc(e.message);
+  }
+}
+
+async function applyLogLevel(){
+  if(!selectedClient)return;
+  const level=document.getElementById('logs_level_sel').value;
+  const msg=document.getElementById('logs_level_msg');
+  msg.textContent='Applying…';
+  document.getElementById('logs_err').textContent='';
+  try{
+    const r=await fetch('/api/admin/clients/'+encodeURIComponent(selectedClient)+'/loglevel',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({level})
+    });
+    if(handleAdminExpiry(r.status)){msg.textContent='';return;}
+    const d=await r.json();
+    if(r.ok&&d.ok){msg.textContent='✓ Level set to '+esc(d.level);}
+    else{msg.textContent='';document.getElementById('logs_err').textContent='✗ '+(d.error||'Unknown error');}
+  }catch(e){
+    msg.textContent='';document.getElementById('logs_err').textContent='✗ Request failed: '+esc(e.message);
+  }
+}
+
+async function doDeleteLog(filename){
+  if(!selectedClient)return;
+  if(!confirm('Delete log file "'+filename+'" from client '+selectedClient+'?'))return;
+  document.getElementById('logs_err').textContent='';
+  try{
+    const r=await fetch('/api/admin/clients/'+encodeURIComponent(selectedClient)+'/logs/'+encodeURIComponent(filename),{method:'DELETE'});
+    if(handleAdminExpiry(r.status))return;
+    const d=await r.json();
+    if(r.ok&&d.ok){loadLogs();}
+    else{document.getElementById('logs_err').textContent='✗ '+(d.error||'Unknown error');}
+  }catch(e){
+    document.getElementById('logs_err').textContent='✗ Request failed: '+esc(e.message);
+  }
+}
+
+async function doDeleteAllLogs(){
+  if(!selectedClient)return;
+  if(!confirm('Delete ALL log files from client '+selectedClient+'?\n\nThis cannot be undone.'))return;
+  const confirmId=prompt('Type the client ID to confirm deletion:');
+  if(confirmId!==selectedClient){alert('ID mismatch — cancelling.');return;}
+  document.getElementById('logs_err').textContent='';
+  try{
+    const r=await fetch('/api/admin/clients/'+encodeURIComponent(selectedClient)+'/logs',{method:'DELETE'});
+    if(handleAdminExpiry(r.status))return;
+    const d=await r.json();
+    if(r.ok&&d.ok){loadLogs();}
+    else{document.getElementById('logs_err').textContent='✗ '+(d.error||'Unknown error');}
+  }catch(e){
+    document.getElementById('logs_err').textContent='✗ Request failed: '+esc(e.message);
+  }
 }
 
 function updateDemoStatus(on){
@@ -4272,6 +4426,406 @@ void registerWebHandlers(NtmHttpServer &svr,
                     "{\"ok\":true,\"platform\":\"" + jsonEsc(platformStr)
                     + "\",\"version\":\"" + jsonEsc(versionStr) + "\"}\n",
                     "application/json");
+            });
+    }
+
+    // ── Remote Log Management endpoints (wire-proto v3) ─────────────────────────
+    // All 5 endpoints require adminAvailable + ctrl_channels + clients_store.
+    // Auth is handled by the pre-routing handler (WebAuthn + ntm_admin cookie).
+    if (adminAvailable && config.ctrl_channels && config.clients_store)
+    {
+        // Helper: validate client_id path param (64 lowercase hex chars).
+        // Returns the id if valid, or "" if invalid (already set 400 on res).
+        auto validateClientId = [](const httplib::Request &req, httplib::Response &res) -> std::string
+        {
+            auto it = req.path_params.find("client_id");
+            if (it == req.path_params.end() || it->second.size() != 64 ||
+                it->second.find_first_not_of("0123456789abcdef") != std::string::npos)
+            {
+                res.status = 400;
+                res.set_content("{\"error\":\"invalid client_id\"}\n", "application/json");
+                return {};
+            }
+            return it->second;
+        };
+
+        // Helper: send a C-line and wait for all L-line responses (timeout_sec).
+        auto sendAndWait = [&config](const std::string &clientId,
+                                     const std::string &cLine,
+                                     int timeoutSec) -> std::shared_ptr<LogCmdResponse>
+        {
+            auto ch = config.ctrl_channels->get(clientId);
+            if (!ch) return nullptr;
+            const std::string reqId = generateReqId();
+            auto resp = ch->registerPending(reqId);
+            {
+                std::lock_guard<std::mutex> lk(ch->writeMtx);
+                ch->writeCtrlLine(cLine + " " + reqId);
+            }
+            std::unique_lock<std::mutex> lk(resp->mtx);
+            resp->cv.wait_for(lk, std::chrono::seconds(timeoutSec),
+                              [&resp] { return resp->done; });
+            ch->removePending(reqId);
+            return resp;
+        };
+
+        // GET /api/admin/clients/:client_id/logs — list log files + current level.
+        svr.Get("/api/admin/clients/:client_id/logs",
+            [&config, validateClientId, sendAndWait](
+                const httplib::Request &req, httplib::Response &res)
+            {
+                const std::string clientId = validateClientId(req, res);
+                if (clientId.empty()) return;
+
+                bool connected = false;
+                {
+                    std::lock_guard<std::mutex> lk(config.registry->mtx);
+                    connected = config.registry->clientHealth.count(clientId) > 0;
+                }
+                if (!connected)
+                {
+                    res.set_content("{\"connected\":false,\"file_logging\":false,"
+                                    "\"level\":null,\"files\":[]}\n", "application/json");
+                    return;
+                }
+
+                auto resp = sendAndWait(clientId, "C log_list", 5);
+                if (!resp || !resp->done)
+                {
+                    res.status = 504;
+                    res.set_content("{\"error\":\"client did not respond (timeout)\"}\n",
+                                    "application/json");
+                    return;
+                }
+                if (resp->isError)
+                {
+                    const bool unavail = (!resp->lines.empty() &&
+                        resp->lines[0].find("unavailable") != std::string::npos);
+                    if (unavail)
+                    {
+                        res.set_content("{\"connected\":true,\"file_logging\":false,"
+                                        "\"level\":null,\"files\":[]}\n", "application/json");
+                        return;
+                    }
+                    res.status = 500;
+                    res.set_content("{\"error\":\"client reported error\"}\n", "application/json");
+                    return;
+                }
+
+                // Determine current log level from the health stats.
+                std::string level = "Info";
+                {
+                    std::lock_guard<std::mutex> lk(config.registry->mtx);
+                    auto it = config.registry->clientHealth.find(clientId);
+                    if (it != config.registry->clientHealth.end())
+                        level = it->second.cfgLogLevel.empty() ? "Info" : it->second.cfgLogLevel;
+                }
+
+                // Parse L list … file <name> <size> <mtime> lines.
+                std::string j = "{\"connected\":true,\"file_logging\":true,\"level\":\""
+                              + jsonEsc(level) + "\",\"files\":[";
+                bool first = true;
+                for (const auto &line : resp->lines)
+                {
+                    // Format: "list <req_id> file <name> <size> <mtime>"
+                    if (line.rfind("list ", 0) != 0) continue;
+                    const std::size_t filePos = line.find(" file ");
+                    if (filePos == std::string::npos) continue;
+                    const std::string rest = line.substr(filePos + 6);
+                    // rest = "<name> <size> <mtime>"
+                    const std::size_t sp1 = rest.find(' ');
+                    if (sp1 == std::string::npos) continue;
+                    const std::string name = rest.substr(0, sp1);
+                    const std::string rem  = rest.substr(sp1 + 1);
+                    const std::size_t sp2  = rem.find(' ');
+                    const std::string size = (sp2 == std::string::npos) ? rem : rem.substr(0, sp2);
+                    const std::string mtime = (sp2 == std::string::npos) ? "" : rem.substr(sp2 + 1);
+                    if (!first) j += ',';
+                    j += "{\"name\":\"" + jsonEsc(name)
+                       + "\",\"size\":" + jsonEsc(size)
+                       + ",\"mtime\":\"" + jsonEsc(mtime) + "\"}";
+                    first = false;
+                }
+                j += "]}\n";
+                res.set_content(j, "application/json");
+            });
+
+        // POST /api/admin/clients/:client_id/loglevel — change log level.
+        svr.Post("/api/admin/clients/:client_id/loglevel",
+            [&config, validateClientId](const httplib::Request &req, httplib::Response &res)
+            {
+                const std::string clientId = validateClientId(req, res);
+                if (clientId.empty()) return;
+
+                // Parse body: {"level":"Info"|"Warn"|"Err"}
+                std::string level;
+                {
+                    const std::string &body = req.body;
+                    const std::size_t lp = body.find("\"level\"");
+                    if (lp != std::string::npos)
+                    {
+                        const std::size_t colon = body.find(':', lp + 7);
+                        if (colon != std::string::npos)
+                        {
+                            const std::size_t q1 = body.find('"', colon + 1);
+                            const std::size_t q2 = (q1 != std::string::npos)
+                                ? body.find('"', q1 + 1) : std::string::npos;
+                            if (q1 != std::string::npos && q2 != std::string::npos)
+                                level = body.substr(q1 + 1, q2 - q1 - 1);
+                        }
+                    }
+                }
+                if (level != "Info" && level != "Warn" && level != "Err")
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"level must be Info, Warn, or Err\"}\n",
+                                    "application/json");
+                    return;
+                }
+
+                auto ch = config.ctrl_channels->get(clientId);
+                if (!ch)
+                {
+                    res.status = 503;
+                    res.set_content("{\"error\":\"client not connected\"}\n", "application/json");
+                    return;
+                }
+
+                // Send C set_loglevel and wait for L ack.
+                bool gotAck = false;
+                {
+                    std::lock_guard<std::mutex> lk(ch->writeMtx);
+                    ch->writeCtrlLine("C set_loglevel " + level);
+                }
+                {
+                    std::unique_lock<std::mutex> lk(ch->ackMtx);
+                    gotAck = ch->ackCv.wait_for(lk, std::chrono::seconds(5),
+                                                [&ch] { return ch->gotAck; });
+                    ch->gotAck = false;
+                }
+                if (!gotAck)
+                {
+                    res.status = 504;
+                    res.set_content("{\"error\":\"client did not acknowledge (timeout)\"}\n",
+                                    "application/json");
+                    return;
+                }
+                res.set_content("{\"ok\":true,\"level\":\"" + jsonEsc(level) + "\"}\n",
+                                "application/json");
+            });
+
+        // GET /api/admin/clients/:client_id/logs/:filename — download a log file.
+        svr.Get("/api/admin/clients/:client_id/logs/:filename",
+            [&config, validateClientId](const httplib::Request &req, httplib::Response &res)
+            {
+                const std::string clientId = validateClientId(req, res);
+                if (clientId.empty()) return;
+
+                auto fnIt = req.path_params.find("filename");
+                if (fnIt == req.path_params.end() || fnIt->second.empty() ||
+                    fnIt->second.find('/') != std::string::npos ||
+                    fnIt->second.find("..") != std::string::npos)
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"invalid filename\"}\n", "application/json");
+                    return;
+                }
+                const std::string filename = fnIt->second;
+
+                auto ch = config.ctrl_channels->get(clientId);
+                if (!ch)
+                {
+                    res.status = 503;
+                    res.set_content("{\"error\":\"client not connected\"}\n", "application/json");
+                    return;
+                }
+
+                const std::string reqId = generateReqId();
+                auto resp = ch->registerPending(reqId);
+                {
+                    std::lock_guard<std::mutex> lk(ch->writeMtx);
+                    ch->writeCtrlLine("C log_get " + reqId + " " + filename);
+                }
+                // Wait up to 60 s for the full file transfer.
+                std::unique_lock<std::mutex> lk(resp->mtx);
+                resp->cv.wait_for(lk, std::chrono::seconds(60),
+                                  [&resp] { return resp->done; });
+                ch->removePending(reqId);
+
+                if (!resp->done)
+                {
+                    res.status = 504;
+                    res.set_content("{\"error\":\"file transfer timed out\"}\n", "application/json");
+                    return;
+                }
+                if (resp->isError)
+                {
+                    res.status = 404;
+                    res.set_content("{\"error\":\"file not found or client error\"}\n",
+                                    "application/json");
+                    return;
+                }
+
+                // Reassemble: decode base64 chunks; find total_bytes from begin line.
+                std::string fileData;
+                std::uintmax_t totalBytes = 0;
+                for (const auto &line : resp->lines)
+                {
+                    if (line.rfind("get ", 0) != 0) continue;
+                    const std::size_t sp1 = line.find(' ');         // after "get"
+                    const std::size_t sp2 = line.find(' ', sp1 + 1); // after req_id
+                    if (sp2 == std::string::npos) continue;
+                    const std::string subtype = line.substr(sp2 + 1, line.find(' ', sp2 + 1) - sp2 - 1);
+                    if (subtype == "begin")
+                    {
+                        // "get <req_id> begin <name> <total_bytes> <sha256>"
+                        const std::size_t sp3 = line.find(' ', sp2 + 1);
+                        const std::size_t sp4 = line.find(' ', sp3 + 1); // after "begin"
+                        if (sp4 == std::string::npos) continue;
+                        const std::size_t sp5 = line.find(' ', sp4 + 1); // after filename
+                        if (sp5 == std::string::npos) continue;
+                        const std::size_t sp6 = line.find(' ', sp5 + 1); // after total_bytes
+                        const std::string tbStr = line.substr(sp5 + 1, sp6 - sp5 - 1);
+                        try { totalBytes = std::stoull(tbStr); } catch (...) {}
+                        fileData.reserve(static_cast<std::size_t>(
+                            std::min(totalBytes, static_cast<std::uintmax_t>(50ULL * 1024 * 1024))));
+                    }
+                    else if (subtype == "chunk")
+                    {
+                        // "get <req_id> chunk <base64>"
+                        const std::size_t sp3 = line.find(' ', sp2 + 1);
+                        const std::size_t sp4 = line.find(' ', sp3 + 1);
+                        if (sp4 == std::string::npos) continue;
+                        const std::string b64 = line.substr(sp4 + 1);
+                        // Decode base64 → raw bytes
+                        const int rawLen = (static_cast<int>(b64.size()) / 4) * 3;
+                        std::vector<unsigned char> raw(static_cast<std::size_t>(rawLen) + 4, 0);
+                        const int actual = EVP_DecodeBlock(
+                            raw.data(),
+                            reinterpret_cast<const unsigned char *>(b64.data()),
+                            static_cast<int>(b64.size()));
+                        if (actual > 0)
+                        {
+                            // EVP_DecodeBlock may pad with NULs for '=' padding.
+                            int trailing = 0;
+                            for (int i = static_cast<int>(b64.size()) - 1;
+                                 i >= 0 && b64[static_cast<std::size_t>(i)] == '='; --i)
+                                ++trailing;
+                            fileData.append(reinterpret_cast<const char *>(raw.data()),
+                                            static_cast<std::size_t>(actual - trailing));
+                        }
+                    }
+                }
+
+                if (fileData.size() > 50ULL * 1024 * 1024)
+                    fileData.resize(50ULL * 1024 * 1024);
+
+                res.set_header("Content-Disposition",
+                               "attachment; filename=\"" + filename + "\"");
+                res.set_content(fileData, "text/plain; charset=utf-8");
+            });
+
+        // DELETE /api/admin/clients/:client_id/logs/:filename — delete one log file.
+        svr.Delete("/api/admin/clients/:client_id/logs/:filename",
+            [&config, validateClientId](const httplib::Request &req, httplib::Response &res)
+            {
+                const std::string clientId = validateClientId(req, res);
+                if (clientId.empty()) return;
+
+                auto fnIt = req.path_params.find("filename");
+                if (fnIt == req.path_params.end() || fnIt->second.empty() ||
+                    fnIt->second.find('/') != std::string::npos ||
+                    fnIt->second.find("..") != std::string::npos)
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"invalid filename\"}\n", "application/json");
+                    return;
+                }
+                const std::string filename = fnIt->second;
+
+                auto ch = config.ctrl_channels->get(clientId);
+                if (!ch)
+                {
+                    res.status = 503;
+                    res.set_content("{\"error\":\"client not connected\"}\n", "application/json");
+                    return;
+                }
+
+                const std::string reqId = generateReqId();
+                auto resp = ch->registerPending(reqId);
+                {
+                    std::lock_guard<std::mutex> lk(ch->writeMtx);
+                    ch->writeCtrlLine("C log_delete " + reqId + " " + filename);
+                }
+                std::unique_lock<std::mutex> lk(resp->mtx);
+                resp->cv.wait_for(lk, std::chrono::seconds(5),
+                                  [&resp] { return resp->done; });
+                ch->removePending(reqId);
+
+                if (!resp->done || resp->isError)
+                {
+                    const bool notFound = (!resp->lines.empty() &&
+                        resp->lines[0].find("not-found") != std::string::npos);
+                    res.status = notFound ? 404 : (resp->done ? 500 : 504);
+                    res.set_content("{\"error\":\"" +
+                        std::string(notFound ? "file not found" :
+                                    resp->done ? "client error" : "timeout") + "\"}\n",
+                        "application/json");
+                    return;
+                }
+                res.set_content("{\"ok\":true,\"file\":\"" + jsonEsc(filename) + "\"}\n",
+                                "application/json");
+            });
+
+        // DELETE /api/admin/clients/:client_id/logs — delete all log files.
+        svr.Delete("/api/admin/clients/:client_id/logs",
+            [&config, validateClientId](const httplib::Request &req, httplib::Response &res)
+            {
+                const std::string clientId = validateClientId(req, res);
+                if (clientId.empty()) return;
+
+                auto ch = config.ctrl_channels->get(clientId);
+                if (!ch)
+                {
+                    res.status = 503;
+                    res.set_content("{\"error\":\"client not connected\"}\n", "application/json");
+                    return;
+                }
+
+                const std::string reqId = generateReqId();
+                auto resp = ch->registerPending(reqId);
+                {
+                    std::lock_guard<std::mutex> lk(ch->writeMtx);
+                    ch->writeCtrlLine("C log_delete_all " + reqId);
+                }
+                std::unique_lock<std::mutex> lk(resp->mtx);
+                resp->cv.wait_for(lk, std::chrono::seconds(5),
+                                  [&resp] { return resp->done; });
+                ch->removePending(reqId);
+
+                if (!resp->done || resp->isError)
+                {
+                    res.status = resp->done ? 500 : 504;
+                    res.set_content("{\"error\":\"" +
+                        std::string(resp->done ? "client error" : "timeout") + "\"}\n",
+                        "application/json");
+                    return;
+                }
+
+                // Parse count from "del_all <req_id> ok <count>"
+                int count = 0;
+                for (const auto &line : resp->lines)
+                {
+                    if (line.rfind("del_all ", 0) == 0)
+                    {
+                        const std::size_t okPos = line.find(" ok ");
+                        if (okPos != std::string::npos)
+                            try { count = std::stoi(line.substr(okPos + 4)); } catch (...) {}
+                        break;
+                    }
+                }
+                res.set_content("{\"ok\":true,\"deleted\":" + std::to_string(count) + "}\n",
+                                "application/json");
             });
     }
 

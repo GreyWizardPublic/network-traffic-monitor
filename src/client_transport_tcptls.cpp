@@ -24,6 +24,11 @@
 
 #include <cstring>
 #include <string>
+#include <vector>
+
+#ifndef _WIN32
+#  include <poll.h>
+#endif
 
 namespace ntm
 {
@@ -185,6 +190,61 @@ bool TcpTlsTransport::readExact(void *buf, std::size_t n)
 bool TcpTlsTransport::writeExact(const void *buf, std::size_t n)
 {
     return platform::writeExact(ssl_, fd_, buf, n);
+}
+
+bool TcpTlsTransport::pollCtrlLines(std::string &inBuf, std::vector<std::string> &out)
+{
+    if (!ssl_ || !platform::sockValid(fd_)) return false;
+
+    // Check if there is any server→client data ready without blocking.
+    bool hasPending = SSL_has_pending(ssl_) > 0;
+    if (!hasPending)
+    {
+#ifdef _WIN32
+        WSAPOLLFD pfd{};
+        pfd.fd     = fd_;
+        pfd.events = POLLRDNORM;
+        if (::WSAPoll(&pfd, 1, 0) <= 0) return true;
+        hasPending = (pfd.revents & POLLRDNORM) != 0;
+#else
+        struct pollfd pfd{};
+        pfd.fd     = static_cast<int>(fd_);
+        pfd.events = POLLIN;
+        if (::poll(&pfd, 1, 0) <= 0) return true;
+        hasPending = (pfd.revents & POLLIN) != 0;
+#endif
+    }
+    if (!hasPending) return true;
+
+    // Data available: read one chunk and append to inBuf.
+    char buf[4096];
+    const int r = SSL_read(ssl_, buf, static_cast<int>(sizeof(buf)));
+    if (r > 0)
+    {
+        inBuf.append(buf, static_cast<std::size_t>(r));
+    }
+    else
+    {
+        const int err = SSL_get_error(ssl_, r);
+        ERR_clear_error();
+        if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE)
+            return true;
+        return false;
+    }
+
+    // Extract complete newline-terminated lines from inBuf.
+    std::size_t pos = 0;
+    while (true)
+    {
+        const std::size_t nl = inBuf.find('\n', pos);
+        if (nl == std::string::npos) break;
+        std::string line = inBuf.substr(pos, nl - pos);
+        while (!line.empty() && line.back() == '\r') line.pop_back();
+        if (!line.empty()) out.push_back(std::move(line));
+        pos = nl + 1;
+    }
+    if (pos > 0) inBuf.erase(0, pos);
+    return true;
 }
 
 } // namespace ntm

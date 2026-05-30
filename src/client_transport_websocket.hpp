@@ -43,6 +43,7 @@ public:
     bool readExact(void *buf, std::size_t n) override;
     bool writeExact(const void *buf, std::size_t n) override;
     SSL *sslHandle() const override;
+    bool pollCtrlLines(std::string &inBuf, std::vector<std::string> &out) override;
 
 private:
     std::unique_ptr<TcpTlsTransport> tcp_;

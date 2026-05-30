@@ -1,4 +1,5 @@
 #include "client.hpp"
+#include "client_filelog.hpp"
 #include "client_platform.hpp"
 #include "client_signing.hpp"
 #include "client_version.hpp"
@@ -218,6 +219,27 @@ int main(int argc, char *argv[])
     if (daemonMode)
         openlog("ntm-client", LOG_PID, LOG_DAEMON);
 #endif
+
+    // Initialise the file logger before any ntmLog() calls so startup messages
+    // are captured.  Use the configured log_dir or the platform default.
+    {
+        std::string logDir = opts.log_dir.empty()
+            ? ntm::platform::defaultLogDir(daemonMode)
+            : opts.log_dir;
+
+        ntm::platform::LogLevel initLevel = ntm::platform::LogLevel::Info;
+        if      (opts.log_level == "Warn") initLevel = ntm::platform::LogLevel::Warn;
+        else if (opts.log_level == "Err")  initLevel = ntm::platform::LogLevel::Err;
+
+        if (!logDir.empty())
+        {
+            if (!ntm::globalFileLogger().init(logDir, initLevel))
+            {
+                std::cerr << "ntm-client: warning: could not initialise file logging at "
+                          << logDir << " — continuing without file logs\n";
+            }
+        }
+    }
 
     if (loadedConfig)
     {

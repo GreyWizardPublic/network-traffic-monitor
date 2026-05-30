@@ -13,6 +13,13 @@
 #include <string>
 #include <vector>
 
+#ifndef _WIN32
+#  include <poll.h>
+#endif
+
+#include <openssl/err.h>
+#include <openssl/ssl.h>
+
 namespace ntm
 {
 
@@ -260,6 +267,86 @@ bool WebSocketTransport::writeExact(const void *buf, std::size_t n)
     const auto maskKey = generateMaskKey();
     auto frame = ws::buildClientFrame(buf, n, maskKey.data());
     return tcp_->writeExact(frame.data(), frame.size());
+}
+
+bool WebSocketTransport::pollCtrlLines(std::string &inBuf, std::vector<std::string> &out)
+{
+    if (!tcp_ || !tcp_->isConnected()) return false;
+
+    // If there are already decoded payload bytes in the read buffer, use them.
+    bool hasBuffered = readBufPos_ < readBuf_.size();
+    if (!hasBuffered)
+    {
+        // Check if the underlying SSL has pending/readable data before trying to fill.
+        SSL *ssl = tcp_->sslHandle();
+        if (!ssl) return false;
+
+        bool hasPending = SSL_has_pending(ssl) > 0;
+        if (!hasPending)
+        {
+            const int fd = SSL_get_fd(ssl);
+            if (fd < 0) return false;
+#ifdef _WIN32
+            WSAPOLLFD pfd{};
+            pfd.fd     = static_cast<SOCKET>(fd);
+            pfd.events = POLLRDNORM;
+            if (::WSAPoll(&pfd, 1, 0) <= 0) return true;
+            hasPending = (pfd.revents & POLLRDNORM) != 0;
+#else
+            struct pollfd pfd{};
+            pfd.fd     = fd;
+            pfd.events = POLLIN;
+            if (::poll(&pfd, 1, 0) <= 0) return true;
+            hasPending = (pfd.revents & POLLIN) != 0;
+#endif
+        }
+        if (!hasPending) return true;
+
+        // Read one SSL chunk and feed it to the WS frame parser.
+        std::uint8_t raw[4096];
+        const int r = SSL_read(ssl, raw, static_cast<int>(sizeof(raw)));
+        if (r > 0)
+        {
+            reader_.feed(raw, static_cast<std::size_t>(r));
+        }
+        else
+        {
+            const int err = SSL_get_error(ssl, r);
+            ERR_clear_error();
+            if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE)
+                return true;
+            return false;
+        }
+
+        // Drain decoded payload bytes into readBuf_.
+        if (reader_.available() > 0)
+        {
+            std::array<std::uint8_t, 4096> tmp{};
+            const std::size_t n = reader_.take(tmp.data(), tmp.size());
+            if (readBufPos_ > 0 && readBufPos_ >= readBuf_.size())
+            {
+                readBuf_.clear();
+                readBufPos_ = 0;
+            }
+            readBuf_.insert(readBuf_.end(), tmp.data(), tmp.data() + n);
+        }
+    }
+
+    // Extract complete newline-terminated lines from readBuf_.
+    while (readBufPos_ < readBuf_.size())
+    {
+        const auto *data  = readBuf_.data() + readBufPos_;
+        const std::size_t avail = readBuf_.size() - readBufPos_;
+        const auto *nlPtr = static_cast<const std::uint8_t *>(std::memchr(data, '\n', avail));
+        if (!nlPtr) break;
+        const std::size_t lineLen = static_cast<std::size_t>(nlPtr - data);
+        std::string line(reinterpret_cast<const char *>(data), lineLen);
+        while (!line.empty() && line.back() == '\r') line.pop_back();
+        if (!line.empty()) out.push_back(std::move(line));
+        readBufPos_ += lineLen + 1;
+    }
+    (void)inBuf;  // WebSocket uses its own readBuf_; inBuf is unused for this transport
+    return true;
 }
 
 } // namespace ntm

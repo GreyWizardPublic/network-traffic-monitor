@@ -108,9 +108,16 @@ bool checkIdentityFilePermissions(const std::string &path,
 
 enum class LogLevel { Info, Warn, Err };
 
-// Write msg to syslog (daemon mode) or stderr (foreground).
+// Write msg to syslog (daemon mode) or stderr (foreground) AND to the
+// global file logger (ntm::globalFileLogger()) if it has been initialised.
 // Linux: syslog().  Windows: stderr always (no syslog on Windows).
 void ntmLog(LogLevel level, bool isDaemon, const std::string &msg);
+
+// Return the default directory for log files.
+// Daemon / service: a system log directory (e.g. /var/log/ntm-client).
+// User foreground:  a user-state directory (e.g. ~/.local/state/ntm-client/logs).
+// Returns an empty string if no suitable directory can be determined.
+std::string defaultLogDir(bool isDaemon);
 
 // ---------------------------------------------------------------------------
 // Signal / shutdown handling

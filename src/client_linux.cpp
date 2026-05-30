@@ -4,6 +4,7 @@
 
 #include "client_platform.hpp"
 #include "client_core.hpp"
+#include "client_filelog.hpp"
 #include "client_http_util.hpp"
 #include "client_linux_perms.hpp"
 
@@ -278,6 +279,25 @@ void ntmLog(LogLevel level, bool isDaemon, const std::string &msg)
     {
         std::cerr << msg << "\n";
     }
+    // Dual-sink: also write to the file logger if it is active.
+    ntm::globalFileLogger().write(level, msg);
+}
+
+std::string defaultLogDir(bool isDaemon)
+{
+    if (isDaemon)
+        return "/var/log/ntm-client";
+
+    // User foreground: XDG_STATE_HOME/ntm-client/logs, or ~/.local/state/ntm-client/logs
+    const char *xdgState = ::getenv("XDG_STATE_HOME");
+    if (xdgState && xdgState[0] != '\0')
+        return std::string(xdgState) + "/ntm-client/logs";
+
+    const char *home = ::getenv("HOME");
+    if (home && home[0] != '\0')
+        return std::string(home) + "/.local/state/ntm-client/logs";
+
+    return "";
 }
 
 // ---------------------------------------------------------------------------

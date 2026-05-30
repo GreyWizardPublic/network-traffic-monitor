@@ -18,13 +18,16 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdarg>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <functional>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <shared_mutex>
@@ -94,6 +97,7 @@ struct ClientHealthStats
     std::uint32_t cfgAggMinMs{0};
     std::uint32_t cfgAggMaxMs{0};
     std::uint32_t cfgAggMaxFlows{0};
+    std::string   cfgLogLevel;          // "Info"|"Warn"|"Err"; empty = not yet reported
 };
 
 // Parse a space-separated key=value H-line body (the part after the "H " prefix)
@@ -166,6 +170,7 @@ inline ClientHealthStats parseHealthLine(const std::string &body)
         else if (key == "cfg_agg_min_ms")         toU32(hs.cfgAggMinMs);
         else if (key == "cfg_agg_max_ms")         toU32(hs.cfgAggMaxMs);
         else if (key == "cfg_agg_max_flows")      toU32(hs.cfgAggMaxFlows);
+        else if (key == "cfg_log_level")          { if (val == "Info" || val == "Warn" || val == "Err") hs.cfgLogLevel = val; }
         // unknown keys: silently ignored
     }
     return hs;
@@ -280,6 +285,148 @@ struct MonitoringIpSet
         return out;
     }
 };
+
+// ---------------------------------------------------------------------------
+// Wire-protocol v3: per-client control channel (server → client C-lines).
+// Shared between server_core (wire data loop) and web_dashboard (admin endpoints).
+// ---------------------------------------------------------------------------
+
+// Accumulated response to a single admin req_id command (log_list / log_get /
+// log_delete / log_delete_all).  The caller waits on cv until done is set true.
+struct LogCmdResponse
+{
+    mutable std::mutex mtx;
+    std::condition_variable cv;
+    std::vector<std::string> lines;  // L-line bodies (after "L "), oldest first
+    bool  done{false};
+    bool  isError{false};
+    std::string errorCode;    // e.g. "not_found", "io_error"
+    std::string errorDetail;
+};
+
+// Per-client control channel.  Created when a client authenticates; destroyed
+// when the client disconnects.  Admin HTTP handlers look up the channel by
+// clientId to send commands and await responses.
+struct ClientCtrlChannel
+{
+    // Thread-safe write of one newline-terminated C-line to the client socket.
+    // Concurrent writes from multiple admin threads are serialised by writeMtx.
+    mutable std::mutex writeMtx;
+    std::function<bool(const std::string &line)> writeCtrlLine;
+
+    // req_id → pending response.  Protected by pendingMtx.
+    mutable std::mutex pendingMtx;
+    std::unordered_map<std::string, std::shared_ptr<LogCmdResponse>> pending;
+
+    // Pending set-loglevel acknowledgement (no req_id in wire protocol).
+    mutable std::mutex ackMtx;
+    std::condition_variable ackCv;
+    std::string ackedLevel;
+    bool gotAck{false};
+
+    // Send a C-line and return a response object to await (for req_id commands).
+    // Does NOT send the line — caller must call this before sendCtrlLine so the
+    // promise is registered before any response arrives.
+    std::shared_ptr<LogCmdResponse> registerPending(const std::string &reqId)
+    {
+        auto resp = std::make_shared<LogCmdResponse>();
+        std::lock_guard<std::mutex> lk(pendingMtx);
+        pending[reqId] = resp;
+        return resp;
+    }
+
+    void removePending(const std::string &reqId)
+    {
+        std::lock_guard<std::mutex> lk(pendingMtx);
+        pending.erase(reqId);
+    }
+
+    // Route an incoming L-line body (the part after "L ") to the right pending request.
+    // Called by runWireDataLoop when it receives an L-prefixed line.
+    void routeLLine(const std::string &body)
+    {
+        // "ack set_loglevel <level>" — no req_id
+        if (body.rfind("ack set_loglevel ", 0) == 0)
+        {
+            std::string level = body.substr(17); // after "ack set_loglevel "
+            while (!level.empty() && (level.back() == '\r' || level.back() == '\n'))
+                level.pop_back();
+            std::lock_guard<std::mutex> lk(ackMtx);
+            ackedLevel = level;
+            gotAck = true;
+            ackCv.notify_all();
+            return;
+        }
+
+        // All other L-lines: "list <req_id> ...", "get <req_id> ...", etc.
+        // First token is the sub-type, second is the req_id.
+        const std::size_t sp1 = body.find(' ');
+        if (sp1 == std::string::npos) return;
+        const std::size_t sp2 = body.find(' ', sp1 + 1);
+        const std::string reqId = (sp2 == std::string::npos)
+            ? body.substr(sp1 + 1)
+            : body.substr(sp1 + 1, sp2 - sp1 - 1);
+
+        std::shared_ptr<LogCmdResponse> resp;
+        {
+            std::lock_guard<std::mutex> lk(pendingMtx);
+            auto it = pending.find(reqId);
+            if (it == pending.end()) return;
+            resp = it->second;
+        }
+
+        // Determine if this line terminates the response.
+        const std::string subtype = body.substr(0, sp1);
+        const bool isEnd = (body.find(" end", sp1) != std::string::npos && subtype == "list")
+                         || (body.find(" end", sp1) != std::string::npos && subtype == "get")
+                         || subtype == "del"
+                         || subtype == "del_all"
+                         || subtype == "err";
+
+        {
+            std::lock_guard<std::mutex> lk(resp->mtx);
+            resp->lines.push_back(body);
+            if (subtype == "err")
+            {
+                resp->isError = true;
+                resp->done = true;
+            }
+            else if (isEnd)
+            {
+                resp->done = true;
+            }
+        }
+        resp->cv.notify_all();
+    }
+};
+
+// Global registry of connected clients' control channels.
+struct ClientControlChannels
+{
+    mutable std::mutex mtx;
+    std::unordered_map<std::string, std::shared_ptr<ClientCtrlChannel>> channels;
+
+    void add(const std::string &clientId, std::shared_ptr<ClientCtrlChannel> ch)
+    {
+        std::lock_guard<std::mutex> lk(mtx);
+        channels[clientId] = std::move(ch);
+    }
+
+    void remove(const std::string &clientId)
+    {
+        std::lock_guard<std::mutex> lk(mtx);
+        channels.erase(clientId);
+    }
+
+    std::shared_ptr<ClientCtrlChannel> get(const std::string &clientId) const
+    {
+        std::lock_guard<std::mutex> lk(mtx);
+        auto it = channels.find(clientId);
+        return (it != channels.end()) ? it->second : nullptr;
+    }
+};
+
+// ---------------------------------------------------------------------------
 
 inline constexpr unsigned kAggregationWindowDaysDefault = 7;
 

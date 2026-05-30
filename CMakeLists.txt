@@ -71,6 +71,7 @@ endif()
 set(NTM_CLIENT_COMMON_SOURCES
     src/client_main.cpp
     src/client_core.cpp
+    src/client_filelog.cpp
     src/client_impl.cpp
     src/client_transport_tcptls.cpp
     src/client_transport_websocket.cpp
@@ -308,11 +309,14 @@ if(NOT WIN32)
         tests/test_hidden_entities.cpp
         tests/test_client_config_health.cpp
         tests/test_client_identity_perms.cpp  # H-4: POSIX-only permission check
+        tests/test_client_filelog.cpp
+        src/client_filelog.cpp              # filelog impl for test binary (POSIX-only)
     )
     target_include_directories(ntm-tests PRIVATE src tests)
     # ntm_types.hpp uses POSIX socket headers for isLanIP(); no extra libs needed.
     # test_zlib_stream.cpp uses zlib_stream.hpp which needs ZLIB::ZLIB.
     # test_server_signing.cpp uses OpenSSL EVP for ML-DSA-65 key generation + verification.
+    # test_client_filelog.cpp uses client_filelog.cpp which needs std::filesystem (C++17).
     target_link_libraries(ntm-tests PRIVATE ZLIB::ZLIB OpenSSL::SSL OpenSSL::Crypto)
     target_compile_options(ntm-tests PRIVATE -Wall -Wextra -Wpedantic)
     set_target_properties(ntm-tests PROPERTIES OUTPUT_NAME "ntm-tests")
