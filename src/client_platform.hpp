@@ -94,9 +94,12 @@ bool isLoopbackIface(const pcap_if *dev);
 // Key-file permission check
 // ---------------------------------------------------------------------------
 
-// Warn if the private identity key has group/world-readable permissions.
-// Linux: stat() + mode bits.  Windows: stub warning only.
-void checkIdentityFilePermissions(const std::string &path,
+// Verify the private identity key has safe permissions and is owner-only.
+// Returns true if the check passes or the file does not exist (caller handles
+// missing file). Returns false and logs a FATAL message if permissions or
+// ownership are unsafe — caller must abort startup.
+// Linux: stat() + mode bits.  Windows: ACL check (see client_windows.cpp).
+bool checkIdentityFilePermissions(const std::string &path,
                                   bool isDaemon, bool verbose);
 
 // ---------------------------------------------------------------------------
