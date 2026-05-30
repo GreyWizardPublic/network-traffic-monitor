@@ -16,21 +16,21 @@ namespace ntm
 // FlowKey — unique (iface, src_ip, dst_ip) tuple
 // ---------------------------------------------------------------------------
 
-struct FlowKey
+struct AggFlowKey
 {
     std::string iface;
     std::string srcIp;
     std::string dstIp;
 
-    bool operator==(const FlowKey &o) const noexcept
+    bool operator==(const AggFlowKey &o) const noexcept
     {
         return iface == o.iface && srcIp == o.srcIp && dstIp == o.dstIp;
     }
 };
 
-struct FlowKeyHash
+struct AggFlowKeyHash
 {
-    std::size_t operator()(const FlowKey &k) const noexcept
+    std::size_t operator()(const AggFlowKey &k) const noexcept
     {
         // Boost-style hash_combine using all three fields
         auto h = std::hash<std::string>{};
@@ -41,7 +41,7 @@ struct FlowKeyHash
     }
 };
 
-using FlowMap = std::unordered_map<FlowKey, std::uint64_t, FlowKeyHash>;
+using FlowMap = std::unordered_map<AggFlowKey, std::uint64_t, AggFlowKeyHash>;
 
 // ---------------------------------------------------------------------------
 // AdaptiveInterval — feedback controller for the flush interval.

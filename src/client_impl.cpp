@@ -147,7 +147,7 @@ public:
     // Hot path: accumulate bytes into the flow table.  One mutex lock per packet.
     void accumulateFlow(const PacketMeta &meta)
     {
-        FlowKey key{meta.iface, meta.srcIp, meta.dstIp};
+        AggFlowKey key{meta.iface, meta.srcIp, meta.dstIp};
         std::size_t sz;
         {
             std::lock_guard<std::mutex> lock(flowMutex_);

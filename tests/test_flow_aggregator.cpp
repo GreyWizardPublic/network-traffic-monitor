@@ -1,5 +1,5 @@
 // test_flow_aggregator.cpp
-// Unit tests for FlowKey, FlowMap, and AdaptiveInterval (src/flow_aggregator.hpp).
+// Unit tests for AggFlowKey, FlowMap, and AdaptiveInterval (src/flow_aggregator.hpp).
 // No network I/O — pure logic only.
 
 #include "ntm_test.hpp"
@@ -11,52 +11,52 @@
 using namespace ntm;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// FlowKey equality and hashing
+// AggFlowKey equality and hashing
 // ═══════════════════════════════════════════════════════════════════════════
 
-TEST_CASE("FlowKey: identical keys are equal")
+TEST_CASE("AggFlowKey: identical keys are equal")
 {
-    FlowKey a{"eth0", "10.0.0.1", "8.8.8.8"};
-    FlowKey b{"eth0", "10.0.0.1", "8.8.8.8"};
+    AggFlowKey a{"eth0", "10.0.0.1", "8.8.8.8"};
+    AggFlowKey b{"eth0", "10.0.0.1", "8.8.8.8"};
     REQUIRE(a == b);
 }
 
-TEST_CASE("FlowKey: different iface makes keys unequal")
+TEST_CASE("AggFlowKey: different iface makes keys unequal")
 {
-    FlowKey a{"eth0", "10.0.0.1", "8.8.8.8"};
-    FlowKey b{"wlan0", "10.0.0.1", "8.8.8.8"};
+    AggFlowKey a{"eth0", "10.0.0.1", "8.8.8.8"};
+    AggFlowKey b{"wlan0", "10.0.0.1", "8.8.8.8"};
     REQUIRE(!(a == b));
 }
 
-TEST_CASE("FlowKey: different src makes keys unequal")
+TEST_CASE("AggFlowKey: different src makes keys unequal")
 {
-    FlowKey a{"eth0", "10.0.0.1", "8.8.8.8"};
-    FlowKey b{"eth0", "10.0.0.2", "8.8.8.8"};
+    AggFlowKey a{"eth0", "10.0.0.1", "8.8.8.8"};
+    AggFlowKey b{"eth0", "10.0.0.2", "8.8.8.8"};
     REQUIRE(!(a == b));
 }
 
-TEST_CASE("FlowKey: different dst makes keys unequal")
+TEST_CASE("AggFlowKey: different dst makes keys unequal")
 {
-    FlowKey a{"eth0", "10.0.0.1", "8.8.8.8"};
-    FlowKey b{"eth0", "10.0.0.1", "1.1.1.1"};
+    AggFlowKey a{"eth0", "10.0.0.1", "8.8.8.8"};
+    AggFlowKey b{"eth0", "10.0.0.1", "1.1.1.1"};
     REQUIRE(!(a == b));
 }
 
-TEST_CASE("FlowKey: hashing is consistent for equal keys")
+TEST_CASE("AggFlowKey: hashing is consistent for equal keys")
 {
-    FlowKeyHash h;
-    FlowKey a{"eth0", "192.168.1.1", "93.184.216.34"};
-    FlowKey b{"eth0", "192.168.1.1", "93.184.216.34"};
+    AggFlowKeyHash h;
+    AggFlowKey a{"eth0", "192.168.1.1", "93.184.216.34"};
+    AggFlowKey b{"eth0", "192.168.1.1", "93.184.216.34"};
     REQUIRE_EQ(h(a), h(b));
 }
 
-TEST_CASE("FlowKey: hashing is distinct for common different keys (collision-free on test set)")
+TEST_CASE("AggFlowKey: hashing is distinct for common different keys (collision-free on test set)")
 {
-    FlowKeyHash h;
-    FlowKey a{"eth0", "10.0.0.1", "8.8.8.8"};
-    FlowKey b{"eth0", "10.0.0.2", "8.8.8.8"};
-    FlowKey c{"eth0", "10.0.0.1", "1.1.1.1"};
-    FlowKey d{"wlan0", "10.0.0.1", "8.8.8.8"};
+    AggFlowKeyHash h;
+    AggFlowKey a{"eth0", "10.0.0.1", "8.8.8.8"};
+    AggFlowKey b{"eth0", "10.0.0.2", "8.8.8.8"};
+    AggFlowKey c{"eth0", "10.0.0.1", "1.1.1.1"};
+    AggFlowKey d{"wlan0", "10.0.0.1", "8.8.8.8"};
     // Not guaranteed in general but true for these test strings
     REQUIRE_NE(h(a), h(b));
     REQUIRE_NE(h(a), h(c));

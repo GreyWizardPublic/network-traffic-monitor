@@ -12,6 +12,11 @@ find_package(Threads REQUIRED)
 # ---------------------------------------------------------------------------
 
 if(NOT WIN32)
+    # WSL2: PATH leaks Windows/MSYS2 dirs into CMake's package search, causing
+    # find_package(CURL) to pick up /mnt/c/msys64 instead of /usr.
+    # Strip /mnt/* from PATH temporarily — compilers are already found by now.
+    string(REGEX REPLACE "(^|:)[^:]*/mnt/[^:]*" "" _wsl_filtered_path "$ENV{PATH}")
+    set(ENV{PATH} "${_wsl_filtered_path}")
     find_package(CURL REQUIRED)
     find_package(ZLIB REQUIRED)
 
