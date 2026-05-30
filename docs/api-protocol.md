@@ -1,6 +1,6 @@
-# NTM Dashboard API Protocol — Specification v10
+# NTM Dashboard API Protocol — Specification v12
 
-**API version:** 10  
+**API version:** 12  
 **Software version where introduced:** ntm 1.12.0  
 **File owner:** This document is the authoritative specification for the HTTPS
 API between `ntm-server` and any dashboard client (iOS app, web browser, or
@@ -106,6 +106,8 @@ software version (`server_version`).
 
 | Version | Change |
 |---|---|
+| 12 | Added remote log management endpoints: `GET /admin/clients/<id>/logs`, `POST /admin/clients/<id>/loglevel`, `GET /admin/clients/<id>/logs/<filename>`, `DELETE /admin/clients/<id>/logs/<filename>`, `DELETE /admin/clients/<id>/logs`. Commands are delivered to the client via the wire-protocol v3 `C`-line channel; responses arrive as `L` lines. Requires wire-protocol v3 clients (ntm-server 1.25.0, ntm-client 1.20.0). |
+| 11 | Added admin client config endpoint: `GET /api/admin/client/config`. Clients report `cfg_*` fields in H-lines; server returns them to the admin dashboard (ntm-server 1.23.0, ntm-client 1.17.0). |
 | 10 | Added admin hide-entities feature: `GET /api/admin/clients`, `GET /api/admin/hidden`, `POST /api/admin/hidden/client`, `POST /api/admin/hidden/interface`. Hidden clients and (client, iface) pairs are suppressed from `/api/summary` responses (all sections). Persisted across server restarts in `hidden_entities_file`. Enabled when `hidden_entities_file` and WebAuthn are configured (ntm-server 1.22.0). |
 | 9 | Added `GET /api/client/history` — per-client traffic histogram data (in/out bytes and packets per minute or per hour). Returns a fine ring (last N 1-minute buckets) or a coarse ring (hourly aggregation across the full retention window). Requires authenticated session; rate-limited to 30 req/IP/min (ntm-server 1.21.0). |
 | 8 | Added `GET /api/update/download_sig` — download ML-DSA-65 signature file for the client binary. Added `sig_size` field to `/api/update/check` response. Added client push endpoints `GET /admin/client/nonce` and `POST /admin/client/push` — push signed client binaries into `update_dir` via ML-DSA-65 authenticated upload (ntm-server 1.19.0, ntm-client 1.15.0). |
@@ -1011,9 +1013,140 @@ in server config.
 
 ---
 
-## 18. Stability Contract
+## 18. Remote Log Management Endpoints *(api_version 12+)*
 
-- All fields documented in § 10–17 are **stable at `api_version: 11`**.
+These endpoints allow the operator to inspect and control the file-based
+logging subsystem of any currently-connected `ntm-client`. Commands are
+delivered to the client via the wire-protocol v3 `C`-line channel. The server
+blocks (with a timeout) until the client sends back `L`-line responses over
+the same TLS connection.
+
+All five endpoints require an authenticated admin session. Registered only when
+`webauthn_rp_id` is set in server config. Return `503` if the target client is
+not currently connected.
+
+The client identifier `<id>` is the 64-char lowercase-hex Ed25519 public key
+(same as `client_id` in `/api/summary` `client_health` entries).
+
+**Timeouts:**
+- List, delete, set-level: 5 s from command send to response receipt.
+- File download: 60 s.
+
+### `GET /admin/clients/<id>/logs`
+
+Returns the current log level and the list of log files on the client.
+
+**Response `200`:**
+```json
+{
+  "client_id": "<64 hex>",
+  "log_level": "Info",
+  "file_logging": true,
+  "log_dir": "/var/log/ntm-client",
+  "files": [
+    { "name": "ntm-client-2026-05-30.log", "size": 12976128, "mtime": "2026-05-30" },
+    { "name": "ntm-client-2026-05-29.log", "size": 52428800, "mtime": "2026-05-29" }
+  ]
+}
+```
+`log_level` is `"Info"`, `"Warn"`, or `"Err"`.
+`file_logging: false` means the client started without a writable log directory.
+
+**Error responses:**
+
+| Status | Reason |
+|---|---|
+| `400` | `<id>` is not 64 lowercase hex chars |
+| `404` | Client ID not in AllowedClientsStore |
+| `503` | Client not currently connected |
+| `504` | Client did not respond within 5 s |
+
+### `POST /admin/clients/<id>/loglevel`
+
+Change the runtime log-verbosity level on the client immediately (no restart needed).
+
+**Request body** (`Content-Type: application/json`):
+```json
+{ "level": "Warn" }
+```
+
+**Response `200`:**
+```json
+{ "ok": true, "level": "Warn" }
+```
+
+**Error responses:**
+
+| Status | Reason |
+|---|---|
+| `400` | Missing or invalid `level` value (must be `Info`, `Warn`, or `Err`) |
+| `404` | Client ID not in AllowedClientsStore |
+| `503` | Client not currently connected |
+| `504` | Client did not respond within 5 s |
+
+### `GET /admin/clients/<id>/logs/<filename>`
+
+Download a single log file from the client.
+
+**Response `200`:**
+- `Content-Type: text/plain`
+- `Content-Disposition: attachment; filename="ntm-client-2026-05-30.log"`
+- Body: raw log file bytes (reassembled from `L get … chunk` responses).
+
+The server caps the transferred size at 50 MB (the per-file size limit enforced
+by the client). `filename` must match a name returned by `GET .../logs`.
+
+**Error responses:**
+
+| Status | Reason |
+|---|---|
+| `400` | Invalid `<id>` or illegal characters in `filename` |
+| `404` | Client ID not found or file not found on client |
+| `503` | Client not currently connected |
+| `504` | Client did not complete transfer within 60 s |
+
+### `DELETE /admin/clients/<id>/logs/<filename>`
+
+Delete a single log file on the client.
+
+**Response `200`:**
+```json
+{ "ok": true, "deleted": "ntm-client-2026-05-30.log" }
+```
+
+**Error responses:**
+
+| Status | Reason |
+|---|---|
+| `400` | Invalid `<id>` or illegal `filename` |
+| `404` | Client ID not found or file not on client |
+| `503` | Client not currently connected |
+| `504` | Timeout |
+
+### `DELETE /admin/clients/<id>/logs`
+
+Delete all log files on the client (current day's file excepted — the client
+recreates it immediately to capture subsequent log output).
+
+**Response `200`:**
+```json
+{ "ok": true, "deleted_count": 3 }
+```
+
+**Error responses:**
+
+| Status | Reason |
+|---|---|
+| `400` | Invalid `<id>` |
+| `404` | Client ID not found |
+| `503` | Client not currently connected |
+| `504` | Timeout |
+
+---
+
+## 19. Stability Contract
+
+- All fields documented in § 10–18 are **stable at `api_version: 12`**.
   No field will be removed or renamed without a version bump.
 - New **optional** fields may be added at any `api_version` without bumping;
   clients must tolerate extra fields.
@@ -1037,4 +1170,6 @@ in server config.
   by hiding the Hidden Entities panel.
 - Servers at `api_version: 10` (ntm-server < 1.23.0) do not have `/api/admin/client/config`.
   The admin UI should gracefully handle `404` by hiding the Client Configuration panel.
+- Servers at `api_version: 11` (ntm-server < 1.25.0) do not have the remote log management
+  endpoints (§ 18). The admin UI should gracefully handle `404` by hiding the Logs panel.
 - The protocol doc is updated **before** the commit that changes either side.

@@ -15,7 +15,8 @@ namespace ntm
 // Wire protocol version (integer). Bump when any line format, field count, or
 // connection-lifecycle rule changes. See docs/wire-protocol.md § 6.
 // Lockstep consumers: ntm-server, ntm-client (C++), NTMClient (iOS).
-inline constexpr unsigned kWireProtoVersion = 2;
+// v3: added bidirectional C (control) and L (log) line families; server→client direction.
+inline constexpr unsigned kWireProtoVersion = 3;
 
 // HTTPS API protocol version (integer). Bump when endpoint schemas change.
 // See docs/api-protocol.md § 5 for change classification rules.
@@ -24,7 +25,8 @@ inline constexpr unsigned kWireProtoVersion = 2;
 // v9: added /api/client/history endpoint (per-client traffic histogram).
 // v10: added admin hide-entities endpoints; /api/summary filters hidden clients/ifaces.
 // v11: added /api/admin/client/config endpoint; clients report cfg_* fields in H-lines.
-inline constexpr unsigned kApiVersion = 11;
+// v12: added remote log management endpoints (/admin/clients/<id>/logs*); wire-proto v3 required.
+inline constexpr unsigned kApiVersion = 12;
 
 // Default TCP port — serves both ntm-client data ingestion and the HTTPS
 // dashboard when port consolidation is in use (see docs/wire-protocol.md § 2).
@@ -106,13 +108,21 @@ inline constexpr unsigned    kAuthVersionV3 = 3;
 inline constexpr std::uint8_t kCapNone = 0x00; // no optional features
 inline constexpr std::uint8_t kCapZlib = 0x01; // bit 0: zlib deflate on the data phase
 
-// Data-phase line prefixes. See docs/wire-protocol.md § 5.2.
+// Data-phase line prefixes. See docs/wire-protocol.md § 5.
 // All lines are newline-terminated UTF-8; fields separated by single spaces.
-inline constexpr char kDataLinePrefix[]   = "D "; // D {iface} {src_ip} {dst_ip} {bytes}
-inline constexpr char kHealthLinePrefix[] = "H "; // H key=val key=val …  (every kHealthIntervalSec)
-inline constexpr char kExtIPLinePrefix[]  = "X "; // X {ipv4|ipv6|null}  (before A lines)
-inline constexpr char kAddrLinePrefix[]   = "A "; // A {lan_ip}          (after X line)
-inline constexpr char kExtIPNull[]        = "null"; // X-line sentinel: WAN IP unreachable
+inline constexpr char kDataLinePrefix[]    = "D "; // D {iface} {src_ip} {dst_ip} {bytes}
+inline constexpr char kHealthLinePrefix[]  = "H "; // H key=val key=val …  (every kHealthIntervalSec)
+inline constexpr char kExtIPLinePrefix[]   = "X "; // X {ipv4|ipv6|null}  (before A lines)
+inline constexpr char kAddrLinePrefix[]    = "A "; // A {lan_ip}          (after X line)
+inline constexpr char kExtIPNull[]         = "null"; // X-line sentinel: WAN IP unreachable
+
+// Wire-protocol v3: server→client control lines and client→server log response lines.
+// See docs/wire-protocol.md § 5.3 and § 5.4.
+inline constexpr char kCtrlLinePrefix[]   = "C "; // server → client: C <command> [args…]
+inline constexpr char kLogRespLinePrefix[] = "L "; // client → server: L <type> [fields…]
+
+// Maximum length of a req_id token in C/L lines.
+inline constexpr std::size_t kCtrlReqIdMaxLen = 32;
 
 // Field length limits enforced by the server on D/A/X lines.
 inline constexpr std::size_t kMaxIfaceLabelLen = 64; // iface field in D-lines
