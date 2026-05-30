@@ -2251,15 +2251,27 @@ function fmtFileSize(b){
   return(b/1073741824).toFixed(2)+' GB';
 }
 
+// Resolve the hex client_id for the currently selected client.
+// The logs API requires a 64-char hex id, not the display name.
+// clientIdMap is populated from client_health on every refresh.
+function logsHexId(){
+  const id=clientIdMap[selectedClient]||'';
+  if(!id)document.getElementById('logs_err').textContent=
+    '✗ Client ID not available — wait for the next refresh (30 s) and try again';
+  return id;
+}
+
 async function loadLogs(){
   if(!selectedClient)return;
+  const hexId=logsHexId();
+  if(!hexId)return;
   document.getElementById('logs_err').textContent='';
   document.getElementById('logs_offline_msg').style.display='none';
   document.getElementById('logs_content').style.display='none';
   document.getElementById('logs_no_logging').style.display='none';
   document.getElementById('logs_file_body').innerHTML='<tr><td colspan="3" style="color:#555">Loading&#8230;</td></tr>';
   try{
-    const r=await fetch('/api/admin/clients/'+encodeURIComponent(selectedClient)+'/logs');
+    const r=await fetch('/api/admin/clients/'+encodeURIComponent(hexId)+'/logs');
     if(handleAdminExpiry(r.status))return;
     const d=await r.json();
     if(!r.ok){document.getElementById('logs_err').textContent='✗ '+(d.error||'Unknown error');return;}
@@ -2283,7 +2295,7 @@ async function loadLogs(){
         +'<td style="font-family:monospace;font-size:0.82em">'+esc(f.name)+'</td>'
         +'<td style="text-align:right;font-size:0.82em;color:#aaa">'+fmtFileSize(f.size)+'</td>'
         +'<td style="text-align:right;white-space:nowrap">'
-        +'<a href="/api/admin/clients/'+encodeURIComponent(selectedClient)+'/logs/'+encodeURIComponent(f.name)+'" download="'+esc(f.name)+'" style="font-family:monospace;font-size:0.78em;padding:2px 8px;border-radius:2px;border:1px solid #3a5a8a;background:#0d1828;color:#7af;text-decoration:none;margin-right:4px">Download</a>'
+        +'<a href="/api/admin/clients/'+encodeURIComponent(hexId)+'/logs/'+encodeURIComponent(f.name)+'" download="'+esc(f.name)+'" style="font-family:monospace;font-size:0.78em;padding:2px 8px;border-radius:2px;border:1px solid #3a5a8a;background:#0d1828;color:#7af;text-decoration:none;margin-right:4px">Download</a>'
         +'<button onclick="doDeleteLog(\''+esc(f.name)+'\')" style="font-family:monospace;font-size:0.78em;padding:2px 8px;border-radius:2px;border:1px solid #5a3a3a;background:#180d0d;color:#c88;cursor:pointer">Del</button>'
         +'</td></tr>').join('');
     }
@@ -2295,12 +2307,14 @@ async function loadLogs(){
 
 async function applyLogLevel(){
   if(!selectedClient)return;
+  const hexId=logsHexId();
+  if(!hexId)return;
   const level=document.getElementById('logs_level_sel').value;
   const msg=document.getElementById('logs_level_msg');
   msg.textContent='Applying…';
   document.getElementById('logs_err').textContent='';
   try{
-    const r=await fetch('/api/admin/clients/'+encodeURIComponent(selectedClient)+'/loglevel',{
+    const r=await fetch('/api/admin/clients/'+encodeURIComponent(hexId)+'/loglevel',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({level})
@@ -2316,10 +2330,12 @@ async function applyLogLevel(){
 
 async function doDeleteLog(filename){
   if(!selectedClient)return;
+  const hexId=logsHexId();
+  if(!hexId)return;
   if(!confirm('Delete log file "'+filename+'" from client '+selectedClient+'?'))return;
   document.getElementById('logs_err').textContent='';
   try{
-    const r=await fetch('/api/admin/clients/'+encodeURIComponent(selectedClient)+'/logs/'+encodeURIComponent(filename),{method:'DELETE'});
+    const r=await fetch('/api/admin/clients/'+encodeURIComponent(hexId)+'/logs/'+encodeURIComponent(filename),{method:'DELETE'});
     if(handleAdminExpiry(r.status))return;
     const d=await r.json();
     if(r.ok&&d.ok){loadLogs();}
@@ -2331,12 +2347,14 @@ async function doDeleteLog(filename){
 
 async function doDeleteAllLogs(){
   if(!selectedClient)return;
+  const hexId=logsHexId();
+  if(!hexId)return;
   if(!confirm('Delete ALL log files from client '+selectedClient+'?\n\nThis cannot be undone.'))return;
-  const confirmId=prompt('Type the client ID to confirm deletion:');
-  if(confirmId!==selectedClient){alert('ID mismatch — cancelling.');return;}
+  const confirmId=prompt('Type the client name to confirm deletion:');
+  if(confirmId!==selectedClient){alert('Name mismatch — cancelling.');return;}
   document.getElementById('logs_err').textContent='';
   try{
-    const r=await fetch('/api/admin/clients/'+encodeURIComponent(selectedClient)+'/logs',{method:'DELETE'});
+    const r=await fetch('/api/admin/clients/'+encodeURIComponent(hexId)+'/logs',{method:'DELETE'});
     if(handleAdminExpiry(r.status))return;
     const d=await r.json();
     if(r.ok&&d.ok){loadLogs();}
