@@ -1,7 +1,7 @@
 #pragma once
 
 // ntm-client (Linux/Windows) module version — independent of ntm-server version.
-// See CLAUDE.md § Versioning for per-module rules and protocol lockstep requirements.
+// See docs/agent-framework.md §5 for versioning rules; docs/project-rules.md §3 for the module list.
 // Wire protocol spoken: kWireProtoVersion (src/proto_client_server.hpp)
 inline constexpr char kClientVersion[] = "1.19.3.0";
 

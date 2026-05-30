@@ -334,7 +334,7 @@ static std::size_t scanUpdateDir(const std::string &dir)
 }
 
 // Schema MUST mirror buildSummaryJson() — update whenever that function changes.
-// CLAUDE.md "Demo mock data" rule enforces this.
+// docs/project-rules.md §8 "Demo Server" consistency rule enforces this.
 static std::string buildDemoSummaryJson()
 {
     const auto nowEpoch = std::chrono::duration_cast<std::chrono::seconds>(
