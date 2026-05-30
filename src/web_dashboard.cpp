@@ -1912,17 +1912,17 @@ button{font-family:monospace;font-size:0.82em;padding:5px 14px;border-radius:3px
     <button onclick="loadLogs()" style="font-family:monospace;font-size:0.78em;padding:3px 10px;border-radius:3px;border:1px solid #3a5a8a;background:#0d1828;color:#7af;cursor:pointer">&#8635; Refresh</button>
   </div>
   <div id="logs_offline_msg" style="display:none;color:#a85;font-size:0.82em;padding:6px 0">Client offline &mdash; log management unavailable.</div>
+  <div id="logs_level_row" style="display:none;display:flex;align-items:center;gap:10px;margin-bottom:12px">
+    <span style="font-size:0.82em;color:#aaa">Log level:</span>
+    <select id="logs_level_sel" style="font-family:monospace;font-size:0.82em;padding:4px 8px;background:#0e0e14;color:#ccc;border:1px solid #3a3a5a;border-radius:3px">
+      <option value="Info">Info</option>
+      <option value="Warn">Warn</option>
+      <option value="Err">Err</option>
+    </select>
+    <button onclick="applyLogLevel()" style="font-family:monospace;font-size:0.82em;padding:4px 12px;border-radius:3px;border:1px solid #3a5a3a;background:#0d1808;color:#8c8;cursor:pointer">Apply</button>
+    <span id="logs_level_msg" style="font-size:0.78em;color:#aaa"></span>
+  </div>
   <div id="logs_content" style="display:none">
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
-      <span style="font-size:0.82em;color:#aaa">Log level:</span>
-      <select id="logs_level_sel" style="font-family:monospace;font-size:0.82em;padding:4px 8px;background:#0e0e14;color:#ccc;border:1px solid #3a3a5a;border-radius:3px">
-        <option value="Info">Info</option>
-        <option value="Warn">Warn</option>
-        <option value="Err">Err</option>
-      </select>
-      <button onclick="applyLogLevel()" style="font-family:monospace;font-size:0.82em;padding:4px 12px;border-radius:3px;border:1px solid #3a5a3a;background:#0d1808;color:#8c8;cursor:pointer">Apply</button>
-      <span id="logs_level_msg" style="font-size:0.78em;color:#aaa"></span>
-    </div>
     <div style="font-size:0.78em;color:#666;margin-bottom:6px">Log files (3 days retained, 50 MB max each):</div>
     <table id="logs_file_tbl" style="width:100%">
       <thead><tr><th style="text-align:left">File</th><th style="text-align:right">Size</th><th style="text-align:right">Actions</th></tr></thead>
@@ -2267,6 +2267,7 @@ async function loadLogs(){
   if(!hexId)return;
   document.getElementById('logs_err').textContent='';
   document.getElementById('logs_offline_msg').style.display='none';
+  document.getElementById('logs_level_row').style.display='none';
   document.getElementById('logs_content').style.display='none';
   document.getElementById('logs_no_logging').style.display='none';
   document.getElementById('logs_file_body').innerHTML='<tr><td colspan="3" style="color:#555">Loading&#8230;</td></tr>';
@@ -2279,13 +2280,14 @@ async function loadLogs(){
       document.getElementById('logs_offline_msg').style.display='';
       return;
     }
+    // Level control is always available when client is connected.
+    document.getElementById('logs_level_row').style.display='flex';
+    const sel=document.getElementById('logs_level_sel');
+    if(d.level&&['Info','Warn','Err'].includes(d.level))sel.value=d.level;
     if(!d.file_logging){
       document.getElementById('logs_no_logging').style.display='';
       return;
     }
-    // Set level dropdown to current level.
-    const sel=document.getElementById('logs_level_sel');
-    if(d.level&&['Info','Warn','Err'].includes(d.level))sel.value=d.level;
     // Render file list.
     const tbody=document.getElementById('logs_file_body');
     if(!d.files||d.files.length===0){
