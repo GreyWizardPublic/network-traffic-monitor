@@ -4041,10 +4041,14 @@ void registerWebHandlers(NtmHttpServer &svr,
                     return;
                 }
 
-                // Helper: extract multipart field by name
+                // Helper: extract multipart field by name.
+                // cpp-httplib 0.46.0+ splits multipart data: text fields (no
+                // filename in Content-Disposition) → req.form.fields; file
+                // uploads (with filename) → req.form.files.  Check both.
                 auto getField = [&](const std::string &name) -> std::string {
-                    auto it = req.form.files.find(name);
-                    return (it == req.form.files.end()) ? "" : it->second.content;
+                    if (req.form.has_field(name)) return req.form.get_field(name);
+                    if (req.form.has_file(name))  return req.form.get_file(name).content;
+                    return "";
                 };
 
                 const std::string versionStr  = getField("version");
@@ -4241,9 +4245,12 @@ void registerWebHandlers(NtmHttpServer &svr,
                     return;
                 }
 
+                // cpp-httplib 0.46.0+: text fields → req.form.fields,
+                // file uploads → req.form.files.  Check both.
                 auto getField = [&](const std::string &name) -> std::string {
-                    auto it = req.form.files.find(name);
-                    return (it == req.form.files.end()) ? "" : it->second.content;
+                    if (req.form.has_field(name)) return req.form.get_field(name);
+                    if (req.form.has_file(name))  return req.form.get_file(name).content;
+                    return "";
                 };
 
                 const std::string platformStr   = getField("platform");
