@@ -18,9 +18,9 @@ final class ClientVersionTests: XCTestCase {
         }
     }
 
-    // Must match kWireProtoVersion in src/proto_client_server.hpp (currently 2)
+    // Must match kWireProtoVersion in src/proto_client_server.hpp (currently 3)
     func testWireProtoVersionMatchesSpec() {
-        XCTAssertEqual(kWireProtoVersion, 2,
+        XCTAssertEqual(kWireProtoVersion, 3,
                        "kWireProtoVersion must match src/proto_client_server.hpp")
     }
 
