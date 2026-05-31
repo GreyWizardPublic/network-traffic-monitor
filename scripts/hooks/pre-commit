@@ -84,7 +84,7 @@ ios/scripts/*|ios/certs/*)
     [[ "$f" == src/* ]] || continue
 
     # Server-only sources.
-    if [[ "$f" =~ ^src/(server_core\.|web_dashboard\.|webauthn\.|siwa\.) ]]; then
+    if [[ "$f" =~ ^src/(server_core\.|web_dashboard\.|webauthn\.|siwa\.|web_auth\.) ]]; then
         needs_server=1; continue
     fi
 
