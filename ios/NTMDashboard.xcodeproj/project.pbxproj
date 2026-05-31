@@ -46,7 +46,6 @@
 		A6DC3789757BD7F4A0B4AF12 /* ProtocolVersion.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4DD610B34BF286883320588 /* ProtocolVersion.swift */; };
 		A9C7EF53C5E19D5F89B98D2E /* SectionCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53D1261760DC4266421A7B97 /* SectionCard.swift */; };
 		B1F7F14FA25EB3CFD90675A8 /* AppNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA4035AFFE621B90203F451F /* AppNavigation.swift */; };
-		B5330ED8E9D503B32B707D09 /* AdminProof.swift in Sources */ = {isa = PBXBuildFile; fileRef = 804A17A45D0AF55FA4B6DCBC /* AdminProof.swift */; };
 		B5EABE58EBEB28E9D8E176F1 /* HiddenEntities.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABD263BEB02D15F793F3D940 /* HiddenEntities.swift */; };
 		C53E3A35A37173372D67A39D /* ProtoRejectedClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8514DAA6EF7557EBA0370386 /* ProtoRejectedClient.swift */; };
 		C908F8F4BF3BDFB7E6AC5A61 /* ByteFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C5CAAD94CB10A98C2568456 /* ByteFormatter.swift */; };
@@ -99,7 +98,6 @@
 		688721A5E912EE5A4A34F568 /* NTMDashboard.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = NTMDashboard.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7582250B685DEAAF5C02E8AC /* DemoServerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoServerView.swift; sourceTree = "<group>"; };
 		7CDEC5129C70D4867785C415 /* AdminPasswordSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdminPasswordSheet.swift; sourceTree = "<group>"; };
-		804A17A45D0AF55FA4B6DCBC /* AdminProof.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdminProof.swift; sourceTree = "<group>"; };
 		830D3FF5F84A24DDA5DDD139 /* DashboardViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardViewModel.swift; sourceTree = "<group>"; };
 		8514DAA6EF7557EBA0370386 /* ProtoRejectedClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtoRejectedClient.swift; sourceTree = "<group>"; };
 		8A28C84A9FAFD2E66259B3B9 /* RegisterDeviceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RegisterDeviceView.swift; sourceTree = "<group>"; };
@@ -232,7 +230,6 @@
 			isa = PBXGroup;
 			children = (
 				62558B3A4CE50A012B81AE85 /* AdminClient.swift */,
-				804A17A45D0AF55FA4B6DCBC /* AdminProof.swift */,
 				211C120F7F3FAB95364C4930 /* CertificatePinner.swift */,
 				C36B4420C355C12E6508F842 /* ClientHistoryClient.swift */,
 				4D1E5677279246C4C1605702 /* KeychainService.swift */,
@@ -423,7 +420,6 @@
 				632D0B9D524E5C07CC719065 /* AdminClient.swift in Sources */,
 				ED2E6B17D1293C2E0CCABEA1 /* AdminMonitors.swift in Sources */,
 				A4530009EEB0116512A9E5F9 /* AdminPasswordSheet.swift in Sources */,
-				B5330ED8E9D503B32B707D09 /* AdminProof.swift in Sources */,
 				D73EE4940DF38C1225EFABAC /* AdminRootView.swift in Sources */,
 				49E7463A91EA3CC9B6E92420 /* AdminViewModel.swift in Sources */,
 				B1F7F14FA25EB3CFD90675A8 /* AppNavigation.swift in Sources */,
@@ -517,7 +513,7 @@
 				CODE_SIGN_ENTITLEMENTS = NTMDashboard/NTMDashboard/NTMDashboard.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 25;
+				CURRENT_PROJECT_VERSION = 26;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = W65LG3MSG6;
 				INFOPLIST_FILE = NTMDashboard/NTMDashboard/Info.plist;
@@ -526,7 +522,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.17.0;
+				MARKETING_VERSION = 1.18.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ntm.NTMDashboard;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -606,7 +602,7 @@
 				CODE_SIGN_ENTITLEMENTS = NTMDashboard/NTMDashboard/NTMDashboard.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Distribution: Dong Xue (W65LG3MSG6)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 25;
+				CURRENT_PROJECT_VERSION = 26;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = W65LG3MSG6;
 				INFOPLIST_FILE = NTMDashboard/NTMDashboard/Info.plist;
@@ -615,7 +611,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.17.0;
+				MARKETING_VERSION = 1.18.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ntm.NTMDashboard;
 				SDKROOT = iphoneos;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";

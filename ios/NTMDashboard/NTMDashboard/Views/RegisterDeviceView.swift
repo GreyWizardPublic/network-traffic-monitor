@@ -4,17 +4,11 @@ struct RegisterDeviceView: View {
     @Environment(AuthViewModel.self) private var authVM
     @Environment(\.dismiss) private var dismiss
 
-    @State private var adminPassword = ""
     @State private var deviceLabel = ""
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("Admin credentials") {
-                    SecureField("Admin password", text: $adminPassword)
-                        .textContentType(.password)
-                }
-
                 Section("Device") {
                     TextField("Device label", text: $deviceLabel)
                         .autocorrectionDisabled()
@@ -23,7 +17,7 @@ struct RegisterDeviceView: View {
                 Section {
                     Button {
                         Task {
-                            await authVM.register(adminPassword: adminPassword, deviceLabel: deviceLabel)
+                            await authVM.register(deviceLabel: deviceLabel)
                         }
                     } label: {
                         if authVM.isLoading {
@@ -32,7 +26,10 @@ struct RegisterDeviceView: View {
                             Text("Register").frame(maxWidth: .infinity)
                         }
                     }
-                    .disabled(adminPassword.isEmpty || deviceLabel.isEmpty || authVM.isLoading)
+                    .disabled(deviceLabel.isEmpty || authVM.isLoading)
+                } footer: {
+                    Text("Requires an active admin session (Sign in with Apple).")
+                        .font(.caption)
                 }
 
                 if let error = authVM.errorMessage {
