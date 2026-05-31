@@ -1369,13 +1369,7 @@ button:disabled{opacity:0.5;cursor:default}
   <h1>Network Traffic Monitor</h1>
   <div class="section">Sign In</div>
   <button class="btn-p" id="bl" onclick="doLogin()">Sign in with a passkey</button>
-  <hr class="divider">
-  <div class="section">Register a New Device</div>
-  <div class="lbl">Admin password</div>
-  <input type="password" id="pwd" placeholder="Admin password" autocomplete="off">
-  <div class="lbl">Device label (optional)</div>
-  <input type="text" id="lbl" placeholder="e.g. iPhone 15" maxlength="64">
-  <button class="btn-s" id="br" onclick="doRegister()">Register this device</button>
+  <button class="btn-s" id="ba" onclick="doApple()" style="display:none">Sign in with Apple (Admin)</button>
   <div id="msg"></div>
 </div>
 <script>
@@ -1389,7 +1383,6 @@ function bb2(b){
   const a=new Uint8Array(b),s=Array.from(a,x=>String.fromCharCode(x)).join('');
   return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
 }
-function hex(b){return Array.from(new Uint8Array(b),x=>x.toString(16).padStart(2,'0')).join('');}
 async function doLogin(){
   msg('','');const btn=document.getElementById('bl');btn.disabled=true;
   try{
@@ -1411,38 +1404,11 @@ async function doLogin(){
     setTimeout(()=>location.href='/',800);
   }catch(e){msg(e.message||String(e),true);btn.disabled=false;}
 }
-async function doRegister(){
-  msg('','');const btn=document.getElementById('br');btn.disabled=true;
-  const pw=document.getElementById('pwd').value;
-  const lb=document.getElementById('lbl').value||'My Device';
-  if(!pw){msg('Admin password required.',true);btn.disabled=false;return;}
-  try{
-    const r1=await fetch('/auth/register/begin',{cache:'no-store'});
-    const d=await r1.json();if(d.error)throw new Error(d.error);
-    const pwb=new TextEncoder().encode(pw);
-    const bk=await crypto.subtle.importKey('raw',pwb,'PBKDF2',false,['deriveBits']);
-    const db=await crypto.subtle.deriveBits({name:'PBKDF2',salt:b2b(d.pbkdf2_salt),
-      iterations:d.pbkdf2_iterations,hash:'SHA-256'},bk,256);
-    const hk=await crypto.subtle.importKey('raw',db,{name:'HMAC',hash:'SHA-256'},false,['sign']);
-    const proof=hex(await crypto.subtle.sign('HMAC',hk,b2b(d.admin_nonce)));
-    const cred=await navigator.credentials.create({publicKey:{
-      challenge:b2b(d.challenge),
-      rp:{id:d.rp_id,name:d.rp_name},
-      user:{id:b2b(d.user_id),name:'admin',displayName:'Admin'},
-      pubKeyCredParams:[{type:'public-key',alg:-7}],
-      authenticatorSelection:{authenticatorAttachment:'platform',
-        residentKey:'preferred',requireResidentKey:false,userVerification:'preferred'},
-      timeout:60000,attestation:'none'}});
-    const r2=await fetch('/auth/register/complete',{method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({session_key:d.session_key,admin_proof:proof,
-        attestation_object:bb2(cred.response.attestationObject),
-        client_data_json:bb2(cred.response.clientDataJSON),label:lb})});
-    const d2=await r2.json();if(!r2.ok||d2.error)throw new Error(d2.error||'Registration failed');
-    msg('Device registered — you can now sign in.',false);
-  }catch(e){msg(e.message||String(e),true);}
-  btn.disabled=false;
-}
+function doApple(){location.href='/auth/apple/start';}
+// Show the Apple button if the server has SIWA enabled.
+fetch('/api/session',{cache:'no-store'}).then(r=>r.json()).then(d=>{
+  if(d.siwa_enabled)document.getElementById('ba').style.display='';
+}).catch(()=>{});
 </script>
 </body>
 </html>
@@ -1506,7 +1472,7 @@ tr:hover td{background:#171726}
 <div class="hdr">
   <h1>Network Traffic Monitor</h1>
   <div class="hdr-links">
-    <a href="/admin" class="admin-lnk">Admin</a>
+    <a href="/admin" class="admin-lnk" id="admin-lnk" style="display:none">Admin</a>
     <button class="logout-btn" onclick="doLogout()">Sign out</button>
   </div>
 </div>
@@ -1804,6 +1770,10 @@ refresh=async function(){
 };
 refresh();
 setInterval(refresh,POLL_MS);
+// Show admin link only for admin sessions.
+fetch('/api/session',{cache:'no-store'}).then(r=>r.json()).then(d=>{
+  if(d.role==='admin'){const el=document.getElementById('admin-lnk');if(el)el.style.display='';}
+}).catch(()=>{});
 </script>
 </body>
 </html>
@@ -2033,6 +2003,26 @@ button{font-family:monospace;font-size:0.82em;padding:5px 14px;border-radius:3px
   </div>
   <div class="err-msg" id="demo_err" style="margin-top:8px"></div>
 </div>
+<!-- ── Registered Passkeys ──────────────────────────────────────────────── -->
+<div class="section" style="margin-top:22px">Registered Passkeys</div>
+<div class="sub">These are all passkeys that can log in to the dashboard. Revoke any you no longer recognise.</div>
+<table id="pk_tbl"><thead><tr><th>Label</th><th>Sign count</th><th></th></tr></thead>
+<tbody id="pk_body"><tr><td colspan="3" style="color:#555">Loading&hellip;</td></tr></tbody></table>
+<div class="err-msg" id="pk_err" style="margin-top:6px"></div>
+
+<!-- ── Register a New Device ─────────────────────────────────────────────── -->
+<div class="section" style="margin-top:22px">Register a New Device</div>
+<div class="sub">Enroll a new passkey for dashboard access. You must be signed in as admin.</div>
+<div class="panel">
+  <div class="lbl">Device label (optional)</div>
+  <input type="text" id="reg_lbl" placeholder="e.g. iPhone 15" maxlength="64"
+    style="background:#0e0e14;border:1px solid #3a3a5a;color:#ccc;padding:7px 10px;
+           font-family:monospace;font-size:0.85em;border-radius:3px;width:100%;
+           margin-bottom:10px;outline:none">
+  <button class="btn-back" id="reg_btn" onclick="doAdminRegister()">Register this device</button>
+  <div class="err-msg" id="reg_msg" style="margin-top:8px"></div>
+</div>
+
 </div><!-- /main-content -->
 
 <script>
@@ -2810,7 +2800,91 @@ async function loadAll(){
   await Promise.all([loadClients(),loadMonitors(),loadHiddenEntities(),loadClientConfigs()]);
 }
 
+// ---------------------------------------------------------------------------
+// Passkey management
+// ---------------------------------------------------------------------------
+async function loadPasskeys(){
+  const body=document.getElementById('pk_body');
+  const err=document.getElementById('pk_err');
+  try{
+    const r=await fetch('/api/admin/passkeys',{cache:'no-store'});
+    if(handleAdminExpiry(r.status))return;
+    const d=await r.json();
+    if(!r.ok||d.error){err.textContent=d.error||'Failed to load passkeys';return;}
+    err.textContent='';
+    if(!d.passkeys||!d.passkeys.length){
+      body.innerHTML='<tr><td colspan="3" style="color:#555">No passkeys registered.</td></tr>';
+      return;
+    }
+    body.innerHTML=d.passkeys.map(p=>`
+      <tr>
+        <td>${esc(p.label)}</td>
+        <td>${p.sign_count}</td>
+        <td><button class="btn-purge" style="padding:2px 10px;font-size:0.78em"
+            onclick="revokePasskey('${esc(p.cred_id)}','${esc(p.label)}')">Revoke</button></td>
+      </tr>`).join('');
+  }catch(e){err.textContent='Error: '+e.message;}
+}
+
+async function revokePasskey(credId,label){
+  if(!confirm('Revoke passkey "'+label+'"? This cannot be undone.'))return;
+  const err=document.getElementById('pk_err');
+  try{
+    const r=await fetch('/api/admin/passkeys/'+encodeURIComponent(credId),
+                        {method:'DELETE'});
+    if(handleAdminExpiry(r.status))return;
+    const d=await r.json();
+    if(!r.ok||d.error){err.textContent=d.error||'Revoke failed';return;}
+    err.textContent='';
+    loadPasskeys();
+  }catch(e){err.textContent='Error: '+e.message;}
+}
+
+// ---------------------------------------------------------------------------
+// Admin-gated passkey registration
+// ---------------------------------------------------------------------------
+function b2b(s){
+  s=s.replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';
+  const b=atob(s),a=new Uint8Array(b.length);
+  for(let i=0;i<b.length;i++)a[i]=b.charCodeAt(i);return a.buffer;
+}
+function bb2(b){
+  const a=new Uint8Array(b),s=Array.from(a,x=>String.fromCharCode(x)).join('');
+  return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
+async function doAdminRegister(){
+  const msg=document.getElementById('reg_msg');
+  const btn=document.getElementById('reg_btn');
+  const lb=document.getElementById('reg_lbl').value||'My Device';
+  msg.textContent='';btn.disabled=true;
+  try{
+    const r1=await fetch('/api/admin/register/begin',{cache:'no-store'});
+    if(handleAdminExpiry(r1.status)){btn.disabled=false;return;}
+    const d=await r1.json();if(d.error)throw new Error(d.error);
+    const cred=await navigator.credentials.create({publicKey:{
+      challenge:b2b(d.challenge),
+      rp:{id:d.rp_id,name:d.rp_name},
+      user:{id:b2b(d.user_id),name:'dashboard',displayName:'Dashboard User'},
+      pubKeyCredParams:[{type:'public-key',alg:-7}],
+      authenticatorSelection:{authenticatorAttachment:'platform',
+        residentKey:'preferred',requireResidentKey:false,userVerification:'preferred'},
+      timeout:60000,attestation:'none'}});
+    const r2=await fetch('/api/admin/register/complete',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({session_key:d.session_key,
+        attestation_object:bb2(cred.response.attestationObject),
+        client_data_json:bb2(cred.response.clientDataJSON),label:lb})});
+    if(handleAdminExpiry(r2.status)){btn.disabled=false;return;}
+    const d2=await r2.json();if(!r2.ok||d2.error)throw new Error(d2.error||'Registration failed');
+    msg.style.color='#4c4';msg.textContent='Device registered — it can now sign in with a passkey.';
+    document.getElementById('reg_lbl').value='';
+    loadPasskeys();
+  }catch(e){msg.style.color='#c44';msg.textContent=e.message||String(e);}
+  btn.disabled=false;
+}
+
 loadAll();
+loadPasskeys();
 </script>
 </body>
 </html>
@@ -2961,12 +3035,20 @@ void registerWebHandlers(NtmHttpServer &svr,
                 // Authenticated dashboard client — record IP for overhead classification.
                 if (config.dashboard_ips) config.dashboard_ips->add(ip);
 
-                // Admin API paths additionally require the short-lived ntm_admin cookie
-                // issued by POST /api/admin/auth (password re-verification).
-                // /api/admin/auth itself is exempt — it is the issuance endpoint.
+                // Admin API paths require admin-level authentication.
+                // Phase A: if SIWA is configured, use isAdminSession (role on the
+                // session token itself).  Otherwise fall back to the legacy ntm_admin
+                // proof-cookie path so password-based configs keep working.
+                // /api/admin/auth is exempt regardless — it is the legacy issuance endpoint.
                 if (isAdminApiPath(path) && path != "/api/admin/auth")
                 {
-                    if (!checkAdminProofToken(cookieFromRequest(req, "ntm_admin")))
+                    bool adminOk = false;
+                    if (config.siwaConfig && config.siwaConfig->enabled())
+                        adminOk = config.webauthn->isAdminSession(token);
+                    else
+                        adminOk = checkAdminProofToken(cookieFromRequest(req, "ntm_admin"));
+
+                    if (!adminOk)
                     {
                         res.status = 403;
                         res.set_content("{\"error\":\"admin authentication required\"}\n",
@@ -2999,14 +3081,20 @@ void registerWebHandlers(NtmHttpServer &svr,
         res.set_content(kLoginHtml, "text/html; charset=utf-8");
     });
 
-    // GET /admin — serve full dashboard or password entry page based on ntm_admin cookie.
-    // WebAuthn session is already verified by pre-routing; the ntm_admin cookie is the
-    // second factor proving the visitor knows the admin password.
+    // GET /admin — serve admin panel or redirect/auth-prompt depending on role.
+    // WebAuthn session is already verified by pre-routing.
+    // Phase A: SIWA → role-based gate; legacy → ntm_admin proof-cookie gate.
     const bool adminAvailable = (config.webauthn && config.webauthn->enabled());
     if (adminAvailable)
     {
-        svr.Get("/admin", [](const httplib::Request &req, httplib::Response &res) {
-            if (checkAdminProofToken(cookieFromRequest(req, "ntm_admin")))
+        svr.Get("/admin", [&config](const httplib::Request &req, httplib::Response &res) {
+            bool isAdmin = false;
+            if (config.siwaConfig && config.siwaConfig->enabled())
+                isAdmin = config.webauthn->isAdminSession(sessionFromRequest(req));
+            else
+                isAdmin = checkAdminProofToken(cookieFromRequest(req, "ntm_admin"));
+
+            if (isAdmin)
                 res.set_content(kAdminHtml, "text/html; charset=utf-8");
             else
                 res.set_content(kAdminAuthHtml, "text/html; charset=utf-8");
@@ -3810,7 +3898,231 @@ void registerWebHandlers(NtmHttpServer &svr,
                     res.set_content(config.webauthn->aasaJson(), "application/json");
                 });
         }
+
+        // Admin-session-gated passkey registration (no password proof — admin already logged in).
+        // GET /api/admin/register/begin, POST /api/admin/register/complete
+        // Both paths start with /api/admin/ so they are automatically admin-gated by pre-routing.
+        svr.Get("/api/admin/register/begin",
+            [&config](const httplib::Request &, httplib::Response &res) {
+                res.set_header("Cache-Control", "no-store");
+                std::string key;
+                res.set_content(config.webauthn->beginAdminRegistration(key),
+                                "application/json");
+            });
+
+        svr.Post("/api/admin/register/complete",
+            [&config](const httplib::Request &req, httplib::Response &res) {
+                if (!adminRateLimiter.tryAcquire(effectiveClientIP(req, config)))
+                {
+                    res.status = 429;
+                    res.set_header("Retry-After", "60");
+                    res.set_content("{\"error\":\"rate limit exceeded\"}\n", "application/json");
+                    return;
+                }
+                const std::string &b  = req.body;
+                std::string sessionKey = jsonGetString(b, "session_key");
+                std::string attObj     = jsonGetString(b, "attestation_object");
+                std::string cdJson     = jsonGetString(b, "client_data_json");
+                std::string label      = jsonGetString(b, "label");
+                if (sessionKey.empty() || attObj.empty() || cdJson.empty())
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"missing required fields\"}\n", "application/json");
+                    return;
+                }
+                std::string err = config.webauthn->completeAdminRegistration(
+                    sessionKey, attObj, cdJson, label);
+                if (!err.empty())
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"" + jsonEsc(err) + "\"}\n", "application/json");
+                    return;
+                }
+                res.set_content("{\"ok\":true}\n", "application/json");
+            });
+
+        // GET /api/admin/passkeys — list all registered passkeys (credId, label, signCount).
+        if (adminAvailable)
+        {
+            svr.Get("/api/admin/passkeys",
+                [&config](const httplib::Request &, httplib::Response &res) {
+                    const auto creds = config.webauthn->listCredentials();
+                    std::string j = "{\"passkeys\":[";
+                    bool first = true;
+                    for (const auto &c : creds)
+                    {
+                        if (!first) j += ',';
+                        j += "{\"cred_id\":\"" + jsonEsc(c.credId) +
+                             "\",\"label\":\""  + jsonEsc(c.label)  +
+                             "\",\"sign_count\":" + std::to_string(c.signCount) + "}";
+                        first = false;
+                    }
+                    j += "]}\n";
+                    res.set_content(j, "application/json");
+                });
+
+            // DELETE /api/admin/passkeys/:credId — revoke a registered passkey.
+            svr.Delete("/api/admin/passkeys/:credId",
+                [&config](const httplib::Request &req, httplib::Response &res) {
+                    const std::string credId = req.path_params.at("credId");
+                    if (credId.empty())
+                    {
+                        res.status = 400;
+                        res.set_content("{\"error\":\"credId required\"}\n", "application/json");
+                        return;
+                    }
+                    if (!config.webauthn->deleteCredential(credId))
+                    {
+                        res.status = 404;
+                        res.set_content("{\"error\":\"credential not found\"}\n", "application/json");
+                        return;
+                    }
+                    res.set_content("{\"ok\":true}\n", "application/json");
+                });
+        }
     }
+
+    // ── Sign in with Apple routes ─────────────────────────────────────────────
+    // All three paths begin with /auth/ which is auth-exempt by isAuthExemptPath().
+    if (config.siwaConfig && config.siwaConfig->enabled() && config.siwaValidator)
+    {
+        // GET /auth/apple/start — generate state+nonce, redirect to Apple.
+        svr.Get("/auth/apple/start",
+            [&config](const httplib::Request &, httplib::Response &res) {
+                std::string state;
+                const std::string url = config.siwaValidator->beginFlow(state);
+                // Store state in a short-lived cookie so we can match it on callback.
+                // SameSite=None is required because Apple does a cross-site form_post.
+                res.set_header("Set-Cookie",
+                    "ntm_siwa_state=" + state +
+                    "; HttpOnly; Secure; SameSite=None; Path=/auth/apple/callback; Max-Age=600");
+                res.set_header("Location", url);
+                res.status = 302;
+            });
+
+        // POST /auth/apple/callback — Apple form_post callback.
+        // SameSite=None cookie is sent cross-site, so we can match the state.
+        svr.Post("/auth/apple/callback",
+            [&config](const httplib::Request &req, httplib::Response &res) {
+                // Extract form fields (Apple uses application/x-www-form-urlencoded).
+                const std::string state   = req.get_param_value("state");
+                const std::string idToken = req.get_param_value("id_token");
+                if (state.empty() || idToken.empty())
+                {
+                    res.status = 400;
+                    res.set_content("Bad callback: missing state or id_token", "text/plain");
+                    return;
+                }
+
+                // Allowed audiences: web service ID only for this route.
+                std::vector<std::string> auds = { config.siwaConfig->serviceId };
+
+                auto result = config.siwaValidator->verifyCallback(state, idToken, auds);
+                if (!result.ok)
+                {
+                    serverLog(LogLevel::Warn,
+                              "ntm-server: SIWA callback rejected: %s", result.error.c_str());
+                    res.status = 401;
+                    res.set_content("Sign in with Apple failed: " + result.error, "text/plain");
+                    return;
+                }
+
+                // Determine role and create session.
+                const bool isAdmin = config.siwaAdmins &&
+                                     config.siwaAdmins->matchAndPin(result.sub, result.email);
+                const std::string token = config.webauthn->createIdentitySession(
+                    result.sub, isAdmin);
+
+                serverLog(LogLevel::Info,
+                          "ntm-server: SIWA login OK — sub=%s email=%s admin=%s",
+                          result.sub.c_str(), result.email.c_str(),
+                          isAdmin ? "yes" : "no");
+
+                res.set_header("Set-Cookie",
+                    "ntm_session=" + token +
+                    "; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=86400");
+                // Clear the state cookie.
+                res.set_header("Set-Cookie",
+                    "ntm_siwa_state=; HttpOnly; Secure; SameSite=None; Path=/auth/apple/callback"
+                    "; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT");
+                res.set_header("Location", isAdmin ? "/admin" : "/");
+                res.status = 302;
+            });
+
+        // POST /auth/apple/native — iOS native sign-in via ASAuthorizationAppleIDCredential.
+        // Body JSON: {"identity_token":"<base64url JWT>"}
+        svr.Post("/auth/apple/native",
+            [&config](const httplib::Request &req, httplib::Response &res) {
+                const std::string idToken = jsonGetString(req.body, "identity_token");
+                if (idToken.empty())
+                {
+                    res.status = 400;
+                    res.set_content("{\"error\":\"identity_token required\"}\n", "application/json");
+                    return;
+                }
+
+                std::vector<std::string> auds = { config.siwaConfig->serviceId };
+                if (!config.siwaConfig->iosBundleId.empty())
+                    auds.push_back(config.siwaConfig->iosBundleId);
+
+                auto result = config.siwaValidator->verifyNative(idToken, auds);
+                if (!result.ok)
+                {
+                    serverLog(LogLevel::Warn,
+                              "ntm-server: SIWA native rejected: %s", result.error.c_str());
+                    res.status = 401;
+                    res.set_content("{\"error\":\"" + jsonEsc(result.error) + "\"}\n",
+                                    "application/json");
+                    return;
+                }
+
+                const bool isAdmin = config.siwaAdmins &&
+                                     config.siwaAdmins->matchAndPin(result.sub, result.email);
+                const std::string token = config.webauthn->createIdentitySession(
+                    result.sub, isAdmin);
+
+                serverLog(LogLevel::Info,
+                          "ntm-server: SIWA native OK — sub=%s admin=%s",
+                          result.sub.c_str(), isAdmin ? "yes" : "no");
+
+                res.set_content("{\"ok\":true,\"token\":\"" + token +
+                                "\",\"role\":\"" + (isAdmin ? "admin" : "user") + "\"}\n",
+                                "application/json");
+            });
+
+        // GET /.well-known/apple-developer-domain-association.txt
+        if (!config.siwaConfig->domainAssocText.empty())
+        {
+            svr.Get("/.well-known/apple-developer-domain-association.txt",
+                [&config](const httplib::Request &, httplib::Response &res) {
+                    res.set_content(config.siwaConfig->domainAssocText, "text/plain");
+                });
+        }
+    }
+
+    // GET /api/session — return role info for the current session (used by dashboard JS).
+    // Returns 200 even for unauthenticated requests (role="none") so the login page
+    // can check siwa_enabled without needing a session.
+    svr.Get("/api/session",
+        [&config](const httplib::Request &req, httplib::Response &res) {
+            const bool siwaEnabled = (config.siwaConfig && config.siwaConfig->enabled());
+            const std::string token = sessionFromRequest(req);
+            std::string role = "none";
+            std::string identity;
+            if (!token.empty() && config.webauthn)
+            {
+                auto info = config.webauthn->getSessionInfo(token);
+                if (info.valid)
+                {
+                    role     = info.isAdmin ? "admin" : "user";
+                    identity = info.identity;
+                }
+            }
+            res.set_content("{\"role\":\"" + role + "\","
+                            "\"identity\":\"" + jsonEsc(identity) + "\","
+                            "\"siwa_enabled\":" + (siwaEnabled ? "true" : "false") + "}\n",
+                            "application/json");
+        });
 
     // GET /api/update/check — check if a newer binary is available for this client.
     // Query params: pubkey=<64hex>, platform=<platform>, version=<current>

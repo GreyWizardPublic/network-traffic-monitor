@@ -39,6 +39,7 @@ if(NOT WIN32)
         src/server_core.cpp
         src/web_dashboard.cpp
         src/webauthn.cpp
+        src/siwa.cpp
     )
     target_compile_definitions(ntm-server PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
     target_link_libraries(ntm-server
@@ -319,6 +320,9 @@ if(NOT WIN32)
         tests/test_parse_data_line.cpp
         tests/test_proto_constants.cpp
         tests/test_web_auth.cpp
+        tests/test_siwa.cpp
+        src/siwa.cpp
+        src/webauthn.cpp
         tests/test_client_http_util.cpp
         tests/test_client_websocket.cpp
         tests/test_client_config.cpp
@@ -335,9 +339,11 @@ if(NOT WIN32)
         tests/test_update_push.cpp
     )
     target_include_directories(ntm-tests PRIVATE src tests)
+    target_compile_definitions(ntm-tests PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
     # ntm_types.hpp uses POSIX socket headers for isLanIP(); no extra libs needed.
     # test_zlib_stream.cpp uses zlib_stream.hpp which needs ZLIB::ZLIB.
     # test_server_signing.cpp uses OpenSSL EVP for ML-DSA-65 key generation + verification.
+    # test_siwa.cpp uses siwa.cpp (JWKS + RSA verify) which needs OpenSSL::SSL.
     # test_client_filelog.cpp uses client_filelog.cpp which needs std::filesystem (C++17).
     target_link_libraries(ntm-tests PRIVATE ZLIB::ZLIB OpenSSL::SSL OpenSSL::Crypto)
     target_compile_options(ntm-tests PRIVATE -Wall -Wextra -Wpedantic)

@@ -72,6 +72,17 @@ public:
     bool isValidSession(const std::string &token);
     void invalidateSession(const std::string &token);
 
+    // Create a session for an externally-authenticated identity (e.g. Sign in with Apple).
+    // identity: Apple sub or email for audit logging. isAdmin: true for admin users.
+    std::string createIdentitySession(const std::string &identity, bool isAdmin);
+
+    // Returns true if the session is valid AND was created with isAdmin=true.
+    bool isAdminSession(const std::string &token);
+
+    // Role info returned by getSessionInfo.
+    struct SessionInfo { bool valid{false}; bool isAdmin{false}; std::string identity; };
+    SessionInfo getSessionInfo(const std::string &token);
+
     // --- Admin credential management ---
     // Hash plaintext password with PBKDF2 and persist to adminCredFile.
     std::string migrateAdminPassword(const std::string &plaintext);
@@ -83,6 +94,14 @@ public:
     // --- Credential listing / deletion (admin UI) ---
     std::vector<PasskeyCredential> listCredentials() const;
     bool deleteCredential(const std::string &credId);
+
+    // --- Admin-session-gated passkey registration (no password proof required) ---
+    // Used when the caller is already authenticated as admin via Sign in with Apple.
+    std::string beginAdminRegistration(std::string &sessionKey);
+    std::string completeAdminRegistration(const std::string &sessionKey,
+                                          const std::string &attestationObjectB64,
+                                          const std::string &clientDataJsonB64,
+                                          const std::string &label);
 
     // Returns the Apple App Site Association JSON, or "" if iosAppId is not set.
     std::string aasaJson() const;
@@ -109,6 +128,8 @@ private:
     {
         std::chrono::steady_clock::time_point expiry;
         std::chrono::steady_clock::time_point lastActivity;
+        bool        isAdmin{false};
+        std::string identity;  // Apple sub (SIWA sessions) or "" (passkey sessions)
     };
 
     struct AdminCred
