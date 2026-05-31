@@ -222,13 +222,35 @@ bool SiwaValidator::ensureJwks()
 
     // Fetch from Apple (HTTPS GET https://appleid.apple.com/auth/keys).
     httplib::SSLClient cli("appleid.apple.com");
-    cli.set_connection_timeout(5, 0);
-    cli.set_read_timeout(10, 0);
-    auto res = cli.Get("/auth/keys");
-    if (!res || res->status != 200)
+    cli.set_connection_timeout(10, 0);
+    cli.set_read_timeout(15, 0);
+
+    // Try common CA bundle locations so the fetch works on all Linux distributions.
+    static const char *kCaPaths[] = {
+        "/etc/ssl/certs/ca-certificates.crt",   // Debian / Ubuntu / Arch
+        "/etc/pki/tls/certs/ca-bundle.crt",     // RHEL / CentOS / Fedora
+        "/etc/ssl/cert.pem",                     // Alpine / macOS
+        nullptr
+    };
+    for (const char **p = kCaPaths; *p; ++p)
     {
-        fprintf(stderr, "ntm siwa: JWKS fetch failed (status %d)\n",
-                res ? res->status : 0);
+        if (std::ifstream(*p).good()) { cli.set_ca_cert_path(*p); break; }
+    }
+
+    auto res = cli.Get("/auth/keys");
+    if (!res)
+    {
+        fprintf(stderr,
+                "ntm siwa: JWKS fetch failed — could not connect to appleid.apple.com "
+                "(error: %s; ssl_error: %d). "
+                "Check outbound firewall: server needs port 443 to 17.0.0.0/8 "
+                "(Apple ID servers).\n",
+                httplib::to_string(res.error()).c_str(), res.ssl_error());
+        return false;
+    }
+    if (res->status != 200)
+    {
+        fprintf(stderr, "ntm siwa: JWKS fetch returned HTTP %d\n", res->status);
         return false;
     }
     jwksKeys_ = parseJwksJson(res->body);
