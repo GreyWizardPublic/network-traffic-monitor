@@ -52,9 +52,15 @@ while IFS= read -r f; do
             [[ "$f" == "src/ntm_test.hpp" ]] && continue ;;
     esac
 
-    # CMakeLists.txt changes affect both compiled binaries.
+    # CMakeLists.txt: always requires a server bump; requires a client bump only if
+    # a line touching a client-specific target or source actually changed.
     if [[ "$f" == "CMakeLists.txt" ]]; then
-        needs_server=1; needs_client=1; continue
+        needs_server=1
+        # Check whether the diff touches client-specific content.
+        if git diff --cached -- CMakeLists.txt | grep -qE '^\+.*ntm-client|^\+.*NTM_CLIENT|^\+.*ntm-tests-windows'; then
+            needs_client=1
+        fi
+        continue
     fi
 
     # Generated Xcode project files — not module source.

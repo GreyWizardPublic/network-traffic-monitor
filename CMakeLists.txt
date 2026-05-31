@@ -343,9 +343,9 @@ if(NOT WIN32)
     # ntm_types.hpp uses POSIX socket headers for isLanIP(); no extra libs needed.
     # test_zlib_stream.cpp uses zlib_stream.hpp which needs ZLIB::ZLIB.
     # test_server_signing.cpp uses OpenSSL EVP for ML-DSA-65 key generation + verification.
-    # test_siwa.cpp uses siwa.cpp (JWKS + RSA verify) which needs OpenSSL::SSL.
+    # test_siwa.cpp uses siwa.cpp (JWKS + RSA verify) which needs OpenSSL::SSL and CURL.
     # test_client_filelog.cpp uses client_filelog.cpp which needs std::filesystem (C++17).
-    target_link_libraries(ntm-tests PRIVATE ZLIB::ZLIB OpenSSL::SSL OpenSSL::Crypto)
+    target_link_libraries(ntm-tests PRIVATE ZLIB::ZLIB OpenSSL::SSL OpenSSL::Crypto CURL::libcurl)
     target_compile_options(ntm-tests PRIVATE -Wall -Wextra -Wpedantic)
     set_target_properties(ntm-tests PROPERTIES OUTPUT_NAME "ntm-tests")
 
