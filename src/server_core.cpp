@@ -108,11 +108,6 @@ struct ServerConfig
     // Cloudflare Tunnel). Empty = no proxy; req.remote_addr is used directly.
     std::string trusted_proxy;
 
-    // Admin API: path to plain-text password file. Empty = admin endpoints disabled.
-    // On startup, if webauthn_admin_cred_file is also configured, the plaintext is
-    // migrated to PBKDF2 and this file is securely erased (idempotent).
-    std::string admin_password_file;
-
     // Hidden entities: clients/ifaces filtered from /api/summary.
     // Empty = feature disabled (store not loaded; admin endpoints not registered).
     std::string hidden_entities_file;
@@ -122,7 +117,6 @@ struct ServerConfig
     std::string webauthn_rp_id;              // RP ID, e.g. "ntm.happyhomelives.me"
     std::string webauthn_rp_name;            // display name, e.g. "NTM Dashboard"
     std::string webauthn_credentials_file;   // JSON file persisting registered passkeys
-    std::string webauthn_admin_cred_file;    // JSON file storing PBKDF2 admin credential
     std::string webauthn_ios_app_id;         // "<TeamID>.<BundleID>" for AASA
     std::string webauthn_allowed_origins;    // comma-separated; default: "https://<rpId>"
     unsigned    webauthn_session_ttl_hours{24};
@@ -934,9 +928,8 @@ static const std::set<std::string> &knownServerConfigKeys()
         "max_iface_len", "max_ip_len",
         "max_concurrent_connections", "max_connections_per_ip",
         "idle_timeout_seconds", "max_d_lines_per_second_per_connection",
-        "admin_password_file",
         "webauthn_rp_id", "webauthn_rp_name",
-        "webauthn_credentials_file", "webauthn_admin_cred_file",
+        "webauthn_credentials_file",
         "webauthn_ios_app_id", "webauthn_allowed_origins",
         "webauthn_session_ttl_hours", "webauthn_idle_timeout_minutes",
         "siwa_service_id", "siwa_ios_bundle_id", "siwa_redirect_uri",
@@ -1050,14 +1043,9 @@ static ServerConfig loadServerConfig(const std::string &configPath, bool *ok = n
                 u = std::stoul(val);
                 cfg.web_rate_limit_rpm = static_cast<unsigned>(std::min(100000ul, u));
             }
-            else if (key == "admin_password_file")
-            {
-                cfg.admin_password_file = val;
-            }
             else if (key == "webauthn_rp_id")        { cfg.webauthn_rp_id = val; }
             else if (key == "webauthn_rp_name")       { cfg.webauthn_rp_name = val; }
             else if (key == "webauthn_credentials_file") { cfg.webauthn_credentials_file = val; }
-            else if (key == "webauthn_admin_cred_file")  { cfg.webauthn_admin_cred_file = val; }
             else if (key == "webauthn_ios_app_id")    { cfg.webauthn_ios_app_id = val; }
             else if (key == "webauthn_allowed_origins") { cfg.webauthn_allowed_origins = val; }
             else if (key == "siwa_service_id")        { cfg.siwa_service_id = val; }
@@ -2518,7 +2506,6 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
         waCfg.rpName            = config.webauthn_rp_name.empty()
                                       ? config.webauthn_rp_id : config.webauthn_rp_name;
         waCfg.credentialsFile   = config.webauthn_credentials_file;
-        waCfg.adminCredFile     = config.webauthn_admin_cred_file;
         waCfg.iosAppId             = config.webauthn_ios_app_id;
         waCfg.sessionTtlHours      = config.webauthn_session_ttl_hours;
         waCfg.idleTimeoutMinutes   = config.webauthn_idle_timeout_minutes;
@@ -2588,80 +2575,11 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
         }
     }
 
-    // ── Admin password: load (legacy) or migrate to PBKDF2 (WebAuthn path) ──
-    std::string adminPassword;
-    if (!config.admin_password_file.empty())
-    {
-        std::ifstream apf(config.admin_password_file);
-        if (!apf)
-        {
-            serverLog(LogLevel::Warn,
-                      "ntm-server: admin_password_file '%s' cannot be opened",
-                      config.admin_password_file.c_str());
-        }
-        else
-        {
-            std::getline(apf, adminPassword);
-            while (!adminPassword.empty() &&
-                   (adminPassword.back() == '\r' || adminPassword.back() == '\n' ||
-                    adminPassword.back() == ' '))
-                adminPassword.pop_back();
-            apf.close();
-
-            if (adminPassword.empty())
-            {
-                serverLog(LogLevel::Warn,
-                          "ntm-server: admin_password_file '%s' is empty",
-                          config.admin_password_file.c_str());
-            }
-            else if (webAuthnRP && !config.webauthn_admin_cred_file.empty())
-            {
-                // Migrate plaintext → PBKDF2 hash, then securely erase the original file.
-                // SECURITY NOTE (see README): if the server is compromised before migration
-                // runs, the plaintext file is at risk. Consider pre-migrating manually.
-                std::string migErr = webAuthnRP->migrateAdminPassword(adminPassword);
-                if (!migErr.empty())
-                {
-                    serverLog(LogLevel::Warn,
-                              "ntm-server: admin password migration failed: %s", migErr.c_str());
-                }
-                else
-                {
-                    // Securely overwrite then unlink the plaintext password file.
-                    {
-                        std::fstream wipe(config.admin_password_file,
-                                          std::ios::in | std::ios::out | std::ios::binary);
-                        if (wipe)
-                        {
-                            wipe.seekg(0, std::ios::end);
-                            auto fsize = static_cast<std::size_t>(wipe.tellg());
-                            wipe.seekp(0, std::ios::beg);
-                            std::vector<char> zeros(fsize, '\0');
-                            wipe.write(zeros.data(), static_cast<std::streamsize>(fsize));
-                            wipe.flush();
-                        }
-                    }
-                    std::remove(config.admin_password_file.c_str());
-                    adminPassword.clear();
-                    serverLog(LogLevel::Warn,
-                              "ntm-server: admin password migrated to PBKDF2 and plaintext file erased");
-                }
-            }
-            else if (!webAuthnRP)
-            {
-                serverLog(LogLevel::Warn,
-                          "ntm-server: admin_password_file set but WebAuthn not configured "
-                          "(webauthn_rp_id missing) — web dashboard will not start");
-            }
-        }
-    }
-
-    if (webAuthnRP && webAuthnRP->hasAdminCred())
-        serverLog(LogLevel::Warn, "ntm-server: WebAuthn admin credential loaded");
-    else if (webAuthnRP)
+    if (webAuthnRP && (!siwaConfig || !siwaConfig->enabled()))
         serverLog(LogLevel::Warn,
-                  "ntm-server: WebAuthn enabled but no admin credential — "
-                  "set admin_password_file to register devices");
+                  "ntm-server: WebAuthn enabled but Sign in with Apple (siwa_service_id) is not "
+                  "configured — admin panel will be inaccessible. Set siwa_service_id and "
+                  "siwa_admins to enable admin access.");
 
     TrafficStats stats(config.aggregation_window_days,
                        config.max_flow_entries_per_key,

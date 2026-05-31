@@ -5,7 +5,6 @@
 #include "webauthn.hpp"
 
 #include <openssl/evp.h>
-#include <openssl/hmac.h>
 #include <openssl/rand.h>
 #include <openssl/sha.h>
 #include <openssl/x509.h>   // d2i_PUBKEY
@@ -15,7 +14,6 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
-#include <sstream>
 
 namespace ntm
 {
@@ -283,7 +281,6 @@ WebAuthnRP::WebAuthnRP(WebAuthnConfig cfg) : cfg_(std::move(cfg))
             cfg_.allowedOrigins.push_back("https://" + cfg_.rpId);
 
         loadCredentials();
-        loadAdminCred();
     }
 }
 
@@ -418,124 +415,6 @@ bool WebAuthnRP::verifyEcdsaP256(const std::vector<uint8_t> &pubX,
 }
 
 // ---------------------------------------------------------------------------
-// Registration
-// ---------------------------------------------------------------------------
-
-std::string WebAuthnRP::beginRegistration(std::string &sessionKey)
-{
-    std::lock_guard<std::mutex> lk(mtx_);
-    sweepExpired();
-
-    if (!adminCred_.has_value())
-        return "{\"error\":\"admin credentials not configured\"}";
-
-    auto wChallenge = randomBytes(32);
-    auto adminNonce = randomBytes(32);
-    sessionKey = toBase64url(randomBytes(24));
-
-    auto expiry = std::chrono::steady_clock::now() + std::chrono::minutes(5);
-    pendingRegs_[sessionKey] = { wChallenge, adminNonce, expiry };
-
-    std::string j;
-    j  = "{\"session_key\":\""; j += sessionKey;
-    j += "\",\"challenge\":\"";   j += toBase64url(wChallenge);
-    j += "\",\"admin_nonce\":\""; j += toBase64url(adminNonce);
-    j += "\",\"pbkdf2_salt\":\""; j += toBase64url(adminCred_->salt);
-    j += "\",\"pbkdf2_iterations\":"; j += std::to_string(adminCred_->iterations);
-    j += ",\"rp_id\":\"";         j += cfg_.rpId;
-    j += "\",\"rp_name\":\"";     j += cfg_.rpName.empty() ? cfg_.rpId : cfg_.rpName;
-    j += "\",\"user_id\":\"";     j += toBase64url(randomBytes(16));
-    j += "\"}";
-    return j;
-}
-
-std::string WebAuthnRP::completeRegistration(const std::string &sessionKey,
-                                              const std::string &adminProofHex,
-                                              const std::string &attestationObjectB64,
-                                              const std::string &clientDataJsonB64,
-                                              const std::string &label)
-{
-    std::lock_guard<std::mutex> lk(mtx_);
-    sweepExpired();
-
-    auto it = pendingRegs_.find(sessionKey);
-    if (it == pendingRegs_.end()) return "invalid or expired session";
-
-    const PendingReg &pr = it->second;
-    if (std::chrono::steady_clock::now() > pr.expiry)
-    {
-        pendingRegs_.erase(it);
-        return "session expired";
-    }
-
-    // Verify admin PBKDF2 proof: expected = HMAC-SHA256(storedHash, adminNonce)
-    if (!adminCred_.has_value()) { pendingRegs_.erase(it); return "admin not configured"; }
-    {
-        uint8_t expected[32];
-        unsigned elen = 32;
-        HMAC(EVP_sha256(),
-             adminCred_->hash.data(), static_cast<int>(adminCred_->hash.size()),
-             pr.adminNonce.data(),    static_cast<int>(pr.adminNonce.size()),
-             expected, &elen);
-
-        auto submitted = hexToBytes(adminProofHex);
-        bool proofOk = (submitted.size() == 32) &&
-                       (CRYPTO_memcmp(submitted.data(), expected, 32) == 0);
-        if (!proofOk) { pendingRegs_.erase(it); return "admin proof incorrect"; }
-    }
-
-    // Decode and parse clientDataJSON
-    auto cdJsonBytes = fromBase64url(clientDataJsonB64);
-    if (cdJsonBytes.empty()) { pendingRegs_.erase(it); return "bad clientDataJSON"; }
-    std::string cdJson(cdJsonBytes.begin(), cdJsonBytes.end());
-
-    // Verify type
-    if (jsonGetStr(cdJson, "type") != "webauthn.create")
-        { pendingRegs_.erase(it); return "clientDataJSON type mismatch"; }
-
-    // Verify WebAuthn challenge
-    std::string gotChallenge = jsonGetStr(cdJson, "challenge");
-    if (fromBase64url(gotChallenge) != pr.webauthnChallenge)
-        { pendingRegs_.erase(it); return "challenge mismatch"; }
-
-    // Verify origin
-    std::string origin = jsonGetStr(cdJson, "origin");
-    bool originOk = false;
-    for (const auto &ao : cfg_.allowedOrigins)
-        if (ao == origin) { originOk = true; break; }
-    if (!originOk) { pendingRegs_.erase(it); return "origin not allowed: " + origin; }
-
-    // Decode and parse attestationObject
-    auto attObj = fromBase64url(attestationObjectB64);
-    std::vector<uint8_t> authData;
-    if (!extractAuthDataFromAttestationObject(attObj, authData))
-        { pendingRegs_.erase(it); return "failed to parse attestationObject"; }
-
-    // Parse authData: verify RP ID hash, extract credential
-    std::string credId;
-    std::vector<uint8_t> pubX, pubY;
-    uint32_t signCount = 0;
-    if (!parseAuthData(authData, credId, pubX, pubY, signCount, true))
-        { pendingRegs_.erase(it); return "authData validation failed"; }
-
-    // Reject duplicate credential IDs
-    for (const auto &c : credentials_)
-        if (c.credId == credId) { pendingRegs_.erase(it); return "credential already registered"; }
-
-    PasskeyCredential cred;
-    cred.credId    = credId;
-    cred.pubkeyX   = toBase64url(pubX);
-    cred.pubkeyY   = toBase64url(pubY);
-    cred.signCount = signCount;
-    cred.label     = label.empty() ? "My Device" : label;
-
-    credentials_.push_back(cred);
-    saveCredentials();
-    pendingRegs_.erase(it);
-    return "";  // success
-}
-
-// ---------------------------------------------------------------------------
 // Authentication
 // ---------------------------------------------------------------------------
 
@@ -656,7 +535,7 @@ std::string WebAuthnRP::completeAuthentication(const std::string &sessionKey,
     // Issue a session token
     auto token = toBase64url(randomBytes(32));
     auto now   = std::chrono::steady_clock::now();
-    sessions_[token] = { now + std::chrono::hours(cfg_.sessionTtlHours), now };
+    sessions_[token] = { now + std::chrono::hours(cfg_.sessionTtlHours), now, false, {} };
     return token;
 }
 
@@ -727,75 +606,6 @@ WebAuthnRP::SessionInfo WebAuthnRP::getSessionInfo(const std::string &token)
     }
     it->second.lastActivity = now;
     return { true, it->second.isAdmin, it->second.identity };
-}
-
-// ---------------------------------------------------------------------------
-// Admin credential management
-// ---------------------------------------------------------------------------
-
-bool WebAuthnRP::hasAdminCred() const
-{
-    std::lock_guard<std::mutex> lk(mtx_);
-    return adminCred_.has_value();
-}
-
-bool WebAuthnRP::verifyAdminPassword(const std::string &plaintext) const
-{
-    std::lock_guard<std::mutex> lk(mtx_);
-    if (!adminCred_.has_value()) return false;
-    std::vector<uint8_t> derived(32);
-    if (PKCS5_PBKDF2_HMAC(plaintext.data(), static_cast<int>(plaintext.size()),
-                           adminCred_->salt.data(), static_cast<int>(adminCred_->salt.size()),
-                           adminCred_->iterations, EVP_sha256(), 32, derived.data()) != 1)
-        return false;
-    return CRYPTO_memcmp(derived.data(), adminCred_->hash.data(), 32) == 0;
-}
-
-std::string WebAuthnRP::migrateAdminPassword(const std::string &plaintext)
-{
-    if (cfg_.adminCredFile.empty()) return "webauthn_admin_cred_file not configured";
-
-    auto salt = randomBytes(16);
-    std::vector<uint8_t> hash(32);
-    if (PKCS5_PBKDF2_HMAC(plaintext.data(), static_cast<int>(plaintext.size()),
-                           salt.data(), static_cast<int>(salt.size()),
-                           200000, EVP_sha256(), 32, hash.data()) != 1)
-        return "PBKDF2 failed";
-
-    // Write JSON: {"version":1,"hash":"<b64url>","salt":"<b64url>","iterations":200000}
-    std::ofstream f(cfg_.adminCredFile, std::ios::trunc);
-    if (!f) return "cannot write " + cfg_.adminCredFile;
-    f << "{\"version\":1,\"hash\":\"" << toBase64url(hash)
-      << "\",\"salt\":\"" << toBase64url(salt)
-      << "\",\"iterations\":200000}\n";
-    f.close();
-
-    std::lock_guard<std::mutex> lk(mtx_);
-    adminCred_ = AdminCred{ hash, salt, 200000 };
-    return "";
-}
-
-void WebAuthnRP::loadAdminCred()
-{
-    if (cfg_.adminCredFile.empty()) return;
-    std::ifstream f(cfg_.adminCredFile);
-    if (!f) return;
-    std::string json((std::istreambuf_iterator<char>(f)), {});
-
-    std::string hashB64 = jsonGetStr(json, "hash");
-    std::string saltB64 = jsonGetStr(json, "salt");
-
-    auto hash = fromBase64url(hashB64);
-    auto salt = fromBase64url(saltB64);
-    if (hash.size() != 32 || salt.size() < 8) return;
-
-    AdminCred ac;
-    ac.hash = hash;
-    ac.salt = salt;
-    ac.iterations = 200000; // we always write 200000; ignore stored value for robustness
-
-    std::lock_guard<std::mutex> lk(mtx_);
-    adminCred_ = ac;
 }
 
 // ---------------------------------------------------------------------------

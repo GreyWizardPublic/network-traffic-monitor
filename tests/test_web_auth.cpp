@@ -314,40 +314,6 @@ TEST_CASE("hasDemoTokenPrefix: exactly 'demo_' (no body) accepted")
 }
 
 // ============================================================================
-// hasAdminProofPrefix
-// ============================================================================
-
-TEST_CASE("hasAdminProofPrefix: valid prefix accepted")
-{
-    REQUIRE(ntm::hasAdminProofPrefix("ntm_ap_aabbcc"));
-}
-
-TEST_CASE("hasAdminProofPrefix: missing prefix rejected")
-{
-    REQUIRE(!ntm::hasAdminProofPrefix("aabbcc"));
-}
-
-TEST_CASE("hasAdminProofPrefix: empty string rejected")
-{
-    REQUIRE(!ntm::hasAdminProofPrefix(""));
-}
-
-TEST_CASE("hasAdminProofPrefix: 'ntm_ap' without underscore rejected")
-{
-    REQUIRE(!ntm::hasAdminProofPrefix("ntm_apXaabb"));
-}
-
-TEST_CASE("hasAdminProofPrefix: exactly 'ntm_ap_' (no body) accepted")
-{
-    REQUIRE(ntm::hasAdminProofPrefix("ntm_ap_"));
-}
-
-TEST_CASE("hasAdminProofPrefix: demo token does not satisfy admin prefix")
-{
-    REQUIRE(!ntm::hasAdminProofPrefix("demo_aabb"));
-}
-
-// ============================================================================
 // isTrustedProxyCatchAll — L-5 regression
 // ============================================================================
 

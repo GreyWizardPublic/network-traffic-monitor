@@ -144,12 +144,6 @@ inline bool hasDemoTokenPrefix(const std::string &token)
     return token.size() >= 5 && token.substr(0, 5) == "demo_";
 }
 
-// Returns true if token begins with the "ntm_ap_" prefix used for admin-proof tokens.
-inline bool hasAdminProofPrefix(const std::string &token)
-{
-    return token.size() >= 7 && token.substr(0, 7) == "ntm_ap_";
-}
-
 // ---------------------------------------------------------------------------
 // trusted_proxy validation
 // ---------------------------------------------------------------------------

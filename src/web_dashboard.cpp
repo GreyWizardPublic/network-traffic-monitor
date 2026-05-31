@@ -82,26 +82,6 @@ static bool checkDemoToken(const std::string &token)
     return true;
 }
 
-// ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-// Admin proof tokens — short-lived cookie issued after admin password verification.
-// Separate from the WebAuthn passkey session: any passkey user can view the
-// dashboard, but only someone who also knows the admin password can enter /admin.
-// ---------------------------------------------------------------------------
-static constexpr std::int64_t kAdminProofTokenSec = 1800; // 30 minutes
-static std::mutex g_adminProofMtx;
-static std::unordered_map<std::string, std::int64_t> g_adminProofTokens; // token → expiry
-
-static std::string generateAdminProofToken()
-{
-    unsigned char buf[16];
-    RAND_bytes(buf, sizeof(buf));
-    std::string tok = "ntm_ap_";
-    tok.reserve(7 + 32);
-    for (auto b : buf) { char h[3]; std::snprintf(h, sizeof(h), "%02x", b); tok += h; }
-    return tok;
-}
-
 // Generate a short random request-id for C-line log management commands.
 static std::string generateReqId()
 {
@@ -111,18 +91,6 @@ static std::string generateReqId()
     for (int i = 0; i < 8; ++i)
         std::snprintf(hex + i * 2, 3, "%02x", buf[i]);
     return std::string(hex, 16);
-}
-
-static bool checkAdminProofToken(const std::string &token)
-{
-    if (!hasAdminProofPrefix(token)) return false;
-    const auto now = std::chrono::duration_cast<std::chrono::seconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
-    std::lock_guard<std::mutex> lk(g_adminProofMtx);
-    auto it = g_adminProofTokens.find(token);
-    if (it == g_adminProofTokens.end()) return false;
-    if (now >= it->second) { g_adminProofTokens.erase(it); return false; }
-    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -2041,7 +2009,7 @@ let selectedClient=null;
 let selectedClientHexId='';
 
 function handleAdminExpiry(status){
-  if(status===403){window.location.href='/admin';return true;}
+  if(status===403||status===401){window.location.href='/login';return true;}
   return false;
 }
 
@@ -2891,72 +2859,6 @@ loadPasskeys();
 )HTML";
 
 // ---------------------------------------------------------------------------
-// Admin authentication page — shown when ntm_admin cookie is absent/expired.
-// ---------------------------------------------------------------------------
-static const char kAdminAuthHtml[] = R"HTML(<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>NTM Admin &mdash; Authentication</title>
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{background:#0d0d1a;color:#ccc;font-family:monospace;display:flex;align-items:center;justify-content:center;min-height:100vh}
-.card{background:#0d0d1a;border:1px solid #3a3a5a;border-radius:6px;padding:32px 36px;min-width:320px;max-width:400px;width:100%}
-h2{color:#7af;font-size:0.95em;margin-bottom:20px;font-weight:normal;letter-spacing:0.03em}
-label{font-size:0.78em;color:#888;display:block;margin-bottom:6px}
-input[type=password]{background:#111118;border:1px solid #3a3a5a;color:#ccc;padding:7px 10px;font-family:monospace;font-size:0.9em;border-radius:3px;width:100%;outline:none;margin-bottom:12px}
-input[type=password]:focus{border-color:#7af}
-button{background:#101828;color:#7af;border:1px solid #3a5a8a;border-radius:3px;padding:8px 0;width:100%;font-family:monospace;font-size:0.9em;cursor:pointer}
-button:hover{background:#182040}
-button:disabled{opacity:0.5;cursor:default}
-#err{color:#c44;font-size:0.8em;min-height:1.1em;margin-bottom:10px}
-.back{display:block;margin-top:16px;font-size:0.78em;color:#555;text-align:center;text-decoration:none}
-.back:hover{color:#888}
-</style>
-</head>
-<body>
-<div class="card">
-  <h2>&#128274;&nbsp; Admin Authentication</h2>
-  <label for="pwd">Admin password</label>
-  <input type="password" id="pwd" autocomplete="current-password" placeholder="Enter admin password">
-  <div id="err"></div>
-  <button id="btn" onclick="doAuth()">Enter Admin</button>
-  <a href="/" class="back">&#8592; Back to Dashboard</a>
-</div>
-<script>
-async function doAuth(){
-  const btn=document.getElementById('btn');
-  const pwd=document.getElementById('pwd').value;
-  document.getElementById('err').textContent='';
-  if(!pwd)return;
-  btn.disabled=true;btn.textContent='Verifying…';
-  try{
-    const r=await fetch('/api/admin/auth',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({password:pwd})
-    });
-    const d=await r.json();
-    if(r.ok&&d.ok){window.location.href='/admin';}
-    else{
-      document.getElementById('err').textContent='✗ '+(d.error||'Incorrect password');
-      document.getElementById('pwd').value='';
-      document.getElementById('pwd').focus();
-    }
-  }catch(e){
-    document.getElementById('err').textContent='✗ Request failed: '+e.message;
-  }
-  btn.disabled=false;btn.textContent='Enter Admin';
-}
-document.getElementById('pwd').addEventListener('keydown',e=>{if(e.key==='Enter')doAuth();});
-document.getElementById('pwd').focus();
-</script>
-</body>
-</html>
-)HTML";
-
-// ---------------------------------------------------------------------------
 // Web server thread
 // ---------------------------------------------------------------------------
 
@@ -3035,20 +2937,10 @@ void registerWebHandlers(NtmHttpServer &svr,
                 // Authenticated dashboard client — record IP for overhead classification.
                 if (config.dashboard_ips) config.dashboard_ips->add(ip);
 
-                // Admin API paths require admin-level authentication.
-                // Phase A: if SIWA is configured, use isAdminSession (role on the
-                // session token itself).  Otherwise fall back to the legacy ntm_admin
-                // proof-cookie path so password-based configs keep working.
-                // /api/admin/auth is exempt regardless — it is the legacy issuance endpoint.
-                if (isAdminApiPath(path) && path != "/api/admin/auth")
+                // Admin API paths require an admin-role session (set by Sign in with Apple).
+                if (isAdminApiPath(path))
                 {
-                    bool adminOk = false;
-                    if (config.siwaConfig && config.siwaConfig->enabled())
-                        adminOk = config.webauthn->isAdminSession(token);
-                    else
-                        adminOk = checkAdminProofToken(cookieFromRequest(req, "ntm_admin"));
-
-                    if (!adminOk)
+                    if (!config.webauthn->isAdminSession(token))
                     {
                         res.status = 403;
                         res.set_content("{\"error\":\"admin authentication required\"}\n",
@@ -3081,23 +2973,20 @@ void registerWebHandlers(NtmHttpServer &svr,
         res.set_content(kLoginHtml, "text/html; charset=utf-8");
     });
 
-    // GET /admin — serve admin panel or redirect/auth-prompt depending on role.
-    // WebAuthn session is already verified by pre-routing.
-    // Phase A: SIWA → role-based gate; legacy → ntm_admin proof-cookie gate.
+    // GET /admin — serve admin panel if admin-role session; otherwise 403.
+    // Pre-routing has already verified the passkey session; this checks the role.
     const bool adminAvailable = (config.webauthn && config.webauthn->enabled());
     if (adminAvailable)
     {
         svr.Get("/admin", [&config](const httplib::Request &req, httplib::Response &res) {
-            bool isAdmin = false;
-            if (config.siwaConfig && config.siwaConfig->enabled())
-                isAdmin = config.webauthn->isAdminSession(sessionFromRequest(req));
-            else
-                isAdmin = checkAdminProofToken(cookieFromRequest(req, "ntm_admin"));
-
-            if (isAdmin)
+            if (config.webauthn->isAdminSession(sessionFromRequest(req)))
                 res.set_content(kAdminHtml, "text/html; charset=utf-8");
             else
-                res.set_content(kAdminAuthHtml, "text/html; charset=utf-8");
+            {
+                res.status = 403;
+                res.set_content("{\"error\":\"admin authentication required\"}\n",
+                                "application/json");
+            }
         });
     }
 
@@ -3167,59 +3056,6 @@ void registerWebHandlers(NtmHttpServer &svr,
             body += "]}";
             res.set_content(body, "application/json");
         });
-
-    // POST /api/admin/auth — verify admin password and issue ntm_admin proof cookie.
-    // Requires a valid WebAuthn session (pre-routing) but NOT the ntm_admin cookie.
-    // Rate-limited to prevent brute-force.
-    if (adminAvailable)
-    {
-        svr.Post("/api/admin/auth",
-            [&config](const httplib::Request &req, httplib::Response &res)
-            {
-                if (!adminRateLimiter.tryAcquire(effectiveClientIP(req, config)))
-                {
-                    res.status = 429;
-                    res.set_header("Retry-After", "60");
-                    res.set_content("{\"error\":\"rate limit exceeded\"}\n", "application/json");
-                    return;
-                }
-                const std::string password = jsonGetString(req.body, "password");
-                if (password.empty())
-                {
-                    res.status = 400;
-                    res.set_content("{\"error\":\"password required\"}\n", "application/json");
-                    return;
-                }
-                if (!config.webauthn->verifyAdminPassword(password))
-                {
-                    serverLog(LogLevel::Warn,
-                              "ntm-server: admin auth REJECTED from %s",
-                              effectiveClientIP(req, config).c_str());
-                    res.status = 401;
-                    res.set_content("{\"error\":\"incorrect password\"}\n", "application/json");
-                    return;
-                }
-                const auto now = std::chrono::duration_cast<std::chrono::seconds>(
-                    std::chrono::system_clock::now().time_since_epoch()).count();
-                const std::string token = generateAdminProofToken();
-                {
-                    std::lock_guard<std::mutex> lk(g_adminProofMtx);
-                    // Lazy GC: prune expired tokens on each new login.
-                    for (auto it = g_adminProofTokens.begin(); it != g_adminProofTokens.end(); )
-                        it = (now >= it->second) ? g_adminProofTokens.erase(it) : std::next(it);
-                    g_adminProofTokens.emplace(token, now + kAdminProofTokenSec);
-                }
-                serverLog(LogLevel::Info,
-                          "ntm-server: admin auth OK from %s",
-                          effectiveClientIP(req, config).c_str());
-                res.set_header("Set-Cookie",
-                               "ntm_admin=" + token +
-                               "; HttpOnly; Secure; SameSite=Strict"
-                               "; Max-Age=" + std::to_string(kAdminProofTokenSec) +
-                               "; Path=/");
-                res.set_content("{\"ok\":true}\n", "application/json");
-            });
-    }
 
     // GET /api/admin/monitors — list active wire agents and recent dashboard clients.
     if (adminAvailable)
@@ -3790,47 +3626,6 @@ void registerWebHandlers(NtmHttpServer &svr,
     // WebAuthn authentication endpoints.
     if (config.webauthn && config.webauthn->enabled())
     {
-        // GET /auth/register/begin — server returns challenge + PBKDF2 params
-        svr.Get("/auth/register/begin",
-            [&config](const httplib::Request &, httplib::Response &res) {
-                res.set_header("Cache-Control", "no-store");
-                std::string key;
-                res.set_content(config.webauthn->beginRegistration(key), "application/json");
-            });
-
-        // POST /auth/register/complete — verify admin proof + WebAuthn credential
-        svr.Post("/auth/register/complete",
-            [&config](const httplib::Request &req, httplib::Response &res) {
-                if (!adminRateLimiter.tryAcquire(effectiveClientIP(req, config)))
-                {
-                    res.status = 429;
-                    res.set_header("Retry-After", "60");
-                    res.set_content("{\"error\":\"rate limit exceeded\"}\n", "application/json");
-                    return;
-                }
-                const std::string &b = req.body;
-                std::string sessionKey = jsonGetString(b, "session_key");
-                std::string proof      = jsonGetString(b, "admin_proof");
-                std::string attObj     = jsonGetString(b, "attestation_object");
-                std::string cdJson     = jsonGetString(b, "client_data_json");
-                std::string label      = jsonGetString(b, "label");
-                if (sessionKey.empty() || proof.empty() || attObj.empty() || cdJson.empty())
-                {
-                    res.status = 400;
-                    res.set_content("{\"error\":\"missing required fields\"}\n", "application/json");
-                    return;
-                }
-                std::string err = config.webauthn->completeRegistration(
-                    sessionKey, proof, attObj, cdJson, label);
-                if (!err.empty())
-                {
-                    res.status = 400;
-                    res.set_content("{\"error\":\"" + jsonEsc(err) + "\"}\n", "application/json");
-                    return;
-                }
-                res.set_content("{\"ok\":true}\n", "application/json");
-            });
-
         // GET /auth/login/begin — server returns WebAuthn challenge
         svr.Get("/auth/login/begin",
             [&config](const httplib::Request &, httplib::Response &res) {
@@ -3871,22 +3666,14 @@ void registerWebHandlers(NtmHttpServer &svr,
                 res.set_content("{\"ok\":true,\"token\":\"" + token + "\"}\n", "application/json");
             });
 
-        // POST /auth/logout — invalidate session and clear all auth cookies
+        // POST /auth/logout — invalidate session and clear session cookie
         svr.Post("/auth/logout",
             [&config](const httplib::Request &req, httplib::Response &res) {
                 std::string token = sessionFromRequest(req);
                 if (!token.empty()) config.webauthn->invalidateSession(token);
-                // Also invalidate the admin proof token if present.
-                std::string adminToken = cookieFromRequest(req, "ntm_admin");
-                if (!adminToken.empty())
-                {
-                    std::lock_guard<std::mutex> lk(g_adminProofMtx);
-                    g_adminProofTokens.erase(adminToken);
-                }
                 const std::string expired = "; HttpOnly; Secure; SameSite=Strict; Path=/; "
                                             "Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT";
                 res.set_header("Set-Cookie", "ntm_session=" + expired);
-                res.set_header("Set-Cookie", "ntm_admin=" + expired);
                 res.set_content("{\"ok\":true}\n", "application/json");
             });
 

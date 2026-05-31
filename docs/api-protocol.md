@@ -1,7 +1,7 @@
-# NTM Dashboard API Protocol — Specification v12
+# NTM Dashboard API Protocol — Specification v14
 
-**API version:** 12  
-**Software version where introduced:** ntm 1.12.0  
+**API version:** 14  
+**Software version where introduced:** ntm-server 2.0.0  
 **File owner:** This document is the authoritative specification for the HTTPS
 API between `ntm-server` and any dashboard client (iOS app, web browser, or
 third-party tool). Update it **before** changing any endpoint, field, or
@@ -35,24 +35,42 @@ This API is **independent** of the client data-ingestion wire protocol (see
 
 ## 3. Authentication
 
-Two authentication modes exist depending on server configuration:
+Three authentication mechanisms exist:
 
-### 3a. WebAuthn passkey mode (recommended)
+### 3a. Passkey session (dashboard login)
 
 Enabled when `webauthn_rp_id` is set in the server config. All endpoints
-(except `/login`, `/auth/*`, and `/.well-known/apple-app-site-association`)
-require a valid session.
+(except those in §7) require a valid session.
 
 **Browser:** session established via the `/login` page; server sets an
 `HttpOnly; Secure; SameSite=Strict` cookie `ntm_session=<token>`.
 
-**iOS app:** session token returned as JSON from `/auth/login/complete`;
-sent in subsequent requests as `Authorization: Bearer <token>`.
+**iOS app:** session token returned as JSON from `/auth/login/complete` or
+`/auth/apple/native`; sent in subsequent requests as `Authorization: Bearer <token>`.
 
 Unauthenticated browser GET requests → `302` redirect to `/login`.  
 Unauthenticated API requests → `401`.
 
-### 3b. Legacy LAN-only mode
+Passkey sessions carry a **role**:
+- `user` — can access the dashboard (`/`, `/api/summary`, `/api/client/history`, etc.) but not the admin panel.
+- `admin` — full access including `/admin` and all `/api/admin/*` endpoints.
+
+Role is determined at login time:
+- **Passkey login** → always `user` role.
+- **Sign in with Apple** → `admin` if the Apple ID matches a configured admin identity; otherwise `user` (or `401` if non-admin Apple sign-ins are disabled by operator).
+
+### 3b. Sign in with Apple (admin identity)
+
+When `siwa_service_id` is configured, operators use Sign in with Apple to gain
+admin access. The server identifies admins by their Apple ID (`sub` claim in the
+`id_token`). Operator configures admin email address(es) in `siwa_admins`; the
+server pins the stable `sub` on first sign-in (email-bootstrap).
+
+**Web flow:** `GET /auth/apple/start` → Apple redirects to `POST /auth/apple/callback` → server sets `ntm_session` cookie with `role=admin`.
+
+**iOS native flow:** app posts `identityToken` to `POST /auth/apple/native` → server returns bearer token with `role` field.
+
+### 3c. Legacy LAN-only mode
 
 If `webauthn_rp_id` is **not** set, the server restricts access to RFC 1918
 LAN IPs and loopback. No session or token is required — any LAN client can
@@ -65,10 +83,10 @@ trusted LAN.
 
 | Endpoint group | Limit |
 |---|---|
-| All endpoints | 30 requests / IP / minute |
-| `POST /auth/register/complete` | 5 requests / IP / minute (admin rate limit) |
+| All auth-exempt endpoints | 30 requests / IP / minute |
 | `POST /api/admin/purge` | 5 requests / IP / minute |
 | `POST /api/admin/client/register` | 5 requests / IP / minute |
+| `POST /api/admin/register/complete` | 5 requests / IP / minute |
 
 Exceeded → `429` with `Retry-After: 60`.
 
@@ -79,7 +97,7 @@ Exceeded → `429` with `Retry-After: 60`.
 Every response from `/api/summary` includes:
 
 ```json
-"api_version": 4
+"api_version": 14
 ```
 
 This integer identifies the API contract revision, independent of the ntm
@@ -106,6 +124,8 @@ software version (`server_version`).
 
 | Version | Change |
 |---|---|
+| 14 | **Breaking — admin auth overhaul.** Removed admin-password authentication: `POST /api/admin/auth`, `GET /auth/register/begin`, `POST /auth/register/complete` (password-gated), and the short-lived `ntm_admin` proof-cookie system are gone. Admin sessions are now established via Sign in with Apple (`GET /auth/apple/start`, `POST /auth/apple/callback`, `POST /auth/apple/native`) and are role-tagged on the `ntm_session` token itself. Added `GET /api/session` (role/identity query). Added passkey management: `GET /api/admin/passkeys`, `DELETE /api/admin/passkeys/:credId`, `GET /api/admin/register/begin`, `POST /api/admin/register/complete` (admin-session-gated, no password). NTMDashboard must implement native SIWA (`ASAuthorizationAppleIDProvider`) to retain admin access (ntm-server 2.0.0). |
+| 13 | Added remote update push endpoints: `POST /api/admin/clients/<id>/update`, `GET /api/admin/clients/<id>/update/status`. The `force` field is removed from `/api/update/check` (ntm-server 1.26.0). |
 | 12 | Added remote log management endpoints: `GET /admin/clients/<id>/logs`, `POST /admin/clients/<id>/loglevel`, `GET /admin/clients/<id>/logs/<filename>`, `DELETE /admin/clients/<id>/logs/<filename>`, `DELETE /admin/clients/<id>/logs`. Commands are delivered to the client via the wire-protocol v3 `C`-line channel; responses arrive as `L` lines. Requires wire-protocol v3 clients (ntm-server 1.25.0, ntm-client 1.20.0). |
 | 11 | Added admin client config endpoint: `GET /api/admin/client/config`. Clients report `cfg_*` fields in H-lines; server returns them to the admin dashboard (ntm-server 1.23.0, ntm-client 1.17.0). |
 | 10 | Added admin hide-entities feature: `GET /api/admin/clients`, `GET /api/admin/hidden`, `POST /api/admin/hidden/client`, `POST /api/admin/hidden/interface`. Hidden clients and (client, iface) pairs are suppressed from `/api/summary` responses (all sections). Persisted across server restarts in `hidden_entities_file`. Enabled when `hidden_entities_file` and WebAuthn are configured (ntm-server 1.22.0). |
@@ -140,11 +160,11 @@ All non-`200` responses return JSON regardless of endpoint:
 | Code | Meaning |
 |---|---|
 | `200` | Success |
-| `302` | Redirect to `/login` (unauthenticated browser request, WebAuthn mode) |
+| `302` | Redirect to `/login` (unauthenticated browser request, WebAuthn mode) or redirect to `/admin`/`/` after successful Apple sign-in |
 | `400` | Malformed request body (missing required fields) |
 | `401` | Authentication required or failed |
-| `403` | Request source IP is not in LAN range (legacy mode only) |
-| `404` | Resource not found (e.g. unknown client ID on purge) |
+| `403` | Admin session required; or request source IP is not in LAN range (legacy mode only) |
+| `404` | Resource not found |
 | `429` | Rate limit exceeded |
 
 ### Security headers (on every response)
@@ -156,63 +176,61 @@ Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; 
 
 ---
 
-## 7. Authentication Endpoints (WebAuthn mode only)
+## 7. Authentication Endpoints
 
 These endpoints are always accessible without a session (they establish one).
 
-### `GET /auth/register/begin`
+### `GET /auth/apple/start` *(api_version 14+, SIWA mode)*
 
-Starts passkey registration. Returns a server challenge and PBKDF2 parameters
-for the admin proof step. The admin proof ensures that only the operator (who
-knows the admin password) can register new passkeys.
+Initiates the Sign in with Apple web flow. Generates a random `state` and `nonce`,
+stores them server-side (10-minute TTL), and redirects the browser to Apple's
+authorization endpoint.
 
-**Response** (`200`):
+**Response:** `302` redirect to `https://appleid.apple.com/auth/authorize?...`
 
-```json
-{
-  "session_key":       "<opaque pending-session token>",
-  "challenge":         "<base64url, 32 random bytes — WebAuthn challenge>",
-  "admin_nonce":       "<base64url, 32 random bytes — nonce for PBKDF2 proof>",
-  "pbkdf2_salt":       "<base64url, 16 bytes>",
-  "pbkdf2_iterations": 200000,
-  "rp_id":             "<RP ID, e.g. ntm.happyhomelives.me>",
-  "rp_name":           "<display name>",
-  "user_id":           "<base64url, 16 random bytes>"
-}
-```
+Apple will POST the result to `/auth/apple/callback`.
 
-The client computes the admin proof as follows (never transmitting the password):
+### `POST /auth/apple/callback` *(api_version 14+, SIWA mode)*
 
-```
-key   = PBKDF2-HMAC-SHA256(adminPassword, pbkdf2_salt, pbkdf2_iterations)  // 32 bytes
-proof = HMAC-SHA256(key, admin_nonce)  // 32 bytes, hex-encoded
-```
+Apple's form-post callback. The `state` in the request body is matched against the
+server-side pending entry; the `id_token` JWT is validated (RS256 against Apple JWKS,
+`iss`, `aud`, `exp`, `nonce` claims). On success, the Apple `sub` is matched against
+the configured admin identities.
 
-### `POST /auth/register/complete`
+**Request:** `application/x-www-form-urlencoded` (from Apple)
 
-Completes passkey registration.
+| Field | Description |
+|---|---|
+| `state` | Opaque value from `/auth/apple/start` |
+| `id_token` | RS256-signed JWT from Apple |
+| `code` | One-time auth code (not used by server — `id_token` is validated directly) |
+
+**On success:** sets `ntm_session` cookie and redirects to `/admin` (admin role) or `/` (user role).
+
+**On failure:** `401` with plain-text error.
+
+### `POST /auth/apple/native` *(api_version 14+, SIWA mode)*
+
+iOS native Sign in with Apple flow. The app posts the `identityToken` from
+`ASAuthorizationAppleIDCredential` directly; the server validates it and returns
+a bearer token with a `role` field.
 
 **Request body** (`Content-Type: application/json`):
 
 ```json
-{
-  "session_key":        "<from beginRegistration>",
-  "admin_proof":        "<64-hex-char HMAC-SHA256 proof>",
-  "attestation_object": "<base64url from WebAuthn response>",
-  "client_data_json":   "<base64url from WebAuthn response>",
-  "label":              "<human-readable device name>"
-}
+{ "identity_token": "<base64url id_token JWT>" }
 ```
 
-**Success response** (`200`): `{"ok": true}`
+**Success response** (`200`):
 
-**Error responses:**
+```json
+{ "ok": true, "token": "<Bearer token>", "role": "admin" | "user" }
+```
 
-| Status | Reason |
-|---|---|
-| `400` | Missing fields, session expired, challenge mismatch, wrong origin, CBOR parse error |
-| `400` | Admin proof incorrect |
-| `429` | Rate limit exceeded |
+The `token` is stored and sent as `Authorization: Bearer <token>` on subsequent
+requests, identical to the passkey flow token from `/auth/login/complete`.
+
+**Error response:** `401` with `{"error": "<reason>"}`.
 
 ### `GET /auth/login/begin`
 
@@ -233,7 +251,8 @@ credential IDs to pass to `navigator.credentials.get()`.
 ### `POST /auth/login/complete`
 
 Verifies the WebAuthn assertion. On success, sets a session cookie for the
-browser and returns the Bearer token for the iOS app.
+browser and returns the Bearer token for the iOS app. Passkey sessions always
+have `role: "user"`.
 
 **Request body** (`Content-Type: application/json`):
 
@@ -306,18 +325,46 @@ token can be obtained by calling this endpoint again while demo mode is enabled.
 
 ### `GET /login`
 
-Serves the embedded passkey login and device-registration HTML page (WebAuthn
-mode only). Redirected to automatically when an unauthenticated browser visits
-any protected path.
+Serves the embedded passkey login HTML page (WebAuthn mode only). Includes a
+"Sign in with Apple (Admin)" button (shown only when `siwa_service_id` is
+configured on the server, detected via `GET /api/session`). Redirected to
+automatically when an unauthenticated browser visits any protected path.
 
 ### `GET /.well-known/apple-app-site-association`
 
 Serves the Apple App Site Association JSON for iOS passkey domain binding.
 Only registered when `webauthn_ios_app_id` is configured.
 
+### `GET /.well-known/apple-developer-domain-association.txt` *(api_version 14+)*
+
+Serves the Apple domain-association file required by Sign in with Apple.
+Only registered when `siwa_domain_assoc_file` is configured.
+
 ---
 
-## 10. Data Signals (read-only)
+## 10. Session Info *(api_version 14+)*
+
+### `GET /api/session`
+
+Returns role information for the current session. Accessible without
+authentication (returns `role: "none"` for unauthenticated requests). Used by
+dashboard JS to conditionally show the Admin link and the Apple sign-in button.
+
+**Response `200`:**
+
+```json
+{
+  "role":         "admin" | "user" | "none",
+  "identity":     "<Apple sub (admin SIWA sessions) or empty>",
+  "siwa_enabled": true | false
+}
+```
+
+`siwa_enabled` is `true` when `siwa_service_id` is configured on the server.
+
+---
+
+## 11. Data Signals (read-only)
 
 ### `GET /api/summary`
 
@@ -333,8 +380,8 @@ recognise. New optional fields may be added at any `api_version` without a bump.
 
 ```json
 {
-  "api_version":              <integer>,  // API contract revision; currently 11
-  "server_version":           <string>,   // ntm-server module version, e.g. "1.8.1"
+  "api_version":              <integer>,  // API contract revision; currently 14
+  "server_version":           <string>,   // ntm-server module version, e.g. "2.0.0.0"
   "server_wire_proto_version": <integer>, // wire protocol data-phase version the server speaks
   "window_start":              <integer>, // unix epoch: start of the rolling stats window
   "generated_at":              <integer>, // unix epoch: when this response was built
@@ -434,27 +481,21 @@ arrived yet. Clients must handle this without error.
 
 ---
 
-## 11. Control Signals (write)
+## 12. Control Signals (write)
 
 ### `POST /api/admin/purge`
 
-Permanently deletes all historical traffic data for one client. Available when
-`admin_password_file` or `webauthn_rp_id` is configured.
+Permanently deletes all historical traffic data for one client.
 
 This action is **irreversible**. The iOS app must require explicit user
 confirmation before sending this request.
 
-**Authentication:**
-- **WebAuthn mode**: session required (verified by pre-routing). No additional password needed.
-- **Legacy mode**: request body must contain `password` matching the configured admin password.
+**Authentication:** Admin session required.
 
 **Request body** (`Content-Type: application/json`):
 
 ```json
-{
-  "client":   "<display name or 64-hex-char client ID>",
-  "password": "<admin password>"   // required in legacy mode only
-}
+{ "client": "<display name or 64-hex-char client ID>" }
 ```
 
 **Success response** (`200`):
@@ -471,8 +512,8 @@ confirmation before sending this request.
 
 | Status | Reason |
 |---|---|
-| `400` | `client` field missing; or `password` missing (legacy mode) |
-| `401` | Wrong admin password (legacy mode) |
+| `400` | `client` field missing |
+| `403` | Admin session required |
 | `404` | Client name / ID not found in current data |
 | `429` | Admin rate limit exceeded (5 req / IP / min) |
 
@@ -481,10 +522,9 @@ confirmation before sending this request.
 Enrolls a new Ed25519 public key so the corresponding `ntm-client` can
 immediately authenticate over the wire protocol, **without a server restart**.
 The key is appended to the configured `allowed_keys` file for persistence across
-restarts. Available when `admin_password_file` or `webauthn_rp_id` is
-configured **and** `allowed_keys` is set in the server config.
+restarts.
 
-**Authentication:** same as `/api/admin/purge`.
+**Authentication:** Admin session required.
 
 **Request body** (`Content-Type: application/json`):
 
@@ -524,12 +564,88 @@ configured **and** `allowed_keys` is set in the server config.
 1. Generate an Ed25519 key pair (CryptoKit `Curve25519.Signing`); store the
    private key in the standard Keychain.
 2. Export the 32-byte raw public key and hex-encode it.
-3. POST this endpoint (authenticated with the operator's passkey session).
+3. POST this endpoint (authenticated with the operator's admin session).
 4. After `200`, the iOS app can connect to the wire-protocol port immediately.
 
 ---
 
-## 12. Auto-Update Endpoints
+## 13. Passkey Management *(api_version 14+)*
+
+These endpoints allow the admin to list all registered passkeys and revoke
+individual ones. Require admin session.
+
+### `GET /api/admin/passkeys`
+
+**Response `200`:**
+```json
+{
+  "passkeys": [
+    {
+      "cred_id":    "<base64url credential ID>",
+      "label":      "<device name>",
+      "sign_count": <integer>
+    }
+  ]
+}
+```
+
+### `DELETE /api/admin/passkeys/:credId`
+
+Revoke a specific passkey by credential ID. The credential ID must be URL-encoded
+if it contains characters outside the unreserved set.
+
+**Response `200`:** `{"ok": true}`
+
+**Error responses:**
+
+| Status | Reason |
+|---|---|
+| `400` | `credId` missing |
+| `404` | Credential ID not found |
+
+### `GET /api/admin/register/begin`
+
+Start a new passkey registration. No admin password required — admin session is
+sufficient. Returns a WebAuthn challenge for `navigator.credentials.create()`.
+
+**Response `200`:**
+```json
+{
+  "session_key": "<opaque pending-session token>",
+  "challenge":   "<base64url, 32 random bytes>",
+  "rp_id":       "<RP ID>",
+  "rp_name":     "<display name>",
+  "user_id":     "<base64url, 16 random bytes>"
+}
+```
+
+### `POST /api/admin/register/complete`
+
+Complete passkey registration. Rate-limited to 5 req / IP / min.
+
+**Request body** (`Content-Type: application/json`):
+```json
+{
+  "session_key":        "<from register/begin>",
+  "attestation_object": "<base64url from WebAuthn response>",
+  "client_data_json":   "<base64url from WebAuthn response>",
+  "label":              "<human-readable device name>"
+}
+```
+
+**Response `200`:** `{"ok": true}`
+
+**Error responses:**
+
+| Status | Reason |
+|---|---|
+| `400` | Missing fields, session expired, challenge mismatch, wrong origin |
+| `403` | Admin session required |
+| `429` | Rate limit exceeded |
+
+---
+
+## 14. Auto-Update Endpoints
 
 These endpoints are used by `ntm-client` to check for and download new binaries.
 They are **self-authenticated** via an Ed25519 pubkey query parameter (checked
@@ -538,8 +654,7 @@ admin password. They are exempt from the LAN-only source-IP restriction so that
 remote clients can reach them.
 
 All four endpoints are only registered when `update_dir` is set in the server config.
-`/api/admin/update/*` additionally require admin availability (`admin_password_file`
-or `webauthn_rp_id` configured).
+`/api/admin/update/*` additionally require admin session.
 
 ### `GET /api/update/check`
 
@@ -569,7 +684,7 @@ Check whether a newer binary is available for this client.
   "sig_size": 3309
 }
 ```
-`sig_size` is the byte length of the `.sig` file for this binary (added in api_version 8).
+`sig_size` is the byte length of the `.sig` file for this binary.
 Clients that support ML-DSA-65 verification should use this as a sanity-check on
 the `/api/update/download_sig` response size.
 
@@ -614,7 +729,7 @@ SHA-256 against the value from `/api/update/check` before applying.
 Re-scan the `update_dir` and rebuild the manifest. Call this after placing new
 binaries in the directory. Also runs automatically at server startup.
 
-**Authentication:** Admin session required (same as `/api/admin/purge`).
+**Authentication:** Admin session required.
 
 **Request body:** empty (or `{}`).
 
@@ -678,7 +793,7 @@ to force a reinstall.
 
 ---
 
-## 13. Server Auto-Upgrade Endpoints
+## 15. Server Auto-Upgrade Endpoints
 
 These endpoints allow the Arch Linux build agent to push a new signed ntm-server
 binary directly to the live server. They are authenticated via ML-DSA-65
@@ -696,7 +811,7 @@ Rate-limited to 5 requests/minute per IP.
 
 **Response `200`:**
 ```json
-{ "nonce": "<64 lowercase hex>", "server_version": "1.19.0.0" }
+{ "nonce": "<64 lowercase hex>", "server_version": "2.0.0.0" }
 ```
 
 **Error responses:** `429` rate limit exceeded; `500` nonce generation failed.
@@ -710,7 +825,7 @@ Rate-limited to 1 request/minute per IP.
 
 | Field | Type | Description |
 |---|---|---|
-| `version` | string | New server version, e.g. `1.19.0.0` |
+| `version` | string | New server version, e.g. `2.0.0.0` |
 | `nonce` | string | 64-hex nonce from `/admin/upgrade/nonce` |
 | `auth_proof` | string | Base64 ML-DSA-65 signature over `nonce_bytes \|\| SHA3-256(binary)` |
 | `binary` | file | Raw server binary bytes |
@@ -726,14 +841,14 @@ Rate-limited to 1 request/minute per IP.
 
 **Response `200`:**
 ```json
-{ "ok": true, "upgraded_to": "1.19.0.0" }
+{ "ok": true, "upgraded_to": "2.0.0.0" }
 ```
 
 **Error responses:** `400` missing field / bad version; `403` auth or sig failure; `409` version not newer; `429` rate limit; `500` write failure.
 
 ---
 
-## 14. Client Binary Push Endpoints *(api_version 8+)*
+## 16. Client Binary Push Endpoints *(api_version 8+)*
 
 These endpoints allow the Arch Linux build agent to push signed ntm-client
 binaries into the server's `update_dir`. Connected clients then receive them
@@ -754,8 +869,8 @@ Rate-limited to 5 requests/minute per IP.
 {
   "nonce": "<64 lowercase hex>",
   "platform_versions": {
-    "linux-amd64":   "1.15.0.0",
-    "windows-amd64": "1.15.0.0"
+    "linux-amd64":   "1.21.1.4",
+    "windows-amd64": "1.21.1.4"
   }
 }
 ```
@@ -772,7 +887,7 @@ Rate-limited to 1 request/minute per IP.
 | Field | Type | Description |
 |---|---|---|
 | `platform` | string | e.g. `linux-amd64` or `windows-amd64` |
-| `version` | string | New client version, e.g. `1.15.0.0` |
+| `version` | string | New client version, e.g. `1.21.1.4` |
 | `nonce` | string | 64-hex nonce from `/admin/client/nonce` |
 | `auth_proof` | string | Base64 ML-DSA-65 signature over `nonce_bytes \|\| SHA3-256(binary)` |
 | `binary` | file | Raw client binary bytes |
@@ -790,14 +905,14 @@ Rate-limited to 1 request/minute per IP.
 
 **Response `200`:**
 ```json
-{ "ok": true, "platform": "linux-amd64", "version": "1.15.0.0" }
+{ "ok": true, "platform": "linux-amd64", "version": "1.21.1.4" }
 ```
 
 **Error responses:** `400` missing/invalid field; `403` auth or sig failure; `409` version not newer; `429` rate limit; `500` write failure.
 
 ---
 
-## 15. Per-Client Traffic History *(api_version 9+)*
+## 17. Per-Client Traffic History *(api_version 9+)*
 
 ### `GET /api/client/history`
 
@@ -861,7 +976,7 @@ is sorted oldest-first by `t`.
 
 ---
 
-## 16. Admin Hide-Entities Endpoints *(api_version 10+)*
+## 18. Admin Hide-Entities Endpoints *(api_version 10+)*
 
 These endpoints allow the operator to hide specific clients or `(client, interface)`
 pairs from the main dashboard `/api/summary` response. Hidden entities are
@@ -959,7 +1074,7 @@ visible in `client_health`; only this interface's traffic rows are suppressed.
 
 ---
 
-## 17. Client Configuration Endpoint *(api_version 11+)*
+## 19. Client Configuration Endpoint *(api_version 11+)*
 
 Returns the running configuration values last reported by a specific client via
 `cfg_*` fields in the health line (H-line). This allows operators to verify that
@@ -1013,7 +1128,7 @@ in server config.
 
 ---
 
-## 18. Remote Log Management Endpoints *(api_version 12+)*
+## 20. Remote Log Management Endpoints *(api_version 12+)*
 
 These endpoints allow the operator to inspect and control the file-based
 logging subsystem of any currently-connected `ntm-client`. Commands are
@@ -1144,10 +1259,9 @@ recreates it immediately to capture subsequent log output).
 
 ---
 
-## 19. Remote Update Push (admin)
+## 21. Remote Update Push (admin) *(api_version 13+)*
 
-New in `api_version: 13`. Requires admin auth. All endpoints use
-the per-client id format (64 lowercase hex chars = Ed25519 pubkey).
+Requires admin session. All endpoints use the per-client id format (64 lowercase hex chars = Ed25519 pubkey).
 
 ### `POST /api/admin/clients/<id>/update`
 
@@ -1203,12 +1317,16 @@ outcome is known (done / err / noop / timeout).
 
 ---
 
-## 20. Stability Contract
+## 22. Stability Contract
 
-- All fields documented in § 10–19 are **stable at `api_version: 13`**.
+- All fields documented in § 11–21 are **stable at `api_version: 14`**.
   No field will be removed or renamed without a version bump.
 - New **optional** fields may be added at any `api_version` without bumping;
   clients must tolerate extra fields.
+- Servers at `api_version: 13` (ntm-server < 2.0.0) still have the admin password
+  endpoints (`POST /api/admin/auth`, `GET /auth/register/begin`,
+  `POST /auth/register/complete`) and the `ntm_admin` proof cookie. Clients on
+  `api_version: 14` servers must not use those removed endpoints.
 - Servers at `api_version: 3` (ntm < 1.8.0) return all flows in `entities` (no
   overhead separation). Clients receiving `api_version: 3` must treat `entities`
   as all traffic and decode `overhead_entities` as an empty array.
@@ -1230,9 +1348,9 @@ outcome is known (done / err / noop / timeout).
 - Servers at `api_version: 10` (ntm-server < 1.23.0) do not have `/api/admin/client/config`.
   The admin UI should gracefully handle `404` by hiding the Client Configuration panel.
 - Servers at `api_version: 11` (ntm-server < 1.25.0) do not have the remote log management
-  endpoints (§ 18). The admin UI should gracefully handle `404` by hiding the Logs panel.
+  endpoints (§ 20). The admin UI should gracefully handle `404` by hiding the Logs panel.
 - Servers at `api_version: 12` (ntm-server < 1.26.0) do not have the remote update push
-  endpoints (§ 19) and still include the `force` field in `/api/update/check` responses.
+  endpoints (§ 21) and still include the `force` field in `/api/update/check` responses.
   The admin UI should gracefully handle `404` from `/api/admin/clients/<id>/update` by
   falling back to the legacy per-client Force button behaviour.
 - The protocol doc is updated **before** the commit that changes either side.

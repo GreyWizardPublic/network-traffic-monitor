@@ -28,7 +28,10 @@ inline constexpr unsigned kWireProtoVersion = 4;
 // v11: added /api/admin/client/config endpoint; clients report cfg_* fields in H-lines.
 // v12: added remote log management endpoints (/admin/clients/<id>/logs*); wire-proto v3 required.
 // v13: added /api/admin/clients/<id>/update[/status]; removed force field from /api/update/check.
-inline constexpr unsigned kApiVersion = 13;
+// v14: BREAKING — removed admin password auth (POST /api/admin/auth, /auth/register/*,
+//      ntm_admin cookie). Admin access via Sign in with Apple only. Added /api/session,
+//      /api/admin/passkeys, /api/admin/register/*, /auth/apple/* (ntm-server 2.0.0).
+inline constexpr unsigned kApiVersion = 14;
 
 // Default TCP port — serves both ntm-client data ingestion and the HTTPS
 // dashboard when port consolidation is in use (see docs/wire-protocol.md § 2).

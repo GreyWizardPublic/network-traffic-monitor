@@ -5,7 +5,6 @@
 #include <chrono>
 #include <cstdint>
 #include <mutex>
-#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -18,7 +17,6 @@ struct WebAuthnConfig
     std::string rpId;               // e.g. "ntm.happyhomelives.me" — empty disables WebAuthn
     std::string rpName;             // display name shown during registration
     std::string credentialsFile;    // JSON file that persists registered passkey credentials
-    std::string adminCredFile;      // JSON file storing PBKDF2 admin credential hash
     std::string iosAppId;           // "<TeamID>.<BundleID>" for AASA (empty = no AASA)
     std::vector<std::string> allowedOrigins; // e.g. {"https://ntm.happyhomelives.me"}
     unsigned sessionTtlHours{24};
@@ -43,19 +41,7 @@ public:
 
     bool enabled() const { return !cfg_.rpId.empty(); }
 
-    // --- Registration ---
-    // Returns JSON to send to the client. sessionKey is the opaque pending-session ID.
-    std::string beginRegistration(std::string &sessionKey);
-
-    // Verify admin PBKDF2 proof + WebAuthn attestationObject.
-    // Returns "" on success, error string on failure.
-    std::string completeRegistration(const std::string &sessionKey,
-                                     const std::string &adminProofHex,
-                                     const std::string &attestationObjectB64,
-                                     const std::string &clientDataJsonB64,
-                                     const std::string &label);
-
-    // --- Authentication ---
+    // --- Authentication (passkey login) ---
     // Returns JSON challenge to send to the client.
     std::string beginAuthentication(std::string &sessionKey);
 
@@ -72,8 +58,8 @@ public:
     bool isValidSession(const std::string &token);
     void invalidateSession(const std::string &token);
 
-    // Create a session for an externally-authenticated identity (e.g. Sign in with Apple).
-    // identity: Apple sub or email for audit logging. isAdmin: true for admin users.
+    // Create a session for an externally-authenticated identity (Sign in with Apple).
+    // identity: Apple sub for audit logging. isAdmin: true for admin identities.
     std::string createIdentitySession(const std::string &identity, bool isAdmin);
 
     // Returns true if the session is valid AND was created with isAdmin=true.
@@ -83,20 +69,11 @@ public:
     struct SessionInfo { bool valid{false}; bool isAdmin{false}; std::string identity; };
     SessionInfo getSessionInfo(const std::string &token);
 
-    // --- Admin credential management ---
-    // Hash plaintext password with PBKDF2 and persist to adminCredFile.
-    std::string migrateAdminPassword(const std::string &plaintext);
-
-    // Verify a plaintext password against the stored PBKDF2 hash. Constant-time.
-    // Returns true only if the admin credential is loaded AND the password matches.
-    bool verifyAdminPassword(const std::string &plaintext) const;
-
     // --- Credential listing / deletion (admin UI) ---
     std::vector<PasskeyCredential> listCredentials() const;
     bool deleteCredential(const std::string &credId);
 
     // --- Admin-session-gated passkey registration (no password proof required) ---
-    // Used when the caller is already authenticated as admin via Sign in with Apple.
     std::string beginAdminRegistration(std::string &sessionKey);
     std::string completeAdminRegistration(const std::string &sessionKey,
                                           const std::string &attestationObjectB64,
@@ -106,15 +83,13 @@ public:
     // Returns the Apple App Site Association JSON, or "" if iosAppId is not set.
     std::string aasaJson() const;
 
-    bool hasAdminCred() const;
-
 private:
     WebAuthnConfig cfg_;
 
     struct PendingReg
     {
         std::vector<uint8_t> webauthnChallenge; // for navigator.credentials.create()
-        std::vector<uint8_t> adminNonce;        // for PBKDF2 proof
+        std::vector<uint8_t> adminNonce;        // unused (kept for struct size compat)
         std::chrono::steady_clock::time_point expiry;
     };
 
@@ -132,23 +107,14 @@ private:
         std::string identity;  // Apple sub (SIWA sessions) or "" (passkey sessions)
     };
 
-    struct AdminCred
-    {
-        std::vector<uint8_t> hash;      // 32-byte PBKDF2-HMAC-SHA256(password, salt, iterations)
-        std::vector<uint8_t> salt;      // 16-byte random salt
-        unsigned iterations{200000};
-    };
-
     mutable std::mutex mtx_;
     std::unordered_map<std::string, PendingReg>  pendingRegs_;
     std::unordered_map<std::string, PendingAuth> pendingAuths_;
     std::unordered_map<std::string, Session>     sessions_;
     std::vector<PasskeyCredential>               credentials_;
-    std::optional<AdminCred>                     adminCred_;
 
     void loadCredentials();
     void saveCredentials() const;    // call holding mtx_
-    void loadAdminCred();
     void sweepExpired();             // call holding mtx_
 
     static std::vector<uint8_t> randomBytes(std::size_t n);
