@@ -124,13 +124,20 @@ inline std::optional<JwtParts> parseJwt(const std::string &token)
 }
 
 // Extract a string value from a flat JSON object (handles \\ and \" escapes).
+// Tolerates optional whitespace between the colon and the opening quote so that
+// both compact JWTs ("key":"value") and pretty-printed JWKS ("key": "value") work.
 // Returns "" if not found.
 inline std::string jwtGetStr(const std::string &json, const std::string &key)
 {
-    const std::string needle = "\"" + key + "\":\"";
+    const std::string needle = "\"" + key + "\":";
     auto pos = json.find(needle);
     if (pos == std::string::npos) return {};
     pos += needle.size();
+    // Skip optional whitespace between ':' and '"'
+    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t' ||
+                                  json[pos] == '\n' || json[pos] == '\r')) ++pos;
+    if (pos >= json.size() || json[pos] != '"') return {};
+    ++pos; // skip opening quote
     std::string val;
     while (pos < json.size() && json[pos] != '"')
     {
