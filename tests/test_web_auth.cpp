@@ -221,6 +221,11 @@ TEST_CASE("isAuthExemptPath: upgrade and client-push admin endpoints are exempt"
     REQUIRE(ntm::isAuthExemptPath("/admin/client/push"));
 }
 
+TEST_CASE("isAuthExemptPath: /api/session is exempt (login page reads siwa_enabled)")
+{
+    REQUIRE(ntm::isAuthExemptPath("/api/session"));
+}
+
 TEST_CASE("isAuthExemptPath: / (dashboard root) requires session")
 {
     REQUIRE(!ntm::isAuthExemptPath("/"));

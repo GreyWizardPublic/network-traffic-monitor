@@ -113,6 +113,8 @@ inline bool isAuthExemptPath(const std::string &path)
     if (path.size() >= 6  && path.substr(0, 6)  == "/auth/")    return true;
     if (path == "/.well-known/apple-app-site-association")       return true;
     if (path == "/api/demo/begin")                               return true;
+    // Session-info endpoint: readable without auth so the login page can check siwa_enabled.
+    if (path == "/api/session")                                  return true;
     // Update endpoints authenticate via a pubkey query parameter, not a session.
     if (path == "/api/update/check")                             return true;
     if (path == "/api/update/download")                          return true;
