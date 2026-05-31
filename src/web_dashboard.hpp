@@ -5,6 +5,7 @@
 // server_core populates WebConfig from ServerConfig at thread-launch time.
 
 #include "ntm_types.hpp"
+#include "siwa.hpp"
 #include "webauthn.hpp"
 
 // httplib requires this macro to compile TLS support (OpenSSL backend).
@@ -41,6 +42,11 @@ struct WebConfig
 
     // WebAuthn RP (null = WebAuthn disabled; LAN-only access used instead).
     std::shared_ptr<WebAuthnRP> webauthn;
+
+    // Sign in with Apple (null = SIWA disabled; admin uses password path instead).
+    std::shared_ptr<SiwaConfig>     siwaConfig;
+    std::shared_ptr<SiwaValidator>  siwaValidator;
+    std::shared_ptr<SiwaAdminStore> siwaAdmins;
     // Shared wire-protocol client store; null = registration endpoint disabled.
     std::shared_ptr<AllowedClientsStore> clients_store;
     // Persisted hidden-entities store; null = hide feature disabled.

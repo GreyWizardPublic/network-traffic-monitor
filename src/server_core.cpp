@@ -127,6 +127,15 @@ struct ServerConfig
     std::string webauthn_allowed_origins;    // comma-separated; default: "https://<rpId>"
     unsigned    webauthn_session_ttl_hours{24};
     unsigned    webauthn_idle_timeout_minutes{15};
+
+    // Sign in with Apple (SIWA) — replaces the admin password when configured.
+    // Set siwa_service_id to enable; all other siwa_* keys are then required/optional.
+    std::string siwa_service_id;         // Apple Service ID (web), e.g. me.happyhomelives.ntm.web
+    std::string siwa_ios_bundle_id;      // iOS bundle ID for native auth (empty = native disabled)
+    std::string siwa_redirect_uri;       // https://<rp>/auth/apple/callback
+    std::string siwa_admins;             // comma-separated admin emails (bootstrap)
+    std::string siwa_admin_file;         // JSON file persisting {email,sub} after first login
+    std::string siwa_domain_assoc_file;  // path to apple-developer-domain-association.txt content
 };
 
 // Tracks concurrent connections per client IP to limit one host exhausting the connection pool.
@@ -930,6 +939,8 @@ static const std::set<std::string> &knownServerConfigKeys()
         "webauthn_credentials_file", "webauthn_admin_cred_file",
         "webauthn_ios_app_id", "webauthn_allowed_origins",
         "webauthn_session_ttl_hours", "webauthn_idle_timeout_minutes",
+        "siwa_service_id", "siwa_ios_bundle_id", "siwa_redirect_uri",
+        "siwa_admins", "siwa_admin_file", "siwa_domain_assoc_file",
         "update_dir",
         "trusted_proxy",
         "hidden_entities_file",
@@ -1049,6 +1060,12 @@ static ServerConfig loadServerConfig(const std::string &configPath, bool *ok = n
             else if (key == "webauthn_admin_cred_file")  { cfg.webauthn_admin_cred_file = val; }
             else if (key == "webauthn_ios_app_id")    { cfg.webauthn_ios_app_id = val; }
             else if (key == "webauthn_allowed_origins") { cfg.webauthn_allowed_origins = val; }
+            else if (key == "siwa_service_id")        { cfg.siwa_service_id = val; }
+            else if (key == "siwa_ios_bundle_id")     { cfg.siwa_ios_bundle_id = val; }
+            else if (key == "siwa_redirect_uri")      { cfg.siwa_redirect_uri = val; }
+            else if (key == "siwa_admins")            { cfg.siwa_admins = val; }
+            else if (key == "siwa_admin_file")        { cfg.siwa_admin_file = val; }
+            else if (key == "siwa_domain_assoc_file") { cfg.siwa_domain_assoc_file = val; }
             else if (key == "webauthn_session_ttl_hours")
             {
                 u = std::stoul(val);
@@ -2522,6 +2539,55 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                   config.webauthn_rp_id.c_str());
     }
 
+    // ── Sign in with Apple initialisation ────────────────────────────────────
+    std::shared_ptr<SiwaConfig>     siwaConfig;
+    std::shared_ptr<SiwaValidator>  siwaValidator;
+    std::shared_ptr<SiwaAdminStore> siwaAdmins;
+    if (!config.siwa_service_id.empty())
+    {
+        if (config.siwa_redirect_uri.empty())
+        {
+            serverLog(LogLevel::Warn,
+                      "ntm-server: siwa_service_id is set but siwa_redirect_uri is empty "
+                      "— Sign in with Apple disabled");
+        }
+        else if (config.siwa_admins.empty() && config.siwa_admin_file.empty())
+        {
+            serverLog(LogLevel::Warn,
+                      "ntm-server: siwa_service_id is set but neither siwa_admins nor "
+                      "siwa_admin_file is configured — no admins can sign in via Apple");
+        }
+        else
+        {
+            auto cfg = std::make_shared<SiwaConfig>();
+            cfg->serviceId    = config.siwa_service_id;
+            cfg->iosBundleId  = config.siwa_ios_bundle_id;
+            cfg->redirectUri  = config.siwa_redirect_uri;
+            cfg->adminFile    = config.siwa_admin_file;
+
+            // Load optional domain-association file content.
+            if (!config.siwa_domain_assoc_file.empty())
+            {
+                std::ifstream f(config.siwa_domain_assoc_file);
+                if (f) cfg->domainAssocText = std::string(
+                    std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+                else
+                    serverLog(LogLevel::Warn,
+                              "ntm-server: siwa_domain_assoc_file '%s' cannot be read",
+                              config.siwa_domain_assoc_file.c_str());
+            }
+
+            siwaConfig    = cfg;
+            siwaValidator = std::make_shared<SiwaValidator>(*cfg);
+            siwaAdmins    = std::make_shared<SiwaAdminStore>(
+                                config.siwa_admin_file, config.siwa_admins);
+
+            serverLog(LogLevel::Warn,
+                      "ntm-server: Sign in with Apple enabled, service_id = %s",
+                      config.siwa_service_id.c_str());
+        }
+    }
+
     // ── Admin password: load (legacy) or migrate to PBKDF2 (WebAuthn path) ──
     std::string adminPassword;
     if (!config.admin_password_file.empty())
@@ -2763,6 +2829,9 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
             webCfg.client_nicknames = clientsStore->nicknames;
             webCfg.registry         = clientRegistry;
             webCfg.webauthn         = webAuthnRP;
+            webCfg.siwaConfig       = siwaConfig;
+            webCfg.siwaValidator    = siwaValidator;
+            webCfg.siwaAdmins       = siwaAdmins;
             webCfg.clients_store    = clientsStore;
             webCfg.hidden_store     = hiddenStore;
             webCfg.ctrl_channels    = std::make_shared<ClientControlChannels>();

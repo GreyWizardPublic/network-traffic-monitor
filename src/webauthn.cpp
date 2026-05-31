@@ -686,6 +686,49 @@ void WebAuthnRP::invalidateSession(const std::string &token)
     sessions_.erase(token);
 }
 
+std::string WebAuthnRP::createIdentitySession(const std::string &identity, bool isAdmin)
+{
+    std::lock_guard<std::mutex> lk(mtx_);
+    sweepExpired();
+    auto token = toBase64url(randomBytes(32));
+    auto now   = std::chrono::steady_clock::now();
+    sessions_[token] = { now + std::chrono::hours(cfg_.sessionTtlHours), now,
+                         isAdmin, identity };
+    return token;
+}
+
+bool WebAuthnRP::isAdminSession(const std::string &token)
+{
+    std::lock_guard<std::mutex> lk(mtx_);
+    auto it = sessions_.find(token);
+    if (it == sessions_.end()) return false;
+    const auto now = std::chrono::steady_clock::now();
+    if (now > it->second.expiry) { sessions_.erase(it); return false; }
+    if (cfg_.idleTimeoutMinutes > 0 &&
+        now > it->second.lastActivity + std::chrono::minutes(cfg_.idleTimeoutMinutes))
+    {
+        sessions_.erase(it); return false;
+    }
+    it->second.lastActivity = now;
+    return it->second.isAdmin;
+}
+
+WebAuthnRP::SessionInfo WebAuthnRP::getSessionInfo(const std::string &token)
+{
+    std::lock_guard<std::mutex> lk(mtx_);
+    auto it = sessions_.find(token);
+    if (it == sessions_.end()) return {};
+    const auto now = std::chrono::steady_clock::now();
+    if (now > it->second.expiry) { sessions_.erase(it); return {}; }
+    if (cfg_.idleTimeoutMinutes > 0 &&
+        now > it->second.lastActivity + std::chrono::minutes(cfg_.idleTimeoutMinutes))
+    {
+        sessions_.erase(it); return {};
+    }
+    it->second.lastActivity = now;
+    return { true, it->second.isAdmin, it->second.identity };
+}
+
 // ---------------------------------------------------------------------------
 // Admin credential management
 // ---------------------------------------------------------------------------
@@ -862,6 +905,94 @@ bool WebAuthnRP::deleteCredential(const std::string &credId)
     credentials_.erase(it);
     saveCredentials();
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// Admin-session-gated passkey registration (no PBKDF2 password proof)
+// ---------------------------------------------------------------------------
+
+std::string WebAuthnRP::beginAdminRegistration(std::string &sessionKey)
+{
+    std::lock_guard<std::mutex> lk(mtx_);
+    sweepExpired();
+
+    auto wChallenge = randomBytes(32);
+    sessionKey = toBase64url(randomBytes(24));
+    auto expiry = std::chrono::steady_clock::now() + std::chrono::minutes(5);
+
+    // Reuse PendingReg struct; adminNonce is unused in this path (no password proof).
+    pendingRegs_[sessionKey] = { wChallenge, {}, expiry };
+
+    std::string j;
+    j  = "{\"session_key\":\""; j += sessionKey;
+    j += "\",\"challenge\":\"";   j += toBase64url(wChallenge);
+    j += "\",\"rp_id\":\"";       j += cfg_.rpId;
+    j += "\",\"rp_name\":\"";     j += cfg_.rpName.empty() ? cfg_.rpId : cfg_.rpName;
+    j += "\",\"user_id\":\"";     j += toBase64url(randomBytes(16));
+    j += "\"}";
+    return j;
+}
+
+std::string WebAuthnRP::completeAdminRegistration(const std::string &sessionKey,
+                                                   const std::string &attestationObjectB64,
+                                                   const std::string &clientDataJsonB64,
+                                                   const std::string &label)
+{
+    std::lock_guard<std::mutex> lk(mtx_);
+    sweepExpired();
+
+    auto it = pendingRegs_.find(sessionKey);
+    if (it == pendingRegs_.end()) return "invalid or expired session";
+    const PendingReg &pr = it->second;
+    if (std::chrono::steady_clock::now() > pr.expiry)
+    {
+        pendingRegs_.erase(it); return "session expired";
+    }
+
+    // Decode and verify clientDataJSON.
+    auto cdJsonBytes = fromBase64url(clientDataJsonB64);
+    if (cdJsonBytes.empty()) { pendingRegs_.erase(it); return "bad clientDataJSON"; }
+    std::string cdJson(cdJsonBytes.begin(), cdJsonBytes.end());
+
+    if (jsonGetStr(cdJson, "type") != "webauthn.create")
+        { pendingRegs_.erase(it); return "clientDataJSON type mismatch"; }
+
+    std::string gotChallenge = jsonGetStr(cdJson, "challenge");
+    if (fromBase64url(gotChallenge) != pr.webauthnChallenge)
+        { pendingRegs_.erase(it); return "challenge mismatch"; }
+
+    std::string origin = jsonGetStr(cdJson, "origin");
+    bool originOk = false;
+    for (const auto &ao : cfg_.allowedOrigins)
+        if (ao == origin) { originOk = true; break; }
+    if (!originOk) { pendingRegs_.erase(it); return "origin not allowed: " + origin; }
+
+    // Parse attestationObject.
+    auto attObj = fromBase64url(attestationObjectB64);
+    std::vector<uint8_t> authData;
+    if (!extractAuthDataFromAttestationObject(attObj, authData))
+        { pendingRegs_.erase(it); return "failed to parse attestationObject"; }
+
+    std::string credId;
+    std::vector<uint8_t> pubX, pubY;
+    uint32_t signCount = 0;
+    if (!parseAuthData(authData, credId, pubX, pubY, signCount, true))
+        { pendingRegs_.erase(it); return "authData validation failed"; }
+
+    for (const auto &c : credentials_)
+        if (c.credId == credId) { pendingRegs_.erase(it); return "credential already registered"; }
+
+    PasskeyCredential cred;
+    cred.credId    = credId;
+    cred.pubkeyX   = toBase64url(pubX);
+    cred.pubkeyY   = toBase64url(pubY);
+    cred.signCount = signCount;
+    cred.label     = label.empty() ? "My Device" : label;
+
+    credentials_.push_back(cred);
+    saveCredentials();
+    pendingRegs_.erase(it);
+    return {};
 }
 
 // ---------------------------------------------------------------------------
