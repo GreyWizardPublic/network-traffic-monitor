@@ -25,8 +25,8 @@ namespace ntm
 // SiwaAdminStore
 // ---------------------------------------------------------------------------
 
-// Parse a comma-separated list of emails into lowercase tokens.
-static std::vector<std::string> splitEmails(const std::string &csv)
+// Trim and split a comma-separated list into tokens (lowercased for emails).
+static std::vector<std::string> splitCsv(const std::string &csv, bool lowercase)
 {
     std::vector<std::string> out;
     std::istringstream iss(csv);
@@ -36,20 +36,22 @@ static std::vector<std::string> splitEmails(const std::string &csv)
         while (!tok.empty() && tok.front() == ' ') tok.erase(tok.begin());
         while (!tok.empty() && tok.back()  == ' ') tok.pop_back();
         if (tok.empty()) continue;
-        for (char &c : tok) c = (char)std::tolower((unsigned char)c);
+        if (lowercase)
+            for (char &c : tok) c = (char)std::tolower((unsigned char)c);
         out.push_back(tok);
     }
     return out;
 }
 
 SiwaAdminStore::SiwaAdminStore(const std::string &filePath,
-                                 const std::string &configEmails)
+                                 const std::string &configEmails,
+                                 const std::string &configSubs)
     : filePath_(filePath)
 {
     load();
 
-    // Seed from configEmails: add any email not already in the list.
-    for (const auto &email : splitEmails(configEmails))
+    // Seed email-based admin entries.
+    for (const auto &email : splitCsv(configEmails, /*lowercase=*/true))
     {
         bool found = false;
         for (const auto &id : identities_)
@@ -57,6 +59,19 @@ SiwaAdminStore::SiwaAdminStore(const std::string &filePath,
         if (!found)
             identities_.push_back({email, {}});
     }
+
+    // Seed sub-only entries (siwa_admin_subs). These are for operators who use
+    // "Hide My Email" and obtained their Apple sub from the server logs.
+    // Stored as records with an empty email — matched by sub only.
+    for (const auto &sub : splitCsv(configSubs, /*lowercase=*/false))
+    {
+        bool found = false;
+        for (const auto &id : identities_)
+            if (id.sub == sub) { found = true; break; }
+        if (!found)
+            identities_.push_back({"", sub});
+    }
+
     // Persist if we added anything (no lock needed — constructor is single-threaded).
     if (!filePath_.empty()) save();
 }

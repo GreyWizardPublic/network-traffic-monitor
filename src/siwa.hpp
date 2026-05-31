@@ -239,16 +239,19 @@ inline bool siwaEmailsEqual(const std::string &a, const std::string &b)
 // Returns the index into `ids`, or -1 if no match.
 // A sub match means the identity is confirmed; an email-only match means the sub
 // should be pinned by the caller (email-bootstrap phase).
+// Records with a sub but empty email are sub-only entries (added via siwa_admin_subs
+// config key) — they match by sub regardless of the provided email.
 inline int matchAdminIdentity(const std::vector<SiwaAdminIdentity> &ids,
                                const std::string &sub,
                                const std::string &email)
 {
-    // Priority 1: pinned sub match
+    // Priority 1: sub match (pinned or sub-only entry)
     for (int i = 0; i < (int)ids.size(); ++i)
         if (!ids[i].sub.empty() && ids[i].sub == sub) return i;
-    // Priority 2: email match on unpinned record (bootstrap)
-    for (int i = 0; i < (int)ids.size(); ++i)
-        if (ids[i].sub.empty() && siwaEmailsEqual(ids[i].email, email)) return i;
+    // Priority 2: email match on unpinned record (bootstrap when real email is provided)
+    if (!email.empty())
+        for (int i = 0; i < (int)ids.size(); ++i)
+            if (ids[i].sub.empty() && siwaEmailsEqual(ids[i].email, email)) return i;
     return -1;
 }
 
@@ -258,15 +261,20 @@ inline int matchAdminIdentity(const std::vector<SiwaAdminIdentity> &ids,
 
 // Manages the list of admin Apple identities:
 //   • Loaded from `filePath` (JSON) on construction.
-//   • Seeded with operator-configured comma-separated emails if the file does not
-//     already contain those emails.
+//   • Seeded with operator-configured emails (configEmails) and/or subs
+//     (configSubs) if those identities are not already present in the file.
+//   • configSubs entries are added as sub-only records (empty email) — useful
+//     for operators who use "Hide My Email" and know their Apple sub from logs.
 //   • Saves back when a sub is pinned on first successful login (email-bootstrap).
 class SiwaAdminStore
 {
 public:
     // filePath: path to the JSON persistence file (may not exist yet).
-    // configEmails: comma-separated admin email addresses from server config.
-    SiwaAdminStore(const std::string &filePath, const std::string &configEmails);
+    // configEmails: comma-separated admin email addresses (siwa_admins config key).
+    // configSubs: comma-separated Apple stable user IDs (siwa_admin_subs config key).
+    SiwaAdminStore(const std::string &filePath,
+                   const std::string &configEmails,
+                   const std::string &configSubs = {});
 
     // Check if this sub/email pair belongs to an admin.
     // If matched by email only (sub not yet pinned), pin the sub and persist.

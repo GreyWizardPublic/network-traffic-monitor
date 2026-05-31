@@ -128,6 +128,7 @@ struct ServerConfig
     std::string siwa_ios_bundle_id;      // iOS bundle ID for native auth (empty = native disabled)
     std::string siwa_redirect_uri;       // https://<rp>/auth/apple/callback
     std::string siwa_admins;             // comma-separated admin emails (bootstrap)
+    std::string siwa_admin_subs;         // comma-separated Apple stable user IDs (bypass email — for Hide My Email users)
     std::string siwa_admin_file;         // JSON file persisting {email,sub} after first login
     std::string siwa_domain_assoc_file;  // path to apple-developer-domain-association.txt content
 };
@@ -933,7 +934,7 @@ static const std::set<std::string> &knownServerConfigKeys()
         "webauthn_ios_app_id", "webauthn_allowed_origins",
         "webauthn_session_ttl_hours", "webauthn_idle_timeout_minutes",
         "siwa_service_id", "siwa_ios_bundle_id", "siwa_redirect_uri",
-        "siwa_admins", "siwa_admin_file", "siwa_domain_assoc_file",
+        "siwa_admins", "siwa_admin_subs", "siwa_admin_file", "siwa_domain_assoc_file",
         "update_dir",
         "trusted_proxy",
         "hidden_entities_file",
@@ -1052,6 +1053,7 @@ static ServerConfig loadServerConfig(const std::string &configPath, bool *ok = n
             else if (key == "siwa_ios_bundle_id")     { cfg.siwa_ios_bundle_id = val; }
             else if (key == "siwa_redirect_uri")      { cfg.siwa_redirect_uri = val; }
             else if (key == "siwa_admins")            { cfg.siwa_admins = val; }
+            else if (key == "siwa_admin_subs")        { cfg.siwa_admin_subs = val; }
             else if (key == "siwa_admin_file")        { cfg.siwa_admin_file = val; }
             else if (key == "siwa_domain_assoc_file") { cfg.siwa_domain_assoc_file = val; }
             else if (key == "webauthn_session_ttl_hours")
@@ -2567,7 +2569,8 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
             siwaConfig    = cfg;
             siwaValidator = std::make_shared<SiwaValidator>(*cfg);
             siwaAdmins    = std::make_shared<SiwaAdminStore>(
-                                config.siwa_admin_file, config.siwa_admins);
+                                config.siwa_admin_file, config.siwa_admins,
+                                config.siwa_admin_subs);
 
             serverLog(LogLevel::Warn,
                       "ntm-server: Sign in with Apple enabled, service_id = %s",
