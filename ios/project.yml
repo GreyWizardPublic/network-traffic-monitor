@@ -32,6 +32,8 @@ targets:
       properties:
         com.apple.developer.associated-domains:
           - webcredentials:ntm.happyhomelives.me
+        com.apple.developer.applesignin:
+          - Default
     info:
       path: NTMDashboard/NTMDashboard/Info.plist
       properties:
@@ -54,8 +56,8 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         DEVELOPMENT_TEAM: W65LG3MSG6
         CODE_SIGN_STYLE: Automatic
-        MARKETING_VERSION: "1.16.0"
-        CURRENT_PROJECT_VERSION: "24"
+        MARKETING_VERSION: "1.17.0"
+        CURRENT_PROJECT_VERSION: "25"
       configs:
         Debug:
           DEBUG_INFORMATION_FORMAT: dwarf
