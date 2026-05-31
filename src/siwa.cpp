@@ -3,11 +3,7 @@
 
 #include "siwa.hpp"
 
-// httplib.h requires this macro before inclusion for TLS support (OpenSSL backend).
-#ifndef CPPHTTPLIB_OPENSSL_SUPPORT
-#define CPPHTTPLIB_OPENSSL_SUPPORT
-#endif
-#include "httplib.h"
+#include <curl/curl.h>  // libcurl — already linked into ntm-server; better CA handling than httplib
 
 #include <cerrno>
 #include <cstring>
@@ -213,6 +209,14 @@ void SiwaValidator::setTestJwks(const std::vector<SiwaJwksKey> &keys)
     testMode_ = true;
 }
 
+// libcurl write callback — appends received data to a std::string.
+static std::size_t curlAppend(char *ptr, std::size_t size, std::size_t nmemb, void *ud)
+{
+    auto *out = static_cast<std::string *>(ud);
+    out->append(ptr, size * nmemb);
+    return size * nmemb;
+}
+
 bool SiwaValidator::ensureJwks()
 {
     // Already fresh?
@@ -220,40 +224,43 @@ bool SiwaValidator::ensureJwks()
         std::chrono::steady_clock::now() < jwksExpiry_) return true;
     if (testMode_) return !jwksKeys_.empty();
 
-    // Fetch from Apple (HTTPS GET https://appleid.apple.com/auth/keys).
-    httplib::SSLClient cli("appleid.apple.com");
-    cli.set_connection_timeout(10, 0);
-    cli.set_read_timeout(15, 0);
-
-    // Try common CA bundle locations so the fetch works on all Linux distributions.
-    static const char *kCaPaths[] = {
-        "/etc/ssl/certs/ca-certificates.crt",   // Debian / Ubuntu / Arch
-        "/etc/pki/tls/certs/ca-bundle.crt",     // RHEL / CentOS / Fedora
-        "/etc/ssl/cert.pem",                     // Alpine / macOS
-        nullptr
-    };
-    for (const char **p = kCaPaths; *p; ++p)
+    // Fetch Apple JWKS via libcurl — libcurl uses the system CA bundle and works
+    // on all Linux distributions without any extra configuration. httplib's SSLClient
+    // requires manual CA path configuration and may fail silently on some hosts.
+    std::string body;
+    CURL *curl = curl_easy_init();
+    if (!curl)
     {
-        if (std::ifstream(*p).good()) { cli.set_ca_cert_path(*p); break; }
+        fprintf(stderr, "ntm siwa: curl_easy_init failed\n");
+        return false;
     }
+    curl_easy_setopt(curl, CURLOPT_URL, "https://appleid.apple.com/auth/keys");
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curlAppend);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "ntm-server/2 (SIWA JWKS fetch)");
 
-    auto res = cli.Get("/auth/keys");
-    if (!res)
+    CURLcode rc = curl_easy_perform(curl);
+    long httpCode = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+    curl_easy_cleanup(curl);
+
+    if (rc != CURLE_OK)
     {
         fprintf(stderr,
-                "ntm siwa: JWKS fetch failed — could not connect to appleid.apple.com "
-                "(error: %s; ssl_error: %d). "
-                "Check outbound firewall: server needs port 443 to 17.0.0.0/8 "
-                "(Apple ID servers).\n",
-                httplib::to_string(res.error()).c_str(), res.ssl_error());
+                "ntm siwa: JWKS fetch failed: %s. "
+                "Ensure the server can reach appleid.apple.com:443 outbound.\n",
+                curl_easy_strerror(rc));
         return false;
     }
-    if (res->status != 200)
+    if (httpCode != 200)
     {
-        fprintf(stderr, "ntm siwa: JWKS fetch returned HTTP %d\n", res->status);
+        fprintf(stderr, "ntm siwa: JWKS fetch returned HTTP %ld\n", httpCode);
         return false;
     }
-    jwksKeys_ = parseJwksJson(res->body);
+    jwksKeys_ = parseJwksJson(body);
     if (jwksKeys_.empty())
     {
         fprintf(stderr, "ntm siwa: JWKS response contained no usable RSA keys\n");
