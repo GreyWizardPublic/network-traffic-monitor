@@ -3832,8 +3832,19 @@ void registerWebHandlers(NtmHttpServer &svr,
                 res.set_header("Set-Cookie",
                     "ntm_siwa_state=; HttpOnly; Secure; SameSite=None; Path=/auth/apple/callback"
                     "; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT");
-                res.set_header("Location", isAdmin ? "/admin" : "/");
-                res.status = 302;
+                // Use an HTML redirect instead of a bare 302 so the next navigation
+                // originates from our own origin. A bare 302 after Apple's cross-site
+                // form_post keeps the initiating site as appleid.apple.com, which
+                // prevents SameSite=Strict cookies from being sent on the GET request
+                // that follows the redirect.
+                const std::string dest = isAdmin ? "/admin" : "/";
+                res.set_content(
+                    "<!DOCTYPE html><html><head>"
+                    "<meta http-equiv='refresh' content='0;url=" + dest + "'>"
+                    "</head><body>"
+                    "<script>location.replace('" + dest + "')</script>"
+                    "</body></html>",
+                    "text/html; charset=utf-8");
             });
 
         // POST /auth/apple/native — iOS native sign-in via ASAuthorizationAppleIDCredential.
