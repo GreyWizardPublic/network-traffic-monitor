@@ -3820,10 +3820,20 @@ void registerWebHandlers(NtmHttpServer &svr,
                 const std::string token = config.webauthn->createIdentitySession(
                     result.sub, isAdmin);
 
-                serverLog(LogLevel::Info,
-                          "ntm-server: SIWA login OK — sub=%s email=%s admin=%s",
-                          result.sub.c_str(), result.email.c_str(),
-                          isAdmin ? "yes" : "no");
+                if (isAdmin)
+                {
+                    serverLog(LogLevel::Info,
+                              "ntm-server: SIWA login OK — sub=%s email=%s role=admin",
+                              result.sub.c_str(), result.email.c_str());
+                }
+                else
+                {
+                    serverLog(LogLevel::Warn,
+                              "ntm-server: SIWA login — not an admin sub=%s email=%s. "
+                              "Add to config: siwa_admin_subs = %s",
+                              result.sub.c_str(), result.email.c_str(),
+                              result.sub.c_str());
+                }
 
                 res.set_header("Set-Cookie",
                     "ntm_session=" + token +
