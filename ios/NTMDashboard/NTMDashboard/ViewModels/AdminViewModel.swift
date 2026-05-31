@@ -5,8 +5,11 @@ import Foundation
 final class AdminViewModel {
     private let client: AdminClient
 
+    private let siwaService = SIWAService()
+
     // Auth state
     var isAdminAuthenticated = false
+    var isAuthenticating = false
     var showPasswordSheet = false
 
     // Data
@@ -38,6 +41,24 @@ final class AdminViewModel {
         do {
             try await client.authenticate(password: password)
             isAdminAuthenticated = await client.isAdminAuthenticated
+            showPasswordSheet = false
+            if let action = pendingAction {
+                pendingAction = nil
+                try await action()
+            }
+        } catch {
+            actionError = error.localizedDescription
+        }
+    }
+
+    func loginWithApple() async {
+        isAuthenticating = true
+        actionError = nil
+        defer { isAuthenticating = false }
+        do {
+            let identityToken = try await siwaService.signIn()
+            try await client.authenticateWithApple(identityToken: identityToken)
+            isAdminAuthenticated = true
             showPasswordSheet = false
             if let action = pendingAction {
                 pendingAction = nil

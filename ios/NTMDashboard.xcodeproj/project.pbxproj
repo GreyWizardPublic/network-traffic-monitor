@@ -10,6 +10,7 @@
 		0207EF25BB05546CCBFEFBB1 /* GlassCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17D7EA47DF8FD33E34D5FD50 /* GlassCard.swift */; };
 		07F9EA28CA34B08A2D801D87 /* LanDevicesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1657FC87DF6B87D3630383B /* LanDevicesView.swift */; };
 		082454EBF059FEB0D9C9E13F /* HiddenEntitiesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCADA0CE2EFC36072306864 /* HiddenEntitiesView.swift */; };
+		0F70050168F649376A91DE13 /* SIWAService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFEA42D8A9291A0053CD2CD /* SIWAService.swift */; };
 		19459707933237366C1F8764 /* ByteLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58A0EEF5B09B3375446F28A3 /* ByteLabel.swift */; };
 		1C7E06BBA00154ABC88F28A6 /* ServerConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBA03BA53FCA19A5FC837A71 /* ServerConfig.swift */; };
 		2EFEA0E26DAE80214ECCFFB1 /* NTMClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6458FB6A66A07ABA491D7270 /* NTMClient.swift */; };
@@ -45,7 +46,6 @@
 		A6DC3789757BD7F4A0B4AF12 /* ProtocolVersion.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4DD610B34BF286883320588 /* ProtocolVersion.swift */; };
 		A9C7EF53C5E19D5F89B98D2E /* SectionCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53D1261760DC4266421A7B97 /* SectionCard.swift */; };
 		B1F7F14FA25EB3CFD90675A8 /* AppNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA4035AFFE621B90203F451F /* AppNavigation.swift */; };
-		B5330ED8E9D503B32B707D09 /* AdminProof.swift in Sources */ = {isa = PBXBuildFile; fileRef = 804A17A45D0AF55FA4B6DCBC /* AdminProof.swift */; };
 		B5EABE58EBEB28E9D8E176F1 /* HiddenEntities.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABD263BEB02D15F793F3D940 /* HiddenEntities.swift */; };
 		C53E3A35A37173372D67A39D /* ProtoRejectedClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8514DAA6EF7557EBA0370386 /* ProtoRejectedClient.swift */; };
 		C908F8F4BF3BDFB7E6AC5A61 /* ByteFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C5CAAD94CB10A98C2568456 /* ByteFormatter.swift */; };
@@ -98,7 +98,6 @@
 		688721A5E912EE5A4A34F568 /* NTMDashboard.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = NTMDashboard.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7582250B685DEAAF5C02E8AC /* DemoServerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoServerView.swift; sourceTree = "<group>"; };
 		7CDEC5129C70D4867785C415 /* AdminPasswordSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdminPasswordSheet.swift; sourceTree = "<group>"; };
-		804A17A45D0AF55FA4B6DCBC /* AdminProof.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdminProof.swift; sourceTree = "<group>"; };
 		830D3FF5F84A24DDA5DDD139 /* DashboardViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardViewModel.swift; sourceTree = "<group>"; };
 		8514DAA6EF7557EBA0370386 /* ProtoRejectedClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtoRejectedClient.swift; sourceTree = "<group>"; };
 		8A28C84A9FAFD2E66259B3B9 /* RegisterDeviceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RegisterDeviceView.swift; sourceTree = "<group>"; };
@@ -117,6 +116,7 @@
 		C2BB5AF1913223940757E543 /* AdminMonitors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdminMonitors.swift; sourceTree = "<group>"; };
 		C36B4420C355C12E6508F842 /* ClientHistoryClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientHistoryClient.swift; sourceTree = "<group>"; };
 		C617BBBD2118484AFA984179 /* UpdateManifestSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateManifestSection.swift; sourceTree = "<group>"; };
+		CDFEA42D8A9291A0053CD2CD /* SIWAService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SIWAService.swift; sourceTree = "<group>"; };
 		D2CC62CA763A7CB87C6A9285 /* ClientHealthSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientHealthSection.swift; sourceTree = "<group>"; };
 		D330C12EF81AF8FB857D866B /* StatBadge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatBadge.swift; sourceTree = "<group>"; };
 		D4E4AB6ABFBA6D1D0F5090EB /* InterfacesSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InterfacesSection.swift; sourceTree = "<group>"; };
@@ -230,7 +230,6 @@
 			isa = PBXGroup;
 			children = (
 				62558B3A4CE50A012B81AE85 /* AdminClient.swift */,
-				804A17A45D0AF55FA4B6DCBC /* AdminProof.swift */,
 				211C120F7F3FAB95364C4930 /* CertificatePinner.swift */,
 				C36B4420C355C12E6508F842 /* ClientHistoryClient.swift */,
 				4D1E5677279246C4C1605702 /* KeychainService.swift */,
@@ -238,6 +237,7 @@
 				2209ECC4A2BC27EDB6F141C6 /* PasskeyService.swift */,
 				B4DD610B34BF286883320588 /* ProtocolVersion.swift */,
 				DBA03BA53FCA19A5FC837A71 /* ServerConfig.swift */,
+				CDFEA42D8A9291A0053CD2CD /* SIWAService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -420,7 +420,6 @@
 				632D0B9D524E5C07CC719065 /* AdminClient.swift in Sources */,
 				ED2E6B17D1293C2E0CCABEA1 /* AdminMonitors.swift in Sources */,
 				A4530009EEB0116512A9E5F9 /* AdminPasswordSheet.swift in Sources */,
-				B5330ED8E9D503B32B707D09 /* AdminProof.swift in Sources */,
 				D73EE4940DF38C1225EFABAC /* AdminRootView.swift in Sources */,
 				49E7463A91EA3CC9B6E92420 /* AdminViewModel.swift in Sources */,
 				B1F7F14FA25EB3CFD90675A8 /* AppNavigation.swift in Sources */,
@@ -461,6 +460,7 @@
 				A6DC3789757BD7F4A0B4AF12 /* ProtocolVersion.swift in Sources */,
 				9C029F8BCE9FBE3E5E7095D8 /* RegisterDeviceView.swift in Sources */,
 				E84BA355775F2E9FE26B0D75 /* RootView.swift in Sources */,
+				0F70050168F649376A91DE13 /* SIWAService.swift in Sources */,
 				A9C7EF53C5E19D5F89B98D2E /* SectionCard.swift in Sources */,
 				1C7E06BBA00154ABC88F28A6 /* ServerConfig.swift in Sources */,
 				96602BC5101612853F021129 /* ServerInfoFooter.swift in Sources */,
@@ -513,7 +513,7 @@
 				CODE_SIGN_ENTITLEMENTS = NTMDashboard/NTMDashboard/NTMDashboard.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 24;
+				CURRENT_PROJECT_VERSION = 26;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = W65LG3MSG6;
 				INFOPLIST_FILE = NTMDashboard/NTMDashboard/Info.plist;
@@ -522,7 +522,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.16.0;
+				MARKETING_VERSION = 1.18.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ntm.NTMDashboard;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -602,7 +602,7 @@
 				CODE_SIGN_ENTITLEMENTS = NTMDashboard/NTMDashboard/NTMDashboard.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Distribution: Dong Xue (W65LG3MSG6)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 24;
+				CURRENT_PROJECT_VERSION = 26;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = W65LG3MSG6;
 				INFOPLIST_FILE = NTMDashboard/NTMDashboard/Info.plist;
@@ -611,7 +611,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.16.0;
+				MARKETING_VERSION = 1.18.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ntm.NTMDashboard;
 				SDKROOT = iphoneos;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";

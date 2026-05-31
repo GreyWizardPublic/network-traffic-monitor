@@ -3,7 +3,6 @@ import SwiftUI
 struct LoginView: View {
     @Environment(AuthViewModel.self)     private var authVM
     @Environment(SettingsViewModel.self) private var settingsVM
-    @State private var showRegister = false
     @State private var serverURLInput: String = ServerConfig.load().serverURL
 
     private var serverConfigured: Bool { !serverURLInput.isEmpty }
@@ -42,12 +41,6 @@ struct LoginView: View {
                             .padding(.vertical, 4)
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(authVM.isLoading || !serverConfigured)
-
-                    Button("Register this device…") {
-                        authVM.errorMessage = nil
-                        showRegister = true
-                    }
                     .disabled(authVM.isLoading || !serverConfigured)
 
                     HStack {
@@ -114,10 +107,7 @@ struct LoginView: View {
 
                 Spacer()
             }
-            .sheet(isPresented: $showRegister) {
-                RegisterDeviceView()
             }
-        }
     }
 
     private func saveURL() {

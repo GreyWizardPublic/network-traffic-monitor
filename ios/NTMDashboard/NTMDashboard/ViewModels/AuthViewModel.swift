@@ -74,7 +74,7 @@ final class AuthViewModel {
         }
     }
 
-    func register(adminPassword: String, deviceLabel: String) async {
+    func register(deviceLabel: String) async {
         let cfg = ServerConfig.load()
         guard let base = cfg.baseURL else {
             errorMessage = "Server not configured — enter server URL"
@@ -86,23 +86,15 @@ final class AuthViewModel {
 
         do {
             let session = makeSession(cfg)
+            let token = KeychainService.loadToken(for: base.absoluteString)
 
-            let beginResp = try await fetchRegistrationChallenge(session: session, base: base)
+            let beginResp = try await fetchRegistrationChallenge(session: session, base: base, token: token)
             guard
-                let salt = Data(base64URLEncoded: beginResp.pbkdf2Salt),
-                let nonce = Data(base64URLEncoded: beginResp.adminNonce),
                 let challenge = Data(base64URLEncoded: beginResp.challenge),
                 let userId = Data(base64URLEncoded: beginResp.userId)
             else {
                 throw AuthError.invalidServerResponse("bad registration parameters")
             }
-
-            let proofHex = AdminProof.compute(
-                password: adminPassword,
-                salt: salt,
-                nonce: nonce,
-                iterations: beginResp.pbkdf2Iterations
-            )
 
             let registration = try await passkeyService.performRegistration(
                 challenge: challenge,
@@ -117,12 +109,11 @@ final class AuthViewModel {
 
             let body = RegisterCompleteBody(
                 sessionKey: beginResp.sessionKey,
-                adminProof: proofHex,
                 attestationObject: attestation.base64URLEncoded,
                 clientDataJSON: registration.rawClientDataJSON.base64URLEncoded,
                 label: deviceLabel
             )
-            try await completeRegistration(session: session, base: base, body: body)
+            try await completeRegistration(session: session, base: base, body: body, token: token)
             // Registration succeeded — proceed directly to passkey sign-in
             await login()
         } catch {
@@ -219,16 +210,19 @@ final class AuthViewModel {
         return URLSession(configuration: .ephemeral, delegate: pinner, delegateQueue: nil)
     }
 
-    private func fetchRegistrationChallenge(session: URLSession, base: URL) async throws -> RegisterBeginResponse {
-        let (data, resp) = try await session.data(for: URLRequest(url: base.appendingPathComponent("/auth/register/begin"), timeoutInterval: 10))
+    private func fetchRegistrationChallenge(session: URLSession, base: URL, token: String?) async throws -> RegisterBeginResponse {
+        var req = URLRequest(url: base.appendingPathComponent("/api/admin/register/begin"), timeoutInterval: 10)
+        if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        let (data, resp) = try await session.data(for: req)
         try checkHTTP(resp)
         return try JSONDecoder().decode(RegisterBeginResponse.self, from: data)
     }
 
-    private func completeRegistration(session: URLSession, base: URL, body: RegisterCompleteBody) async throws {
-        var req = URLRequest(url: base.appendingPathComponent("/auth/register/complete"), timeoutInterval: 10)
+    private func completeRegistration(session: URLSession, base: URL, body: RegisterCompleteBody, token: String?) async throws {
+        var req = URLRequest(url: base.appendingPathComponent("/api/admin/register/complete"), timeoutInterval: 10)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         req.httpBody = try JSONEncoder().encode(body)
         let (_, resp) = try await session.data(for: req)
         try checkHTTP(resp)
@@ -297,9 +291,6 @@ enum AuthError: LocalizedError {
 private struct RegisterBeginResponse: Decodable {
     let sessionKey: String
     let challenge: String
-    let adminNonce: String
-    let pbkdf2Salt: String
-    let pbkdf2Iterations: Int
     let rpId: String
     let rpName: String
     let userId: String
@@ -307,9 +298,6 @@ private struct RegisterBeginResponse: Decodable {
     enum CodingKeys: String, CodingKey {
         case sessionKey = "session_key"
         case challenge
-        case adminNonce = "admin_nonce"
-        case pbkdf2Salt = "pbkdf2_salt"
-        case pbkdf2Iterations = "pbkdf2_iterations"
         case rpId = "rp_id"
         case rpName = "rp_name"
         case userId = "user_id"
@@ -318,14 +306,12 @@ private struct RegisterBeginResponse: Decodable {
 
 private struct RegisterCompleteBody: Encodable {
     let sessionKey: String
-    let adminProof: String
     let attestationObject: String
     let clientDataJSON: String
     let label: String
 
     enum CodingKeys: String, CodingKey {
         case sessionKey = "session_key"
-        case adminProof = "admin_proof"
         case attestationObject = "attestation_object"
         case clientDataJSON = "client_data_json"
         case label

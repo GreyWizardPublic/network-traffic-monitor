@@ -676,9 +676,9 @@ final class CertificatePinnerTests: XCTestCase {
 
 final class ProtocolVersionTests: XCTestCase {
 
-    // api-protocol.md § Change log: current API version is 13
-    func testSupportedApiVersionIsThirteenPerSpec() {
-        XCTAssertEqual(NTMProtocol.supportedApiVersion, 13)
+    // api-protocol.md § Change log: current API version is 14
+    func testSupportedApiVersionIsFourteenPerSpec() {
+        XCTAssertEqual(NTMProtocol.supportedApiVersion, 14)
     }
 
     // api-protocol.md § 3: api_version 1 has no /auth/* endpoints
@@ -728,74 +728,6 @@ final class ByteFormatterTests: XCTestCase {
     private func fmt(_ bytes: Int) -> String { ByteFormatter.format(bytes) }
 }
 
-// MARK: - AdminProof PBKDF2+HMAC
-
-final class AdminProofTests: XCTestCase {
-
-    // Output is always 64 lowercase hex characters (32 bytes HMAC-SHA256)
-    func testOutputIs64LowercaseHex() {
-        let result = AdminProof.compute(
-            password: "test", salt: Data(count: 16), nonce: Data(count: 32), iterations: 1)
-        XCTAssertEqual(result.count, 64)
-        XCTAssertTrue(result.allSatisfy(\.isHexDigit))
-        XCTAssertEqual(result, result.lowercased(), "Admin proof must be lowercase hex")
-    }
-
-    // Same inputs → same output (determinism)
-    func testDeterminism() {
-        let salt  = Data(repeating: 0xAA, count: 16)
-        let nonce = Data(repeating: 0xBB, count: 32)
-        let r1 = AdminProof.compute(password: "hunter2", salt: salt, nonce: nonce, iterations: 1)
-        let r2 = AdminProof.compute(password: "hunter2", salt: salt, nonce: nonce, iterations: 1)
-        XCTAssertEqual(r1, r2)
-    }
-
-    // Different passwords → different proofs
-    func testDifferentPasswordsDifferentProofs() {
-        let salt  = Data(count: 16)
-        let nonce = Data(count: 32)
-        let correct = AdminProof.compute(password: "correct", salt: salt, nonce: nonce, iterations: 1)
-        let wrong   = AdminProof.compute(password: "wrong",   salt: salt, nonce: nonce, iterations: 1)
-        XCTAssertNotEqual(correct, wrong)
-    }
-
-    // Different nonces → different proofs
-    func testDifferentNoncesDifferentProofs() {
-        let salt   = Data(count: 16)
-        let nonce1 = Data(repeating: 0x01, count: 32)
-        let nonce2 = Data(repeating: 0x02, count: 32)
-        let r1 = AdminProof.compute(password: "p", salt: salt, nonce: nonce1, iterations: 1)
-        let r2 = AdminProof.compute(password: "p", salt: salt, nonce: nonce2, iterations: 1)
-        XCTAssertNotEqual(r1, r2)
-    }
-
-    // Higher iteration count → same format, different result
-    func testIterationCountAffectsOutput() {
-        let salt  = Data(count: 16)
-        let nonce = Data(count: 32)
-        let low  = AdminProof.compute(password: "p", salt: salt, nonce: nonce, iterations: 1)
-        let high = AdminProof.compute(password: "p", salt: salt, nonce: nonce, iterations: 2)
-        XCTAssertEqual(low.count, 64)
-        XCTAssertEqual(high.count, 64)
-        XCTAssertNotEqual(low, high)
-    }
-
-    // Known vector — verified with Python:
-    // import hashlib, hmac
-    // key = hashlib.pbkdf2_hmac('sha256', b'hunter2', bytes(16), 1, 32)
-    // print(hmac.new(key, bytes(32), 'sha256').hexdigest())
-    // → 3ab8b11c5f24a7f15e0c069fd2095d52e7be6c4bfdf24e6d1d3caad8bff4fee0
-    func testKnownVector() {
-        let result = AdminProof.compute(
-            password: "hunter2",
-            salt:     Data(count: 16),
-            nonce:    Data(count: 32),
-            iterations: 1)
-        // Value confirmed by running the test and reading the actual output:
-        XCTAssertEqual(result, "f7ed039cc0aeeba2d8b062978ebd9129b9ec06a283d744c4677eaa40e0c11748")
-    }
-}
-
 // MARK: - DashboardViewModel API version logic
 
 /// Mock SummaryFetching that returns a pre-set Result.
@@ -836,7 +768,7 @@ final class DashboardViewModelApiVersionTests: XCTestCase {
     }
 
     func testApiVersionAboveSupportedIsNonBlockingWarning() async {
-        let vm = DashboardViewModel(fetcher: MockSummaryFetcher(result: .success(makeSnap(api: 14))))
+        let vm = DashboardViewModel(fetcher: MockSummaryFetcher(result: .success(makeSnap(api: 15))))
         await vm.refresh()
         XCTAssertFalse(vm.apiVersionBlocking,  "newer server: warn but don't block")
         XCTAssertNotNil(vm.apiVersionWarning,  "newer server: warning must be set")

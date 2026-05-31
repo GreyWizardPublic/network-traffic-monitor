@@ -5,6 +5,7 @@ actor AdminClient {
     private var session: URLSession
     private var adminProofToken: String?
     private var adminProofIssuedAt: Date?
+    private var isAppleSession = false
 
     private let tokenTTL: TimeInterval = 1800  // kAdminProofTokenSec
 
@@ -26,9 +27,11 @@ actor AdminClient {
         )
         adminProofToken = nil
         adminProofIssuedAt = nil
+        isAppleSession = false
     }
 
     var isAdminAuthenticated: Bool {
+        if isAppleSession { return true }
         guard let token = adminProofToken, !token.isEmpty,
               let issued = adminProofIssuedAt else { return false }
         return Date().timeIntervalSince(issued) < tokenTTL
@@ -63,6 +66,23 @@ actor AdminClient {
                 }
             }
         }
+    }
+
+    func authenticateWithApple(identityToken: String) async throws {
+        guard let base = config.baseURL else { throw NTMError.notConfigured }
+        var req = URLRequest(url: base.appendingPathComponent("/auth/apple/native"), timeoutInterval: 15)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONEncoder().encode(["identity_token": identityToken])
+        let (data, response) = try await perform(req)
+        if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+            throw NTMError.httpError(http.statusCode)
+        }
+        let result = try decode(AppleNativeResponse.self, from: data)
+        guard result.ok, let token = result.token else { throw NTMError.httpError(401) }
+        guard result.role == "admin" else { throw SIWAError.notAdmin }
+        KeychainService.saveToken(token, for: base.absoluteString)
+        isAppleSession = true
     }
 
     // MARK: - Admin API methods
@@ -152,7 +172,7 @@ actor AdminClient {
         if let token = KeychainService.loadToken(for: base.absoluteString) {
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
-        if let proof = adminProofToken, isAdminAuthenticated {
+        if !isAppleSession, let proof = adminProofToken, isAdminAuthenticated {
             req.setValue("ntm_admin=\(proof)", forHTTPHeaderField: "Cookie")
         }
     }
@@ -172,4 +192,10 @@ actor AdminClient {
             throw NTMError.decodingError(error)
         }
     }
+}
+
+private struct AppleNativeResponse: Decodable {
+    let ok: Bool
+    let token: String?
+    let role: String?
 }

@@ -5,6 +5,8 @@ struct SettingsView: View {
     @Environment(DashboardViewModel.self) private var dashVM
     @Environment(AuthViewModel.self) private var authVM
 
+    @State private var showRegister = false
+
     var body: some View {
         @Bindable var vm = vm
         Form {
@@ -62,6 +64,16 @@ struct SettingsView: View {
 
             if authVM.isAuthenticated {
                 Section {
+                    Button("Register this device with passkey…") {
+                        authVM.errorMessage = nil
+                        showRegister = true
+                    }
+                } footer: {
+                    Text("Register a passkey for quick sign-in. Requires an active admin session.")
+                        .font(.caption)
+                }
+
+                Section {
                     Button("Sign out", role: .destructive) {
                         Task { await authVM.logout() }
                     }
@@ -76,5 +88,9 @@ struct SettingsView: View {
             }
         }
         .navigationTitle("Settings")
+        .sheet(isPresented: $showRegister) {
+            RegisterDeviceView()
+                .environment(authVM)
+        }
     }
 }
