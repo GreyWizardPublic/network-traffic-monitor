@@ -1036,6 +1036,10 @@ All keys are set in the config file (`key = value`) or overridden by CLI flags.
 | `verbose` | `--verbose` | `false` | Enable verbose logging |
 | `log_dir` | — | *(platform default — see below)* | Directory for client log files. Empty string uses the platform default. |
 | `log_level` | — | `Info` | Initial log verbosity: `Info`, `Warn`, or `Err`. Can be changed at runtime from the admin dashboard without restarting the client. |
+| `agg_target_lines_per_sec` | — | `500` | Target aggregated D-lines per second emitted to the server. The adaptive interval controller adjusts the flush interval to meet this target. |
+| `agg_min_interval_ms` | — | `100` | Minimum time between aggregation flushes (milliseconds). Lower values reduce latency but increase server load. |
+| `agg_max_interval_ms` | — | `5000` | Maximum time between aggregation flushes (milliseconds). Acts as a heartbeat when traffic is idle. |
+| `agg_max_flows` | — | `10000` | Maximum distinct (iface, src, dst) flows per flush window. Reaching this limit triggers an early flush regardless of the interval. |
 
 Precedence: **CLI flags** > **config file** > **built-in defaults**.
 

@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <sys/stat.h>   // chmod()
 
 namespace ntm
 {
@@ -694,6 +695,9 @@ void WebAuthnRP::saveCredentials() const
         first = false;
     }
     f << "\n]}\n";
+    f.close();
+    // Restrict to owner-only: credentials contain P-256 public keys and device labels.
+    chmod(cfg_.credentialsFile.c_str(), 0600);
 }
 
 // ---------------------------------------------------------------------------
