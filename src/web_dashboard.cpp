@@ -1976,7 +1976,7 @@ button{font-family:monospace;font-size:0.82em;padding:5px 14px;border-radius:3px
 <div class="sub">These are all passkeys that can log in to the dashboard. Revoke any you no longer recognise.</div>
 <table id="pk_tbl"><thead><tr><th>Label</th><th>Sign count</th><th></th></tr></thead>
 <tbody id="pk_body"><tr><td colspan="3" style="color:#555">Loading&hellip;</td></tr></tbody></table>
-<div class="err-msg" id="pk_err" style="margin-top:6px"></div>
+<div id="pk_msg" style="margin-top:6px;font-size:0.8em;min-height:1.2em"></div>
 
 <!-- ── Register a New Device ─────────────────────────────────────────────── -->
 <div class="section" style="margin-top:22px">Register a New Device</div>
@@ -2771,15 +2771,20 @@ async function loadAll(){
 // ---------------------------------------------------------------------------
 // Passkey management
 // ---------------------------------------------------------------------------
+function pkMsg(text, isErr){
+  const el=document.getElementById('pk_msg');
+  el.textContent=text;
+  el.style.color=isErr?'#c44':'#4c4';
+  if(!isErr&&text){clearTimeout(pkMsg._t);pkMsg._t=setTimeout(()=>{el.textContent='';},4000);}
+}
+
 async function loadPasskeys(){
   const body=document.getElementById('pk_body');
-  const err=document.getElementById('pk_err');
   try{
     const r=await fetch('/api/admin/passkeys',{cache:'no-store'});
     if(handleAdminExpiry(r.status))return;
     const d=await r.json();
-    if(!r.ok||d.error){err.textContent=d.error||'Failed to load passkeys';return;}
-    err.textContent='';
+    if(!r.ok||d.error){pkMsg(d.error||'Failed to load passkeys',true);return;}
     if(!d.passkeys||!d.passkeys.length){
       body.innerHTML='<tr><td colspan="3" style="color:#555">No passkeys registered.</td></tr>';
       return;
@@ -2791,21 +2796,24 @@ async function loadPasskeys(){
         <td><button class="btn-purge" style="padding:2px 10px;font-size:0.78em"
             onclick="revokePasskey('${esc(p.cred_id)}','${esc(p.label)}')">Revoke</button></td>
       </tr>`).join('');
-  }catch(e){err.textContent='Error: '+e.message;}
+  }catch(e){pkMsg('Error: '+e.message,true);}
 }
 
 async function revokePasskey(credId,label){
   if(!confirm('Revoke passkey "'+label+'"? This cannot be undone.'))return;
-  const err=document.getElementById('pk_err');
+  pkMsg('Revoking…',false);
   try{
     const r=await fetch('/api/admin/passkeys/'+encodeURIComponent(credId),
                         {method:'DELETE'});
-    if(handleAdminExpiry(r.status))return;
+    if(handleAdminExpiry(r.status)){pkMsg('',false);return;}
     const d=await r.json();
-    if(!r.ok||d.error){err.textContent=d.error||'Revoke failed';return;}
-    err.textContent='';
+    if(!r.ok||d.error){
+      pkMsg('Revoke failed: '+(d.error||'unknown error'),true);
+      return;
+    }
+    pkMsg('Passkey "'+label+'" revoked.',false);
     loadPasskeys();
-  }catch(e){err.textContent='Error: '+e.message;}
+  }catch(e){pkMsg('Error: '+e.message,true);}
 }
 
 // ---------------------------------------------------------------------------

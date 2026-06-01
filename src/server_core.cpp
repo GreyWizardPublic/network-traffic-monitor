@@ -2540,11 +2540,13 @@ int runServer(std::uint16_t port, bool daemonMode, bool verbose,
                       "ntm-server: siwa_service_id is set but siwa_redirect_uri is empty "
                       "— Sign in with Apple disabled");
         }
-        else if (config.siwa_admins.empty() && config.siwa_admin_file.empty())
+        else if (config.siwa_admins.empty() && config.siwa_admin_file.empty() &&
+                 config.siwa_admin_subs.empty())
         {
             serverLog(LogLevel::Warn,
-                      "ntm-server: siwa_service_id is set but neither siwa_admins nor "
-                      "siwa_admin_file is configured — no admins can sign in via Apple");
+                      "ntm-server: siwa_service_id is set but none of siwa_admins, "
+                      "siwa_admin_subs, or siwa_admin_file is configured — "
+                      "no admins can sign in via Apple");
         }
         else
         {
