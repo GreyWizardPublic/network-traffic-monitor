@@ -11,6 +11,7 @@
 #include <fstream>
 #include <sstream>
 #include <sys/stat.h>   // chmod()
+#include <thread>       // std::this_thread::sleep_for
 
 #include <openssl/bn.h>
 #include <openssl/core_names.h>
@@ -110,19 +111,21 @@ void SiwaAdminStore::load()
     }
 }
 
-void SiwaAdminStore::save() const
+// Write a snapshot of identities to disk (no lock held — caller must snapshot first).
+static void saveSnapshot(const std::string &filePath,
+                          const std::vector<ntm::SiwaAdminIdentity> &snap)
 {
-    if (filePath_.empty()) return;
-    std::ofstream f(filePath_, std::ios::trunc);
+    if (filePath.empty()) return;
+    std::ofstream f(filePath, std::ios::trunc);
     if (!f)
     {
         fprintf(stderr, "ntm siwa: cannot write admin file '%s': %s\n",
-                filePath_.c_str(), strerror(errno));
+                filePath.c_str(), strerror(errno));
         return;
     }
     f << "[\n";
     bool first = true;
-    for (const auto &id : identities_)
+    for (const auto &id : snap)
     {
         if (!first) f << ",\n";
         f << "  {\"email\":\"" << id.email << "\",\"sub\":\"" << id.sub << "\"}";
@@ -130,23 +133,43 @@ void SiwaAdminStore::save() const
     }
     f << "\n]\n";
     f.close();
-    // Restrict to owner-only: file contains admin Apple IDs (email + sub).
-    chmod(filePath_.c_str(), 0600);
+    chmod(filePath.c_str(), 0600);
+}
+
+void SiwaAdminStore::save() const
+{
+    // Take snapshot under lock, then write outside lock so I/O does not block
+    // concurrent auth requests.
+    std::vector<SiwaAdminIdentity> snap;
+    {
+        std::lock_guard<std::mutex> lk(mtx_);
+        snap = identities_;
+    }
+    saveSnapshot(filePath_, snap);
 }
 
 bool SiwaAdminStore::matchAndPin(const std::string &sub, const std::string &email)
 {
-    std::lock_guard<std::mutex> lk(mtx_);
-    int idx = matchAdminIdentity(identities_, sub, email);
-    if (idx < 0) return false;
-
-    // If matched by email only, pin the sub now.
-    if (identities_[idx].sub.empty())
+    std::vector<SiwaAdminIdentity> snap;
+    bool needsSave = false;
+    bool isAdmin   = false;
     {
-        identities_[idx].sub = sub;
-        save();
+        std::lock_guard<std::mutex> lk(mtx_);
+        int idx = matchAdminIdentity(identities_, sub, email);
+        if (idx >= 0)
+        {
+            isAdmin = true;
+            if (identities_[idx].sub.empty())
+            {
+                identities_[idx].sub = sub;
+                needsSave = true;
+                snap = identities_;  // snapshot under lock for write outside lock
+            }
+        }
     }
-    return true;
+    // File I/O outside the lock — no blocking of concurrent auth requests.
+    if (needsSave) saveSnapshot(filePath_, snap);
+    return isAdmin;
 }
 
 std::vector<SiwaAdminIdentity> SiwaAdminStore::list() const
@@ -243,6 +266,20 @@ bool SiwaValidator::ensureJwks()
         std::chrono::steady_clock::now() < jwksExpiry_) return true;
     if (testMode_) return !jwksKeys_.empty();
 
+    // Prevent concurrent threads from all triggering a 15 s network fetch.
+    // Only the first thread fetches; others wait up to 20 s and reuse the result.
+    bool expected = false;
+    if (!jwksFetchInProgress_.compare_exchange_strong(expected, true))
+    {
+        // Another thread is already fetching. Wait briefly and return current state.
+        for (int i = 0; i < 200; ++i)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            if (!jwksFetchInProgress_.load()) break;
+        }
+        return !jwksKeys_.empty();
+    }
+
     // Fetch Apple JWKS via libcurl — libcurl uses the system CA bundle and works
     // on all Linux distributions without any extra configuration. httplib's SSLClient
     // requires manual CA path configuration and may fail silently on some hosts.
@@ -251,6 +288,7 @@ bool SiwaValidator::ensureJwks()
     if (!curl)
     {
         fprintf(stderr, "ntm siwa: curl_easy_init failed\n");
+        jwksFetchInProgress_.store(false);
         return false;
     }
     curl_easy_setopt(curl, CURLOPT_URL, "https://appleid.apple.com/auth/keys");
@@ -272,21 +310,25 @@ bool SiwaValidator::ensureJwks()
                 "ntm siwa: JWKS fetch failed: %s. "
                 "Ensure the server can reach appleid.apple.com:443 outbound.\n",
                 curl_easy_strerror(rc));
+        jwksFetchInProgress_.store(false);
         return false;
     }
     if (httpCode != 200)
     {
         fprintf(stderr, "ntm siwa: JWKS fetch returned HTTP %ld\n", httpCode);
+        jwksFetchInProgress_.store(false);
         return false;
     }
-    jwksKeys_ = parseJwksJson(body);
-    if (jwksKeys_.empty())
+    auto parsed = parseJwksJson(body);
+    if (parsed.empty())
     {
         fprintf(stderr, "ntm siwa: JWKS response contained no usable RSA keys\n");
+        jwksFetchInProgress_.store(false);
         return false;
     }
-    // Cache for 1 hour.
+    jwksKeys_   = std::move(parsed);
     jwksExpiry_ = std::chrono::steady_clock::now() + std::chrono::hours(1);
+    jwksFetchInProgress_.store(false);
     return true;
 }
 
@@ -452,10 +494,36 @@ SiwaValidator::VerifyResult SiwaValidator::verifyNative(
     const std::string &idToken,
     const std::vector<std::string> &allowedAuds)
 {
-    // Native iOS flow: Apple supplies the id_token directly via
-    // ASAuthorizationAppleIDCredential.identityToken; no state/nonce round-trip.
+    // Native iOS flow: no nonce round-trip. Guard against token replay using a
+    // short-lived cache keyed on (sub, exp). A captured id_token cannot be reused
+    // within its validity window.
     std::lock_guard<std::mutex> lk(mtx_);
-    return verifyJwt(idToken, allowedAuds, {} /* no nonce check */);
+
+    // Quick pre-check: parse sub + exp before full verification to detect replays early.
+    auto parts = parseJwt(idToken);
+    if (!parts) return {false, {}, {}, "malformed JWT"};
+    const std::string sub = jwtGetStr(parts->payloadJson, "sub");
+    const long long   exp = jwtGetLong(parts->payloadJson, "exp");
+
+    if (!sub.empty() && exp > 0)
+    {
+        // Prune stale replay-cache entries (beyond exp + 60 s grace).
+        const long long now = static_cast<long long>(std::time(nullptr));
+        for (auto it = nativeReplayCache_.begin(); it != nativeReplayCache_.end(); )
+            it = (now > it->second + 60) ? nativeReplayCache_.erase(it) : std::next(it);
+
+        const std::string replayKey = sub + ":" + std::to_string(exp);
+        if (nativeReplayCache_.count(replayKey))
+            return {false, {}, {}, "token replay detected"};
+    }
+
+    auto result = verifyJwt(idToken, allowedAuds, {} /* no nonce check */);
+
+    // Record this token as seen so it cannot be replayed.
+    if (result.ok && !sub.empty() && exp > 0)
+        nativeReplayCache_[sub + ":" + std::to_string(exp)] = exp;
+
+    return result;
 }
 
 } // namespace ntm

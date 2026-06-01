@@ -282,6 +282,31 @@ WebAuthnRP::WebAuthnRP(WebAuthnConfig cfg) : cfg_(std::move(cfg))
             cfg_.allowedOrigins.push_back("https://" + cfg_.rpId);
 
         loadCredentials();
+
+        // Start background sweep thread so that session expiry cleanup does not
+        // block auth requests with an O(n) scan on every call.
+        sweepRunning_.store(true);
+        sweepThread_ = std::thread(&WebAuthnRP::sweepThreadFn, this);
+    }
+}
+
+WebAuthnRP::~WebAuthnRP()
+{
+    sweepRunning_.store(false);
+    if (sweepThread_.joinable())
+        sweepThread_.join();
+}
+
+void WebAuthnRP::sweepThreadFn()
+{
+    while (sweepRunning_.load())
+    {
+        // Sleep in short increments so we notice the stop flag quickly on shutdown.
+        for (int i = 0; i < 600 && sweepRunning_.load(); ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (!sweepRunning_.load()) break;
+        std::lock_guard<std::mutex> lk(mtx_);
+        sweepExpired();
     }
 }
 

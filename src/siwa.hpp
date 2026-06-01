@@ -9,7 +9,9 @@
 // I/O and crypto classes (SiwaAdminStore, SiwaValidator) are declared here
 // and implemented in siwa.cpp.
 
+#include <atomic>
 #include <cctype>
+#include <openssl/crypto.h>   // CRYPTO_memcmp — constant-time comparison
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -229,14 +231,21 @@ inline std::string buildAuthorizeUrl(const std::string &serviceId,
            "&nonce="        + urlEncode(nonceHash);
 }
 
-// Case-insensitive ASCII email comparison.
+// Case-insensitive ASCII email comparison — constant-time to prevent
+// timing side-channels that could enumerate configured admin emails.
 inline bool siwaEmailsEqual(const std::string &a, const std::string &b)
 {
     if (a.size() != b.size()) return false;
+    // Lowercase both into fixed-size buffers, then CRYPTO_memcmp (OpenSSL).
+    // For typical email lengths this is negligible overhead.
+    std::string la(a.size(), '\0'), lb(b.size(), '\0');
     for (std::size_t i = 0; i < a.size(); ++i)
-        if (std::tolower((unsigned char)a[i]) != std::tolower((unsigned char)b[i]))
-            return false;
-    return true;
+    {
+        la[i] = (char)std::tolower((unsigned char)a[i]);
+        lb[i] = (char)std::tolower((unsigned char)b[i]);
+    }
+    // CRYPTO_memcmp returns 0 iff equal, in constant time.
+    return CRYPTO_memcmp(la.data(), lb.data(), la.size()) == 0;
 }
 
 // Find admin record matching sub (priority) then unpinned email.
@@ -351,6 +360,14 @@ private:
     std::vector<SiwaJwksKey> jwksKeys_;
     std::chrono::steady_clock::time_point jwksExpiry_{};
     bool testMode_{false};
+
+    // Replay cache for native iOS flow (no nonce round-trip).
+    // Maps "sub:exp" → exp (unix seconds). Prevents a captured id_token from
+    // being replayed within its validity window. Pruned lazily on each native login.
+    std::unordered_map<std::string, long long> nativeReplayCache_;
+
+    // Prevents multiple threads from simultaneously triggering a JWKS refetch.
+    std::atomic<bool> jwksFetchInProgress_{false};
 
     void sweepPending();              // call holding mtx_
     bool ensureJwks();                // refresh JWKS from Apple if stale; returns false on failure

@@ -2,10 +2,12 @@
 // WebAuthn RP: passkey registration, authentication, and session management.
 // Self-contained — depends only on OpenSSL (already linked) and the standard library.
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -37,7 +39,7 @@ class WebAuthnRP
 {
 public:
     explicit WebAuthnRP(WebAuthnConfig cfg);
-    ~WebAuthnRP() = default;
+    ~WebAuthnRP();
 
     bool enabled() const { return !cfg_.rpId.empty(); }
 
@@ -113,9 +115,15 @@ private:
     std::unordered_map<std::string, Session>     sessions_;
     std::vector<PasskeyCredential>               credentials_;
 
+    // Background sweep thread — removes expired sessions/pending entries every 60 s
+    // so that sweepExpired() is no longer called inline on every auth request.
+    std::atomic<bool> sweepRunning_{false};
+    std::thread       sweepThread_;
+
     void loadCredentials();
     void saveCredentials() const;    // call holding mtx_
     void sweepExpired();             // call holding mtx_
+    void sweepThreadFn();            // background thread body
 
     static std::vector<uint8_t> randomBytes(std::size_t n);
     static std::string          toBase64url(const uint8_t *data, std::size_t len);

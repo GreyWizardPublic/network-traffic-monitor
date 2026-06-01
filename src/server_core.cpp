@@ -1432,7 +1432,8 @@ static void runWireDataLoop(
                     }
                 }
             }
-            else if (line.rfind(kDataLinePrefix, 0) == 0)
+            // D-lines are >99 % of traffic — check first using direct char comparison.
+            else if (line.size() >= 2 && line[0] == 'D' && line[1] == ' ')
             {
                 PacketMeta meta;
                 if (parseDataLine(line.substr(2), meta, config.max_iface_len, config.max_ip_len))

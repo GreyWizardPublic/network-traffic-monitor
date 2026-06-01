@@ -357,15 +357,21 @@ static std::string buildDemoSummaryJson()
     j += ",\n  \"window_start\": ";              j += std::to_string(windowStart);
     j += ",\n  \"generated_at\": ";              j += std::to_string(nowEpoch);
 
-    // interfaces
+    // interfaces — client_id mirrors real /api/summary (demo hex IDs are fixed placeholders)
     j += ",\n  \"interfaces\": ["
-         "\n    {\"client\":\"MacBook-Air\",\"iface\":\"en0\","
+         "\n    {\"client\":\"MacBook-Air\","
+         "\"client_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\","
+         "\"iface\":\"en0\","
          "\"packets\":"; j += std::to_string(3247891 + tick * 87);
     j += ",\"bytes\":";  j += std::to_string(3142857600LL + tick * 52480); j += "}";
-    j += ",\n    {\"client\":\"iPhone-15\",\"iface\":\"en0\","
+    j += ",\n    {\"client\":\"iPhone-15\","
+         "\"client_id\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\","
+         "\"iface\":\"en0\","
          "\"packets\":"; j += std::to_string(891203 + tick * 23);
     j += ",\"bytes\":";  j += std::to_string(1258291200LL + tick * 14336); j += "}";
-    j += ",\n    {\"client\":\"Desktop-PC\",\"iface\":\"eth0\","
+    j += ",\n    {\"client\":\"Desktop-PC\","
+         "\"client_id\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\","
+         "\"iface\":\"eth0\","
          "\"packets\":"; j += std::to_string(4892341 + tick * 134);
     j += ",\"bytes\":";  j += std::to_string(5905580032LL + tick * 81920); j += "}";
     j += "\n  ]";
@@ -826,8 +832,11 @@ static std::string buildSummaryJson(TrafficStats &stats, std::size_t maxEntityLi
     const auto nowEpoch = std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
 
+    // Pre-size: baseline + ~140 bytes per expected entity/overhead row + ~80 per LAN row.
+    // Uses maxEntityLines as a conservative upper bound (entity lists are capped there).
+    // Avoids repeated reallocations on large entity lists.
     std::string j;
-    j.reserve(8192);
+    j.reserve(8192 + maxEntityLines * 300);
     j += "{\n  \"api_version\": ";
     j += std::to_string(kApiVersion);
     j += ",\n  \"server_version\": \"";
@@ -2885,6 +2894,16 @@ void registerWebHandlers(NtmHttpServer &svr,
     static WebRateLimiter rateLimiter(config.rate_limit_rpm);
     // Separate, much stricter limiter for the admin purge endpoint.
     static WebRateLimiter adminRateLimiter(5);
+    // Per-session rate limiter for authenticated endpoints (300 RPM per session token).
+    // Prevents a single compromised or runaway session from flooding the server.
+    // The update-status poller (/api/admin/clients/:id/update/status) polls at ~1/s
+    // (60 RPM) so 300 RPM gives 5x headroom without interfering with normal use.
+    static WebRateLimiter sessionRateLimiter(300);
+
+    // Enable HTTP keep-alive so browsers can reuse TLS connections across 30 s polls
+    // instead of re-handshaking every time (saves ~150 ms per poll).
+    svr.set_keep_alive_max_count(5);
+    svr.set_keep_alive_timeout(30);
 
     // Scan update directory on startup so the manifest is populated immediately.
     if (!config.update_dir.empty())
@@ -2949,6 +2968,21 @@ void registerWebHandlers(NtmHttpServer &svr,
                 }
                 // Authenticated dashboard client — record IP for overhead classification.
                 if (config.dashboard_ips) config.dashboard_ips->add(ip);
+
+                // Per-session rate limit (300 RPM). Uses first 32 chars of token as key
+                // to cap memory usage while remaining effectively token-unique.
+                // The update-status path is exempted — it is designed for 1 req/s polling.
+                if (path != "/api/admin/clients" && path.find("/update/status") == std::string::npos)
+                {
+                    if (!sessionRateLimiter.tryAcquire(token.substr(0, 32)))
+                    {
+                        res.status = 429;
+                        res.set_header("Retry-After", "60");
+                        res.set_content("{\"error\":\"session rate limit exceeded\"}\n",
+                                        "application/json");
+                        return httplib::Server::HandlerResponse::Handled;
+                    }
+                }
 
                 // Admin API paths require an admin-role session (set by Sign in with Apple).
                 if (isAdminApiPath(path))
@@ -4963,15 +4997,22 @@ void registerWebHandlers(NtmHttpServer &svr,
                 if (clientId.empty()) return;
 
                 auto fnIt = req.path_params.find("filename");
-                if (fnIt == req.path_params.end() || fnIt->second.empty() ||
-                    fnIt->second.find('/') != std::string::npos ||
-                    fnIt->second.find("..") != std::string::npos)
+                const std::string filename = (fnIt != req.path_params.end()) ? fnIt->second : "";
                 {
-                    res.status = 400;
-                    res.set_content("{\"error\":\"invalid filename\"}\n", "application/json");
-                    return;
+                    // Whitelist: log filenames are "ntm-client-YYYY-MM-DD.log".
+                    // Allow alphanumeric, hyphen, underscore, dot only.
+                    // Blocks path traversal (../), command injection (spaces/newlines),
+                    // and null-byte injection.
+                    bool ok = !filename.empty();
+                    for (unsigned char c : filename)
+                        if (!std::isalnum(c) && c != '-' && c != '_' && c != '.') { ok = false; break; }
+                    if (!ok)
+                    {
+                        res.status = 400;
+                        res.set_content("{\"error\":\"invalid filename\"}\n", "application/json");
+                        return;
+                    }
                 }
-                const std::string filename = fnIt->second;
 
                 auto ch = config.ctrl_channels->get(clientId);
                 if (!ch)
@@ -5079,15 +5120,22 @@ void registerWebHandlers(NtmHttpServer &svr,
                 if (clientId.empty()) return;
 
                 auto fnIt = req.path_params.find("filename");
-                if (fnIt == req.path_params.end() || fnIt->second.empty() ||
-                    fnIt->second.find('/') != std::string::npos ||
-                    fnIt->second.find("..") != std::string::npos)
+                const std::string filename = (fnIt != req.path_params.end()) ? fnIt->second : "";
                 {
-                    res.status = 400;
-                    res.set_content("{\"error\":\"invalid filename\"}\n", "application/json");
-                    return;
+                    // Whitelist: log filenames are "ntm-client-YYYY-MM-DD.log".
+                    // Allow alphanumeric, hyphen, underscore, dot only.
+                    // Blocks path traversal (../), command injection (spaces/newlines),
+                    // and null-byte injection.
+                    bool ok = !filename.empty();
+                    for (unsigned char c : filename)
+                        if (!std::isalnum(c) && c != '-' && c != '_' && c != '.') { ok = false; break; }
+                    if (!ok)
+                    {
+                        res.status = 400;
+                        res.set_content("{\"error\":\"invalid filename\"}\n", "application/json");
+                        return;
+                    }
                 }
-                const std::string filename = fnIt->second;
 
                 auto ch = config.ctrl_channels->get(clientId);
                 if (!ch)
