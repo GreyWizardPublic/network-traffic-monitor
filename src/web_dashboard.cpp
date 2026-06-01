@@ -2404,7 +2404,7 @@ async function setDemo(enabled){
 
 function semverGt(a,b){
   const pa=(a||'0').split('.').map(Number),pb=(b||'0').split('.').map(Number);
-  for(let i=0;i<3;i++){const ai=pa[i]||0,bi=pb[i]||0;if(ai>bi)return true;if(ai<bi)return false;}
+  for(let i=0;i<4;i++){const ai=pa[i]||0,bi=pb[i]||0;if(ai>bi)return true;if(ai<bi)return false;}
   return false;
 }
 
