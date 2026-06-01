@@ -321,6 +321,7 @@ if(NOT WIN32)
         tests/test_proto_constants.cpp
         tests/test_web_auth.cpp
         tests/test_siwa.cpp
+        tests/test_traffic_stats.cpp
         src/siwa.cpp
         src/webauthn.cpp
         tests/test_client_http_util.cpp
