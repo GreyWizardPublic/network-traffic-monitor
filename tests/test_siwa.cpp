@@ -248,11 +248,22 @@ TEST_CASE("siwa: validateAppleClaims: wrong aud fails")
 
 TEST_CASE("siwa: validateAppleClaims: expired token fails")
 {
+    // Token expired 60 s ago — beyond the 30 s clock-skew grace window.
     const long long now = (long long)std::time(nullptr);
     const std::string payload = "{\"iss\":\"https://appleid.apple.com\","
                                 "\"aud\":\"me.example.web\","
-                                "\"exp\":" + std::to_string(now - 1) + "}";
+                                "\"exp\":" + std::to_string(now - 60) + "}";
     REQUIRE(!ntm::validateAppleClaims(payload, {"me.example.web"}, "", now).empty());
+}
+
+TEST_CASE("siwa: validateAppleClaims: token within clock-skew grace window passes")
+{
+    // Token expired 10 s ago — within the 30 s grace window, should still pass.
+    const long long now = (long long)std::time(nullptr);
+    const std::string payload = "{\"iss\":\"https://appleid.apple.com\","
+                                "\"aud\":\"me.example.web\","
+                                "\"exp\":" + std::to_string(now - 10) + "}";
+    REQUIRE(ntm::validateAppleClaims(payload, {"me.example.web"}, "", now).empty());
 }
 
 TEST_CASE("siwa: validateAppleClaims: nonce mismatch fails")
@@ -428,7 +439,8 @@ TEST_CASE("siwa_validator: expired token rejected")
     if (!gKey.ready) return;
     ntm::SiwaValidator val(testCfg());
     val.setTestJwks({gKey.key()});
-    const std::string tok = makeAppleToken(gKey.pkey, "tid", "me.test.web", -1);
+    // Expired 60 s ago — beyond the 30 s clock-skew grace window.
+    const std::string tok = makeAppleToken(gKey.pkey, "tid", "me.test.web", -60);
     REQUIRE(!val.verifyNative(tok, {"me.test.web"}).ok);
 }
 

@@ -34,6 +34,8 @@
 #include <openssl/evp.h>      // EVP_sha256 (manifest SHA-256)
 #include <openssl/rand.h>     // RAND_bytes
 
+#include <sys/stat.h>         // chmod()
+
 namespace ntm
 {
 
@@ -683,7 +685,10 @@ static bool saveHiddenEntities(HiddenEntitiesStore &store)
     std::ofstream f(store.filePath, std::ios::trunc);
     if (!f) return false;
     f << j;
-    return static_cast<bool>(f);
+    f.close();
+    // Restrict to owner-only: file contains hidden entity configuration.
+    chmod(store.filePath.c_str(), 0600);
+    return true;
 }
 
 

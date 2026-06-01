@@ -141,7 +141,7 @@ Both protocol version constants live in `src/proto_client_server.hpp`:
 | Constant | Current value | Protocol |
 |---|---|---|
 | `kWireProtoVersion` | `4` | Wire (data-phase line format) |
-| `kApiVersion` | `13` | HTTPS API (endpoint schemas) |
+| `kApiVersion` | `14` | HTTPS API (endpoint schemas) |
 
 ### Protocol lockstep table
 

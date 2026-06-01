@@ -143,7 +143,7 @@ different speeds as long as they stay within their supported version range.
 | | Version | Introduced in |
 |---|---|---|
 | Wire protocol | see `kWireProtoVersion` in source | — |
-| API protocol | 7 | ntm 1.12.0 |
+| API protocol | 14 | ntm-server 2.0.0 |
 | Software | see `src/version.hpp` | — |
 
 ---

@@ -300,7 +300,10 @@ StateDirectory=ntm-server
 LogsDirectory=ntm-server
 
 # Allow the server to read its config and write WebAuthn credential files.
-ReadWritePaths=/var/lib/ntm-server /etc/ntm-server
+# The server binary directory (/usr/local/bin) must also be writable if
+# server auto-upgrade is enabled — the upgrade replaces the binary in-place.
+# Either include it here, or pre-create a wrapper directory with write access.
+ReadWritePaths=/var/lib/ntm-server /etc/ntm-server /usr/local/bin
 
 NoNewPrivileges=true
 PrivateTmp=true
@@ -402,6 +405,26 @@ separate password is required.
 The server can host client binaries and serve them to `ntm-client` instances that have
 `auto_update=true` enabled. See `docs/auto-update.md` for the full feature description and
 client-side setup. This section covers the server-side steps only.
+
+### Binary directory write permission (required for server auto-upgrade)
+
+The server replaces its own binary atomically during a `push-upgrade` operation.
+The process must have **write + rename access to the directory that contains the
+running binary** (e.g. `/usr/local/bin`). Without this, the upgrade will fail with
+a permission error and the server will continue running the old version.
+
+```bash
+# Option A: make ntm-server the binary directory owner (recommended for dedicated servers)
+sudo chown ntm-server:ntm-server /usr/local/bin/ntm-server
+
+# Option B: install to a directory owned by ntm-server
+sudo mkdir -p /opt/ntm/bin
+sudo chown ntm-server:ntm-server /opt/ntm/bin
+# then update ExecStart in the service unit to /opt/ntm/bin/ntm-server
+```
+
+> **systemd `ProtectSystem=strict` note:** The example unit adds `/usr/local/bin`
+> to `ReadWritePaths`. Adjust the path if you install the binary elsewhere.
 
 ### Create the update directory
 

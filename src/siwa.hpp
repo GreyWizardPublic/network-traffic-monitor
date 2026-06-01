@@ -181,7 +181,11 @@ inline std::string validateAppleClaims(const std::string &payloadJson,
     if (!audOk) return "aud not in allowlist: " + aud;
 
     const long long exp = jwtGetLong(payloadJson, "exp");
-    if (exp == 0 || nowUtcSec >= exp) return "token expired";
+    // Allow up to 30 s of clock skew: reject only if the token has been expired
+    // for more than 30 seconds from the server's perspective.  This tolerates a
+    // server clock that is up to 30 s ahead of Apple's without spurious failures.
+    static constexpr long long kClockSkewSec = 30;
+    if (exp == 0 || nowUtcSec > exp + kClockSkewSec) return "token expired";
 
     if (!expectedNonceHash.empty())
     {

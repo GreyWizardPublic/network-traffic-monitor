@@ -10,6 +10,7 @@
 #include <ctime>
 #include <fstream>
 #include <sstream>
+#include <sys/stat.h>   // chmod()
 
 #include <openssl/bn.h>
 #include <openssl/core_names.h>
@@ -128,6 +129,9 @@ void SiwaAdminStore::save() const
         first = false;
     }
     f << "\n]\n";
+    f.close();
+    // Restrict to owner-only: file contains admin Apple IDs (email + sub).
+    chmod(filePath_.c_str(), 0600);
 }
 
 bool SiwaAdminStore::matchAndPin(const std::string &sub, const std::string &email)

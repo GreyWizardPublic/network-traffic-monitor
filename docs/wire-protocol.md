@@ -280,6 +280,21 @@ Reports cumulative capture statistics, the client software version, and
 | `wire_proto` | decimal uint | The wire protocol data-phase version the client is using (`kWireProtoVersion`). Distinct from the auth version byte. Allows the server to detect data-phase protocol mismatches. |
 | `agg_interval_ms` | decimal uint32 | **Optional.** Current flow-aggregation flush interval in milliseconds, as determined by the adaptive controller. Absent (or 0) for clients that do not implement aggregation. |
 | `agg_flows` | decimal uint32 | **Optional.** Number of unique (iface, src, dst) flows flushed in the most recent aggregation window. Absent (or 0) for non-aggregating clients. |
+| `cfg_transport` | `tcp` \| `websocket` | **Optional.** Active transport mode (`tcp` or `websocket`). |
+| `cfg_compress` | `0` \| `1` | **Optional.** Whether zlib compression is active on the data phase. |
+| `cfg_send_buffer` | decimal uint32 | **Optional.** Configured send-buffer size in bytes (0 = OS default). |
+| `cfg_auto_update` | `0` \| `1` | **Optional.** Whether the auto-update agent is enabled. |
+| `cfg_reconnect_attempts` | decimal uint32 | **Optional.** Max consecutive reconnect failures before exit. |
+| `cfg_reconnect_interval` | decimal uint32 | **Optional.** Seconds between reconnect attempts. |
+| `cfg_agg_target` | decimal uint32 | **Optional.** Target aggregated lines per second for the adaptive interval controller. |
+| `cfg_agg_min_ms` | decimal uint32 | **Optional.** Minimum aggregation flush interval in milliseconds. |
+| `cfg_agg_max_ms` | decimal uint32 | **Optional.** Maximum aggregation flush interval in milliseconds. |
+| `cfg_agg_max_flows` | decimal uint32 | **Optional.** Maximum distinct flows per aggregation window before early flush. |
+| `cfg_log_level` | `Info` \| `Warn` \| `Err` | **Optional.** Current file-log verbosity level. |
+
+`cfg_*` fields are included after the standard health fields once per session (on the first H-line)
+and again whenever a config value changes at runtime. The server stores the most recent reported
+values per client and exposes them via `GET /api/admin/client/config`.
 
 The `agg_interval_ms` and `agg_flows` fields are emitted by clients that implement
 adaptive flow aggregation (ntm-client ≥ 1.10.0). The server displays an approximate
