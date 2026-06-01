@@ -646,6 +646,30 @@ struct ClientHistorySnapshot
     std::vector<HistoryBucket> buckets;
 };
 
+// ---------------------------------------------------------------------------
+// TrafficStatsShard — one independently-locked partition of TrafficStats.
+//
+// TrafficStats shards its data by hash(clientId) & 15, giving 16 independent
+// mutexes. Concurrent connections for different clients never contend; only
+// connections that hash to the same shard serialise against each other.
+// snapshot() acquires shards 0→15 in fixed order (no deadlock risk) and
+// holds each lock only for its ~1/16 slice of the full traversal, so
+// other shards' ingestion threads remain unblocked throughout.
+// ---------------------------------------------------------------------------
+struct TrafficStatsShard
+{
+    mutable std::mutex mutex;
+
+    std::deque<DayBucket> dayBuckets;
+
+    // UB-1: per-client iface cardinality tracking across the rolling window.
+    std::unordered_map<std::string, std::unordered_set<std::string>> clientIfaces;
+    std::unordered_map<std::string, std::uint64_t> ifaceRejectCount;
+
+    // Per-client traffic history rings (used by /api/client/history).
+    std::unordered_map<std::string, ClientHistoryRing> clientHistory;
+};
+
 class TrafficStats
 {
 public:
@@ -655,6 +679,8 @@ public:
     using InterfaceCountryFlows = ntm::InterfaceCountryFlows;
     using InterfaceEntityFlows  = ntm::InterfaceEntityFlows;
     using TimePoint             = std::chrono::system_clock::time_point;
+
+    static constexpr std::size_t kShardCount = 16;
 
     explicit TrafficStats(unsigned windowDays,
                          std::size_t maxFlowEntriesPerKey = 100000,
@@ -669,10 +695,17 @@ public:
 
     TimePoint getAggregationWindowStart() const
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (dayBuckets_.empty())
+        // Return the oldest day-bucket front across all shards (take minimum dayIndex).
+        std::int64_t minDay = INT64_MAX;
+        for (const auto &shard : shards_)
+        {
+            std::lock_guard<std::mutex> lock(shard.mutex);
+            if (!shard.dayBuckets.empty())
+                minDay = std::min(minDay, shard.dayBuckets.front().dayIndex);
+        }
+        if (minDay == INT64_MAX)
             return std::chrono::system_clock::now();
-        return TimePoint(std::chrono::seconds(dayBuckets_.front().dayIndex * 86400));
+        return TimePoint(std::chrono::seconds(minDay * 86400));
     }
 
     // UB-1: result of addPacket() so the caller can rate-limit operator warnings
@@ -689,7 +722,10 @@ public:
                         const std::string &dstEntity,
                         std::uint32_t length)
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        // Per-shard locking: only clients hashing to the same shard contend.
+        auto &shard = shards_[shardIndex(clientId)];
+        std::lock_guard<std::mutex> lock(shard.mutex);
+
         const auto now = std::chrono::system_clock::now();
         const auto epochSec = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
         const std::int64_t dayIndex = (epochSec >= 0) ? (epochSec / 86400) : ((epochSec - 86399) / 86400);
@@ -699,20 +735,20 @@ public:
         const FlowKey entityKey{srcEntity, dstEntity};
 
         // UB-1: enforce per-client iface cardinality cap BEFORE touching any map.
-        auto &ifaceSet = clientIfaces_[clientId];
+        auto &ifaceSet = shard.clientIfaces[clientId];
         const bool isNewIface = (ifaceSet.find(iface) == ifaceSet.end());
         if (isNewIface && ifaceSet.size() >= maxIfacesPerClient_)
         {
-            ++ifaceRejectCount_[clientId];
+            ++shard.ifaceRejectCount[clientId];
             return AddResult::IfaceCapExceeded;
         }
         if (isNewIface)
             ifaceSet.insert(iface);
 
-        if (dayBuckets_.empty() || dayBuckets_.back().dayIndex != dayIndex)
-            dayBuckets_.push_back(DayBucket{dayIndex, {}, {}, {}, {}});
+        if (shard.dayBuckets.empty() || shard.dayBuckets.back().dayIndex != dayIndex)
+            shard.dayBuckets.push_back(DayBucket{dayIndex, {}, {}, {}, {}});
 
-        DayBucket &bucket = dayBuckets_.back();
+        DayBucket &bucket = shard.dayBuckets.back();
         auto &total = bucket.totals[ciKey];
         auto &flowMap = bucket.flows[ciKey];
         auto &entityFlowMap = bucket.entityFlows[ciKey];
@@ -739,7 +775,7 @@ public:
             wouldOverflow(countryCounter.packets, 1u, countryCounter.bytes, length) ||
             wouldOverflow(entityCounter.packets, 1u, entityCounter.bytes, length))
         {
-            resetClientUnlocked(clientId);
+            resetClientInShard(shard, clientId);
             total = bucket.totals[ciKey];
             flowMap = bucket.flows[ciKey];
             entityFlowMap = bucket.entityFlows[ciKey];
@@ -761,8 +797,8 @@ public:
         entityCounter.packets += 1;
         entityCounter.bytes += length;
 
-        while (dayBuckets_.size() > windowDays_)
-            dayBuckets_.pop_front();
+        while (shard.dayBuckets.size() > windowDays_)
+            shard.dayBuckets.pop_front();
 
         // Per-minute and per-hour history rings for the histogram endpoint.
         // Direction: "in" = bytes arriving at a LAN address; "out" = all else.
@@ -770,7 +806,7 @@ public:
         const std::uint64_t epochMin  = (epochSec > 0) ? static_cast<std::uint64_t>(epochSec) / 60u  : 0u;
         const std::uint64_t epochHour = (epochSec > 0) ? static_cast<std::uint64_t>(epochSec) / 3600u : 0u;
         {
-            auto &ring = clientHistory_[clientId];
+            auto &ring = shard.clientHistory[clientId];
             // Minute slot
             auto &ms = ring.minutes[epochMin % ClientHistoryRing::kMinuteSlots];
             if (ms.epochMinute != epochMin)
@@ -791,19 +827,21 @@ public:
     // UB-1: lookup the rejection counter for one client.
     std::uint64_t getIfaceRejectCount(const std::string &clientId) const
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto it = ifaceRejectCount_.find(clientId);
-        return it == ifaceRejectCount_.end() ? 0u : it->second;
+        const auto &shard = shards_[shardIndex(clientId)];
+        std::lock_guard<std::mutex> lock(shard.mutex);
+        auto it = shard.ifaceRejectCount.find(clientId);
+        return it == shard.ifaceRejectCount.end() ? 0u : it->second;
     }
 
     // Erase all historical data for one client across every day bucket.
     // Returns true if any data was present. Safe to call concurrently with addPacket/snapshot.
     bool purgeClient(const std::string &clientId)
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        auto &shard = shards_[shardIndex(clientId)];
+        std::lock_guard<std::mutex> lock(shard.mutex);
         const std::string prefix = clientId + "|";
         bool found = false;
-        for (const auto &b : dayBuckets_)
+        for (const auto &b : shard.dayBuckets)
         {
             for (const auto &kv : b.totals)
             {
@@ -816,7 +854,7 @@ public:
             }
             if (found) break;
         }
-        resetClientUnlocked(clientId);
+        resetClientInShard(shard, clientId);
         return found;
     }
 
@@ -826,74 +864,90 @@ public:
                   InterfaceEntityFlows &entityFlowsOut,
                   TimePoint *windowStartOut = nullptr)
     {
-        std::lock_guard<std::mutex> lock(mutex_);
         totalsOut.clear();
         flowsOut.clear();
         countryFlowsOut.clear();
         entityFlowsOut.clear();
-        for (const DayBucket &b : dayBuckets_)
+
+        std::int64_t minDay = INT64_MAX;
+
+        // Acquire each shard in fixed index order (0 → kShardCount-1).
+        // Holding only one shard lock at a time lets other shards' ingestion
+        // threads proceed concurrently during the traversal.
+        for (std::size_t si = 0; si < kShardCount; ++si)
         {
-            for (const auto &kv : b.totals)
+            std::lock_guard<std::mutex> lock(shards_[si].mutex);
+            for (const DayBucket &b : shards_[si].dayBuckets)
             {
-                auto &c = totalsOut[kv.first];
-                c.packets += kv.second.packets;
-                c.bytes += kv.second.bytes;
-            }
-            for (const auto &kv : b.flows)
-            {
-                for (const auto &fk : kv.second)
+                for (const auto &kv : b.totals)
                 {
-                    auto &c = flowsOut[kv.first][fk.first];
-                    c.packets += fk.second.packets;
-                    c.bytes += fk.second.bytes;
-                    if (fk.second.firstSeenSec >= 0)
+                    auto &c = totalsOut[kv.first];
+                    c.packets += kv.second.packets;
+                    c.bytes += kv.second.bytes;
+                }
+                for (const auto &kv : b.flows)
+                {
+                    for (const auto &fk : kv.second)
                     {
-                        if (c.firstSeenSec < 0 || fk.second.firstSeenSec < c.firstSeenSec)
-                            c.firstSeenSec = fk.second.firstSeenSec;
+                        auto &c = flowsOut[kv.first][fk.first];
+                        c.packets += fk.second.packets;
+                        c.bytes += fk.second.bytes;
+                        if (fk.second.firstSeenSec >= 0)
+                        {
+                            if (c.firstSeenSec < 0 || fk.second.firstSeenSec < c.firstSeenSec)
+                                c.firstSeenSec = fk.second.firstSeenSec;
+                        }
+                        if (fk.second.lastSeenSec >= 0)
+                        {
+                            if (c.lastSeenSec < 0 || fk.second.lastSeenSec > c.lastSeenSec)
+                                c.lastSeenSec = fk.second.lastSeenSec;
+                        }
                     }
-                    if (fk.second.lastSeenSec >= 0)
+                }
+                for (const auto &kv : b.countryFlows)
+                {
+                    for (const auto &ck : kv.second)
                     {
-                        if (c.lastSeenSec < 0 || fk.second.lastSeenSec > c.lastSeenSec)
-                            c.lastSeenSec = fk.second.lastSeenSec;
+                        auto &c = countryFlowsOut[kv.first][ck.first];
+                        c.packets += ck.second.packets;
+                        c.bytes += ck.second.bytes;
+                    }
+                }
+                for (const auto &kv : b.entityFlows)
+                {
+                    for (const auto &ek : kv.second)
+                    {
+                        auto &c = entityFlowsOut[kv.first][ek.first];
+                        c.packets += ek.second.packets;
+                        c.bytes += ek.second.bytes;
                     }
                 }
             }
-            for (const auto &kv : b.countryFlows)
-            {
-                for (const auto &ck : kv.second)
-                {
-                    auto &c = countryFlowsOut[kv.first][ck.first];
-                    c.packets += ck.second.packets;
-                    c.bytes += ck.second.bytes;
-                }
-            }
-            for (const auto &kv : b.entityFlows)
-            {
-                for (const auto &ek : kv.second)
-                {
-                    auto &c = entityFlowsOut[kv.first][ek.first];
-                    c.packets += ek.second.packets;
-                    c.bytes += ek.second.bytes;
-                }
-            }
+            if (!shards_[si].dayBuckets.empty())
+                minDay = std::min(minDay, shards_[si].dayBuckets.front().dayIndex);
         }
-        if (windowStartOut && !dayBuckets_.empty())
-            *windowStartOut = TimePoint(std::chrono::seconds(dayBuckets_.front().dayIndex * 86400));
-        else if (windowStartOut)
-            *windowStartOut = std::chrono::system_clock::now();
+
+        if (windowStartOut)
+        {
+            if (minDay != INT64_MAX)
+                *windowStartOut = TimePoint(std::chrono::seconds(minDay * 86400));
+            else
+                *windowStartOut = std::chrono::system_clock::now();
+        }
     }
 
     // Return per-minute (minutes in [1,1440]) or per-hour (minutes=0 = full window)
     // history for one client, sorted oldest-to-newest, empty slots omitted.
     ClientHistorySnapshot snapshotHistory(const std::string &clientId, int minutes) const
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        const auto &shard = shards_[shardIndex(clientId)];
+        std::lock_guard<std::mutex> lock(shard.mutex);
         ClientHistorySnapshot out;
         out.clientId   = clientId;
         out.windowDays = windowDays_;
 
-        auto it = clientHistory_.find(clientId);
-        if (it == clientHistory_.end())
+        auto it = shard.clientHistory.find(clientId);
+        if (it == shard.clientHistory.end())
             return out;
         const ClientHistoryRing &ring = it->second;
 
@@ -943,10 +997,17 @@ private:
                (addBytes > 0 && bytes > UINT64_MAX - addBytes);
     }
 
-    void resetClientUnlocked(const std::string &clientId)
+    // Map clientId to shard index: power-of-2 count, cheap bitwise AND.
+    static std::size_t shardIndex(const std::string &clientId) noexcept
+    {
+        return std::hash<std::string>{}(clientId) & (kShardCount - 1);
+    }
+
+    // Erase all data for clientId from a shard already held under lock.
+    static void resetClientInShard(TrafficStatsShard &shard, const std::string &clientId)
     {
         const std::string prefix = clientId + "|";
-        for (DayBucket &b : dayBuckets_)
+        for (DayBucket &b : shard.dayBuckets)
         {
             for (auto it = b.totals.begin(); it != b.totals.end(); )
             {
@@ -978,24 +1039,20 @@ private:
             }
         }
         // UB-1: reset per-client iface bookkeeping so the cap counts from zero again.
-        clientIfaces_.erase(clientId);
-        ifaceRejectCount_.erase(clientId);
-        clientHistory_.erase(clientId);
+        shard.clientIfaces.erase(clientId);
+        shard.ifaceRejectCount.erase(clientId);
+        shard.clientHistory.erase(clientId);
     }
 
-    mutable std::mutex mutex_;
+    // Immutable configuration (set at construction, shared across shards).
     unsigned windowDays_;
     std::size_t maxFlowEntriesPerKey_;
     std::size_t maxEntityFlowEntriesPerKey_;
     std::size_t maxIfacesPerClient_;
-    std::deque<DayBucket> dayBuckets_;
 
-    // UB-1: per-client iface cardinality tracking across the rolling window.
-    std::unordered_map<std::string, std::unordered_set<std::string>> clientIfaces_;
-    std::unordered_map<std::string, std::uint64_t> ifaceRejectCount_;
-
-    // Per-client traffic history rings (used by /api/client/history).
-    std::unordered_map<std::string, ClientHistoryRing> clientHistory_;
+    // 16 independent shards, each with its own mutex and data.
+    // Clients are routed to shards by shardIndex(clientId).
+    std::array<TrafficStatsShard, kShardCount> shards_;
 };
 
 } // namespace ntm
