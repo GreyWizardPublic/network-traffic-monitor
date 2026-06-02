@@ -1815,7 +1815,7 @@ button{font-family:monospace;font-size:0.82em;padding:5px 14px;border-radius:3px
 <div id="main-content">
 <div class="hdr">
   <h1>Network Traffic Monitor &mdash; Admin</h1>
-  <a href="/" class="back" id="back-link">&#8592; Back to Dashboard</a>
+  <a href="#" class="back" id="back-link" onclick="doSignOut();return false;">Sign out</a>
 </div>
 
 <!-- ── Active Monitors ────────────────────────────────────────────────── -->
@@ -2008,6 +2008,7 @@ button{font-family:monospace;font-size:0.82em;padding:5px 14px;border-radius:3px
 </div><!-- /main-content -->
 
 <script>
+async function doSignOut(){try{await fetch('/auth/logout',{method:'POST'});}catch(_){}window.location.href='/login';}
 function fmtB(b){
   if(b<1024)return b+'B';
   if(b<1048576)return(b/1024).toFixed(1)+'K';
