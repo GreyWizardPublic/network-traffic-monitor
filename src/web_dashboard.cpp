@@ -1808,6 +1808,13 @@ button{font-family:monospace;font-size:0.82em;padding:5px 14px;border-radius:3px
 .btn-demo-on{background:#0d2010;color:#4c4;border-color:#1a4020}
 .btn-demo-on:hover{background:#152a18;color:#6e6}
 .btn-demo-on:disabled{opacity:0.4;cursor:default}
+.expand-btn{background:none;border:none;color:#555;cursor:pointer;font-size:0.9em;padding:1px 4px;font-family:monospace;line-height:1}
+.expand-btn:hover{color:#7af}
+tr.detail-row>td{padding:0!important;border-bottom:2px solid #3a3a5a}
+.detail-panel{padding:14px 16px 16px;background:#0d0d18;border-top:1px solid #252535}
+.detail-lbl{font-size:0.72em;color:#555;text-transform:uppercase;letter-spacing:.05em;margin-bottom:7px}
+.dkv{display:grid;grid-template-columns:auto 1fr;gap:3px 16px;font-size:0.8em}
+.dkv>span:nth-child(odd){color:#666}
 </style>
 </head>
 <body>
@@ -1818,14 +1825,16 @@ button{font-family:monospace;font-size:0.82em;padding:5px 14px;border-radius:3px
   <a href="#" class="back" id="back-link" onclick="doSignOut();return false;">Sign out</a>
 </div>
 
-<!-- ── Active Monitors ────────────────────────────────────────────────── -->
-<div class="section">Active Monitors</div>
-<div class="sub">Wire agents sending traffic data, and dashboard clients currently polling the server.</div>
-
-<div class="section" style="font-size:0.72em;margin:8px 0 4px;color:#555">Wire Agents</div>
-<table>
-  <thead><tr><th>Client</th><th>Version</th><th>Wire Proto</th><th>pcap recv</th><th>Kernel drop</th><th>Buf drop</th><th>Aggregation</th><th>Last report</th><th>Update</th></tr></thead>
-  <tbody id="health_body"><tr><td colspan="9" style="color:#555">Loading&#8230;</td></tr></tbody>
+<!-- ── Clients ─────────────────────────────────────────────────────────── -->
+<div class="section">Clients</div>
+<div class="sub">Wire agents and registered clients. Click &#9658; to expand health, configuration, and management actions.</div>
+<table id="clients_tbl">
+  <thead><tr>
+    <th style="width:22px;padding:5px 4px"></th>
+    <th>Client</th><th>Status</th><th>Version</th><th>Update</th>
+    <th>Wire Proto</th><th>Drop%</th><th>Last Seen</th><th>Visibility</th>
+  </tr></thead>
+  <tbody id="clients_body"><tr><td colspan="9" style="color:#555">Loading&#8230;</td></tr></tbody>
 </table>
 <div id="proto-reject-banner" style="display:none;background:#3a2000;color:#fa0;border-radius:5px;padding:8px 14px;margin:6px 0;font-size:0.88em"></div>
 <div id="proto-rejected-section" style="display:none">
@@ -1833,131 +1842,12 @@ button{font-family:monospace;font-size:0.82em;padding:5px 14px;border-radius:3px
   <table><thead><tr><th>Peer IP</th><th>Attempted Auth Version</th><th>Time</th></tr></thead>
   <tbody id="proto_rejected_body"></tbody></table>
 </div>
-
 <div class="section" style="font-size:0.72em;margin:14px 0 4px;color:#555">Dashboard Clients</div>
 <table>
   <thead><tr><th>IP Address</th><th>Last Seen</th><th>Status</th></tr></thead>
   <tbody id="monitors_body"><tr><td colspan="3" style="color:#555">Loading&#8230;</td></tr></tbody>
 </table>
-
-<!-- ── Manage Clients ─────────────────────────────────────────────────── -->
-<div class="section" style="margin-top:22px">Manage Clients</div>
-<div class="sub" id="list_sub">Select a client to purge all its historical traffic data.</div>
-<table>
-  <thead><tr><th>Client</th><th>Interfaces</th><th>Packets</th><th>Bytes</th></tr></thead>
-  <tbody id="client_body"><tr><td colspan="4" style="color:#555">Loading&#8230;</td></tr></tbody>
-</table>
-
-<div id="confirm_panel" style="display:none" class="panel">
-  <div class="warn">&#9888;&nbsp; This permanently deletes all historical traffic records for this client.
-  Data will accumulate fresh from the next connection.</div>
-  <div class="panel-title">Purge all data for: <span id="selected_name" style="color:#7af"></span></div>
-  <div class="btn-row">
-    <button class="btn-cancel" onclick="cancelSelect()">Cancel</button>
-    <button class="btn-purge" id="purge_btn" onclick="doPurge()">Purge Client Data</button>
-  </div>
-  <div class="err-msg" id="purge_error" style="margin-top:8px"></div>
-</div>
-
-<!-- ── Logs panel (shown when a client is selected) ─────────────────────── -->
-<div id="logs_panel" style="display:none;margin-top:14px" class="panel">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-    <span style="font-size:0.85em;color:#7af">Logs &mdash; <span id="logs_client_name" style="color:#ccc;font-size:0.95em"></span></span>
-    <button onclick="loadLogs()" style="font-family:monospace;font-size:0.78em;padding:3px 10px;border-radius:3px;border:1px solid #3a5a8a;background:#0d1828;color:#7af;cursor:pointer">&#8635; Refresh</button>
-  </div>
-  <div id="logs_offline_msg" style="display:none;color:#a85;font-size:0.82em;padding:6px 0">Client offline &mdash; log management unavailable.</div>
-  <div id="logs_level_row" style="display:none;align-items:center;gap:10px;margin-bottom:12px">
-    <span style="font-size:0.82em;color:#aaa">Log level:</span>
-    <select id="logs_level_sel" style="font-family:monospace;font-size:0.82em;padding:4px 8px;background:#0e0e14;color:#ccc;border:1px solid #3a3a5a;border-radius:3px">
-      <option value="Info">Info</option>
-      <option value="Warn">Warn</option>
-      <option value="Err">Err</option>
-    </select>
-    <button id="logs_apply_btn" onclick="applyLogLevel()" style="font-family:monospace;font-size:0.82em;padding:4px 12px;border-radius:3px;border:1px solid #3a5a3a;background:#0d1808;color:#8c8;cursor:pointer">Apply</button>
-    <span id="logs_level_msg" style="font-size:0.82em;font-weight:bold;transition:opacity 0.4s"></span>
-  </div>
-  <div id="logs_content" style="display:none">
-    <div style="font-size:0.78em;color:#666;margin-bottom:6px">Log files (3 days retained, 50 MB max each):</div>
-    <table id="logs_file_tbl" style="width:100%">
-      <thead><tr><th style="text-align:left">File</th><th style="text-align:right">Size</th><th style="text-align:right">Actions</th></tr></thead>
-      <tbody id="logs_file_body"><tr><td colspan="3" style="color:#555">Loading&#8230;</td></tr></tbody>
-    </table>
-    <div style="margin-top:10px;display:flex;gap:10px">
-      <button onclick="doDeleteAllLogs()" style="font-family:monospace;font-size:0.82em;padding:4px 12px;border-radius:3px;border:1px solid #5a3a3a;background:#180d0d;color:#c88;cursor:pointer">Delete ALL Files</button>
-    </div>
-  </div>
-  <div id="logs_no_logging" style="display:none;font-size:0.82em;padding:6px 8px;border-radius:3px;background:#1a1400;border:1px solid #4a3a00;color:#c94">
-    File logging is not active on this client.<br>
-    <span style="color:#888">To enable it, add <code style="color:#bba;font-size:0.95em">log_dir=/path/to/logs</code> to the client config file and restart the client.</span>
-  </div>
-  <div class="err-msg" id="logs_err" style="margin-top:8px"></div>
-</div>
-
-<div id="result_panel" style="display:none" class="ok-panel">
-  <div class="ok-title">&#10003;&nbsp; <span id="result_client"></span> &mdash; data purged successfully.</div>
-  <div class="ok-sub">Data will accumulate fresh from the next client connection.</div>
-  <div class="btn-row">
-    <button class="btn-back" onclick="resetView()">Back to client list</button>
-  </div>
-</div>
 <div id="msg"></div>
-
-<!-- ── Hidden Entities ────────────────────────────────────────────────── -->
-<div class="section" style="margin-top:22px">Hidden Entities</div>
-<div class="sub">Clients and interfaces hidden here are suppressed from the main dashboard. The choice is persisted across server restarts. Unhide a client to restore it.</div>
-<div class="panel">
-  <div style="margin-bottom:10px;font-size:0.8em;color:#7af">Hidden Clients</div>
-  <table id="hidden_clients_tbl">
-    <thead><tr><th>Client ID</th><th>Action</th></tr></thead>
-    <tbody id="hidden_clients_body"><tr><td colspan="2" style="color:#555">None</td></tr></tbody>
-  </table>
-  <div style="margin-top:14px;display:flex;align-items:center;gap:10px">
-    <select id="hide_client_sel" style="font-family:monospace;font-size:0.82em;padding:5px 8px;background:#0e0e14;color:#ccc;border:1px solid #3a3a5a;border-radius:3px">
-      <option value="">— select client to hide —</option>
-    </select>
-    <button onclick="doHideClient()" style="font-family:monospace;font-size:0.82em;padding:5px 14px;border-radius:3px;border:1px solid #4a5a3a;background:#0d1808;color:#8c8;cursor:pointer">Hide Client</button>
-  </div>
-  <div style="margin-top:18px;margin-bottom:10px;font-size:0.8em;color:#7af">Hidden Interfaces</div>
-  <table id="hidden_ifaces_tbl">
-    <thead><tr><th>Client ID</th><th>Interface</th><th>Action</th></tr></thead>
-    <tbody id="hidden_ifaces_body"><tr><td colspan="3" style="color:#555">None</td></tr></tbody>
-  </table>
-  <div style="margin-top:14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-    <select id="hide_iface_client_sel" style="font-family:monospace;font-size:0.82em;padding:5px 8px;background:#0e0e14;color:#ccc;border:1px solid #3a3a5a;border-radius:3px" onchange="onHideIfaceClientChange()">
-      <option value="">— select client —</option>
-    </select>
-    <input id="hide_iface_name" type="text" placeholder="interface name" maxlength="64"
-      style="font-family:monospace;font-size:0.82em;padding:5px 8px;background:#0e0e14;color:#ccc;border:1px solid #3a3a5a;border-radius:3px;width:160px">
-    <button onclick="doHideIface()" style="font-family:monospace;font-size:0.82em;padding:5px 14px;border-radius:3px;border:1px solid #4a5a3a;background:#0d1808;color:#8c8;cursor:pointer">Hide Interface</button>
-  </div>
-  <div class="err-msg" id="hidden_err" style="margin-top:8px"></div>
-</div>
-
-<!-- ── Client Configuration ───────────────────────────────────────── -->
-<div class="section" style="margin-top:22px">Client Configuration</div>
-<div class="sub">Running configuration values reported by each connected client. Cells highlighted in amber differ from the majority value across connected clients — use this to spot misconfigured machines without SSH-ing into each one.</div>
-<div class="panel">
-  <table id="cfg_tbl" style="width:100%;table-layout:fixed">
-    <thead><tr>
-      <th style="width:14%">Client</th>
-      <th style="width:9%">Transport</th>
-      <th style="width:8%">Compress</th>
-      <th style="width:8%">Auto-Upd</th>
-      <th style="width:11%">Agg Target</th>
-      <th style="width:10%">Reconnect</th>
-      <th style="width:8%">●</th>
-    </tr></thead>
-    <tbody id="cfg_tbl_body"><tr><td colspan="7" style="color:#555">Loading…</td></tr></tbody>
-  </table>
-  <div id="cfg_detail" style="display:none;margin-top:14px;padding:12px;background:#0a0a12;border:1px solid #2a2a4a;border-radius:4px">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-      <span id="cfg_detail_title" style="font-size:0.85em;color:#7af"></span>
-      <button onclick="refreshCfgDetail()" style="font-family:monospace;font-size:0.78em;padding:3px 10px;border-radius:3px;border:1px solid #3a5a8a;background:#0d1828;color:#7af;cursor:pointer">Refresh</button>
-    </div>
-    <div id="cfg_detail_body" style="display:grid;grid-template-columns:1fr 1fr;gap:4px 20px;font-size:0.8em"></div>
-  </div>
-  <div class="err-msg" id="cfg_err" style="margin-top:8px"></div>
-</div>
 
 <!-- ── Software Updates ──────────────────────────────────────────────── -->
 <div class="section" style="margin-top:22px">Software Updates</div>
@@ -2028,114 +1918,324 @@ function handleAdminExpiry(status){
   return false;
 }
 
-async function loadClients(){
+// ── Unified Clients Section ──────────────────────────────────────────────
+let gExpId=null;
+let gAllClients=[];
+
+async function loadClientsSection(){
   try{
-    const r=await fetch('/api/summary',{cache:'no-store'});
-    if(!r.ok)throw new Error('HTTP '+r.status);
-    const d=await r.json();
-    // Build manifest lookup: platform → latest entry
-    const manifest=d.update_manifest||[];
+    const [sumR,hidR,cliR]=await Promise.all([
+      fetch('/api/summary',{cache:'no-store'}),
+      fetch('/api/admin/hidden').catch(()=>null),
+      fetch('/api/admin/clients').catch(()=>null)
+    ]);
+    if(!sumR.ok)throw new Error('HTTP '+sumR.status);
+    const sum=await sumR.json();
+    const hid=(hidR&&hidR.ok)?await hidR.json():{};
+    const cli=(cliR&&cliR.ok&&cliR.status!==404)?await cliR.json():{};
+    gAllClients=cli.clients||[];
+    const hiddenSet=new Set(hid.hidden_clients||[]);
+
+    // Manifest
+    const manifest=sum.update_manifest||[];
     const latestByPlatform={};
     for(const m of manifest){
       const cur=latestByPlatform[m.platform];
       if(!cur||semverGt(m.version,cur.version))latestByPlatform[m.platform]=m;
     }
-    // Render manifest table
     const mBody=document.getElementById('manifest_body');
     if(manifest.length){
       mBody.innerHTML=manifest.map(m=>`<tr><td>${esc(m.platform)}</td><td>${esc(m.version)}</td><td>${esc(m.filename)}</td><td style="font-size:0.78em;color:#888">${esc(m.sha256.substring(0,16))}…</td></tr>`).join('');
     }else{
       mBody.innerHTML='<tr><td colspan="4" style="color:#555">No binaries detected — click Scan or use update_dir in server config</td></tr>';
     }
-    // Wire agents health
-    const srvWireProto=d.server_wire_proto_version||0;
-    const health=d.client_health||[];
-    document.getElementById('health_body').innerHTML=
-      health.length?health.map(function(x){
-        const pd=parseFloat(x.pcap_drop_pct);
-        const bd=parseFloat(x.buf_drop_pct);
-        const pdC=pd>1?'#c44':pd>0.1?'#c84':'#4c4';
-        const bdC=bd>1?'#c44':bd>0.1?'#c84':'#4c4';
-        const st=x.stale?' <span style="color:#888">(stale)</span>':'';
-        let wpBadge;
-        if(x.wire_proto_version==null){wpBadge='<span style="color:#555">?</span>';}
-        else if(x.wire_proto_ok){wpBadge='<span style="color:#4c4">&#10003; v'+x.wire_proto_version+'</span>';}
-        else{wpBadge='<span style="color:#c44">&#10007; v'+x.wire_proto_version+' (server v'+srvWireProto+')</span>';}
-        // Update availability
-        let updCell='<span style="color:#555">—</span>';
-        let rowBg='';
-        if(x.platform&&x.client_id){
-          const latest=latestByPlatform[x.platform];
-          if(latest){
-            if(semverGt(latest.version,x.version||'0.0.0')){
-              updCell='<span style="color:#c84">&#9650; v'+esc(latest.version)+'</span> '
-                +'<button id="updbtn_'+esc(x.client_id)+'" onclick="triggerUpdate(\''+esc(x.client_id)+'\',this)" '
-                +'style="font-size:0.75em;padding:2px 8px;background:#3a1a00;color:#c84;'
-                +'border:1px solid #5a3000;border-radius:2px;cursor:pointer;font-family:monospace">Force</button>';
-              rowBg='background:#1a1400';
-            }else{
-              updCell='<span style="color:#4c4">&#10003; current</span>';
-            }
-          }
-        }
-        let aggCell;
-        if(!x.agg_interval_ms){aggCell='<span style="color:#555">—</span>';}
-        else{
-          const rate=Math.round(x.agg_flows/(x.agg_interval_ms/1000));
-          const intv=(x.agg_interval_ms/1000).toFixed(1);
-          aggCell='~'+rate+'/s<br><span style="color:#555;font-size:0.85em">'+intv+'s·'+x.agg_flows+' flows</span>';
-        }
-        return'<tr style="'+rowBg+'"><td>'+esc(x.client)+st+'</td><td style="color:#aaa">'+esc(x.version)+'</td><td>'+
-          wpBadge+'</td><td>'+x.pcap_recv.toLocaleString()+'</td><td style="color:'+pdC+'">'+
-          x.pcap_drop.toLocaleString()+' ('+x.pcap_drop_pct+'%)</td><td style="color:'+bdC+'">'+
-          x.buf_drop.toLocaleString()+' ('+x.buf_drop_pct+'%)</td><td>'+aggCell+'</td><td>'+fmtT(x.reported_at)+'</td>'
-          +'<td>'+updCell+'</td></tr>';
-      }).join(''):'<tr><td colspan="9" style="color:#555">No wire agents connected</td></tr>';
+
     // Proto-rejected
-    const rejected=d.proto_rejected_clients||[];
+    const srvWireProto=sum.server_wire_proto_version||0;
+    const rejected=sum.proto_rejected_clients||[];
     const rejSec=document.getElementById('proto-rejected-section');
     const rejBanner=document.getElementById('proto-reject-banner');
     if(rejected.length){
       rejSec.style.display='';
-      document.getElementById('proto_rejected_body').innerHTML=rejected.map(function(r){
-        return'<tr><td>'+esc(r.peer_ip)+'</td><td style="color:#c44">'+r.attempted_auth_version+
-          '</td><td>'+fmtT(r.at)+'</td></tr>';
-      }).join('');
+      document.getElementById('proto_rejected_body').innerHTML=rejected.map(r=>
+        '<tr><td>'+esc(r.peer_ip)+'</td><td style="color:#c44">'+r.attempted_auth_version+'</td><td>'+fmtT(r.at)+'</td></tr>'
+      ).join('');
       rejBanner.textContent='Warning: '+rejected.length+' connection(s) rejected — auth-protocol mismatch.';
       rejBanner.style.display='';
     }else{rejSec.style.display='none';rejBanner.style.display='none';}
-    // Client list for purge
-    const clients={};
-    for(const x of (d.interfaces||[])){
-      const name=x.client||'(ip-auth)';
-      if(!clients[name])clients[name]={ifaces:[],packets:0,bytes:0,clientId:x.client_id||''};
-      clients[name].ifaces.push(x.iface);
-      clients[name].packets+=x.packets;
-      clients[name].bytes+=x.bytes;
-      if(!clients[name].clientId&&x.client_id)clients[name].clientId=x.client_id;
+
+    updateDemoStatus(!!sum.demo_server_enabled);
+
+    // Build merged client map keyed by clientId
+    const byId={};
+    function ensure(id,name){
+      if(!byId[id])byId[id]={clientId:id,name:name||id.substring(0,16)+'…',online:false,stale:false,
+        version:'',platform:'',wireProtoVersion:null,wireProtoOk:null,
+        pcapRecv:0,pcapDrop:0,pcapDropPct:'0.00',bufDrop:0,bufDropPct:'0.00',
+        aggIntervalMs:0,aggFlows:0,reportedAt:0,ifaces:[],packets:0,bytes:0};
+      return byId[id];
     }
-    const tbody=document.getElementById('client_body');
-    const names=Object.keys(clients);
-    if(!names.length){
-      tbody.innerHTML='<tr><td colspan="4" style="color:#555">No clients have recorded data yet</td></tr>';
-    }else{
-      tbody.innerHTML=names.map(name=>{
-        const c=clients[name];
-        return`<tr class="selectable" data-client="${esc(name)}" data-client-id="${esc(c.clientId)}">
-          <td>${esc(name)}</td><td>${esc(c.ifaces.join(', '))}</td>
-          <td>${c.packets.toLocaleString()}</td><td>${fmtB(c.bytes)}</td></tr>`;
-      }).join('');
-      tbody.querySelectorAll('tr').forEach(tr=>{
-        tr.addEventListener('click',()=>selectClient(tr.dataset.client,tr.dataset.clientId));
-      });
+
+    for(const h of (sum.client_health||[])){
+      if(!h.client_id)continue;
+      const c=ensure(h.client_id,h.client);
+      c.name=h.client||c.name; c.online=!h.stale; c.stale=!!h.stale;
+      c.version=h.version||''; c.platform=h.platform||'';
+      c.wireProtoVersion=h.wire_proto_version; c.wireProtoOk=h.wire_proto_ok;
+      c.pcapRecv=h.pcap_recv||0; c.pcapDrop=h.pcap_drop||0; c.pcapDropPct=h.pcap_drop_pct||'0.00';
+      c.bufDrop=h.buf_drop||0; c.bufDropPct=h.buf_drop_pct||'0.00';
+      c.aggIntervalMs=h.agg_interval_ms||0; c.aggFlows=h.agg_flows||0; c.reportedAt=h.reported_at||0;
     }
-    // Demo status
-    updateDemoStatus(!!d.demo_server_enabled);
+    for(const x of (sum.interfaces||[])){
+      if(!x.client_id)continue;
+      const c=ensure(x.client_id,x.client||'(ip-auth)');
+      if(!c.ifaces.includes(x.iface))c.ifaces.push(x.iface);
+      c.packets+=x.packets||0; c.bytes+=x.bytes||0;
+    }
+    for(const rc of gAllClients){
+      if(!rc.client_id)continue;
+      const c=ensure(rc.client_id,rc.nickname||rc.client_id.substring(0,16)+'…');
+      if(rc.nickname)c.name=rc.nickname;
+    }
+
+    // Fetch configs in parallel
+    const cfgMap={};
+    if(gAllClients.length){
+      const cfgResults=await Promise.all(gAllClients.map(rc=>
+        fetch('/api/admin/client/config?client_id='+encodeURIComponent(rc.client_id))
+          .then(r=>r.ok?r.json():null).catch(()=>null)
+      ));
+      cfgResults.forEach((r,i)=>{ if(r)cfgMap[gAllClients[i].client_id]=r; });
+    }
+
+    // Majority config
+    const cfgCols=['transport','compress','auto_update','agg_target_lines','reconnect_key'];
+    const cfgCounts={};
+    cfgCols.forEach(k=>cfgCounts[k]={});
+    Object.values(cfgMap).forEach(r=>{
+      if(!r||!r.connected||!r.config)return;
+      const cv=r.config;
+      const vals={transport:cv.transport,compress:String(cv.compress),auto_update:String(cv.auto_update),
+        agg_target_lines:String(cv.agg_target_lines),reconnect_key:cv.reconnect_attempts+'x'+cv.reconnect_interval+'s'};
+      cfgCols.forEach(k=>{cfgCounts[k][vals[k]]=(cfgCounts[k][vals[k]]||0)+1;});
+    });
+    const majCfg={};
+    cfgCols.forEach(k=>{
+      const m=cfgCounts[k];let best='',bestN=0;
+      Object.keys(m).forEach(v=>{if(m[v]>bestN){bestN=m[v];best=v;}});
+      majCfg[k]=best;
+    });
+
+    const allClients=Object.values(byId);
+    allClients.sort((a,b)=>{
+      if(a.online!==b.online)return a.online?-1:1;
+      return a.name.localeCompare(b.name);
+    });
+    renderClientsTable(allClients,hiddenSet,latestByPlatform,cfgMap,srvWireProto,majCfg);
     document.getElementById('msg').textContent='';
   }catch(e){
-    document.getElementById('client_body').innerHTML=
-      '<tr><td colspan="4" style="color:#a33">Error: '+esc(e.message)+'</td></tr>';
+    document.getElementById('clients_body').innerHTML=
+      '<tr><td colspan="9" style="color:#a33">Error: '+esc(e.message)+'</td></tr>';
   }
+}
+
+function renderClientsTable(clients,hiddenSet,latestByPlatform,cfgMap,srvWireProto,majCfg){
+  const tbody=document.getElementById('clients_body');
+  if(!clients.length){
+    tbody.innerHTML='<tr><td colspan="9" style="color:#555">No clients registered</td></tr>';
+    return;
+  }
+  let html='';
+  for(const c of clients){
+    const isExp=c.clientId&&c.clientId===gExpId;
+    const statusText=c.online?'<span style="color:#4c4">online</span>'
+      :(c.stale?'<span style="color:#888">stale</span>':'<span style="color:#555">offline</span>');
+    const verCell=c.version?esc(c.version):'<span style="color:#555">—</span>';
+    let updCell='<span style="color:#555">—</span>';
+    if(c.platform&&c.clientId){
+      const latest=latestByPlatform[c.platform];
+      if(latest){
+        if(semverGt(latest.version,c.version||'0.0.0')){
+          updCell='<span style="color:#c84">&#9650; v'+esc(latest.version)+'</span>'
+            +' <button id="updbtn_'+esc(c.clientId)+'" onclick="triggerUpdate(\''+esc(c.clientId)+'\',this)"'
+            +' style="font-size:0.75em;padding:2px 8px;background:#3a1a00;color:#c84;border:1px solid #5a3000;border-radius:2px;cursor:pointer;font-family:monospace">Force</button>';
+        }else{
+          updCell='<span style="color:#4c4">&#10003; current</span>';
+        }
+      }
+    }
+    let wpCell;
+    if(c.wireProtoVersion==null)wpCell='<span style="color:#555">—</span>';
+    else if(c.wireProtoOk)wpCell='<span style="color:#4c4">&#10003; v'+c.wireProtoVersion+'</span>';
+    else wpCell='<span style="color:#c44">&#10007; v'+c.wireProtoVersion+' (srv v'+srvWireProto+')</span>';
+    const pd=parseFloat(c.pcapDropPct),bd=parseFloat(c.bufDropPct),mx=Math.max(pd,bd);
+    const dropCell=(!c.online&&!c.pcapRecv)?'<span style="color:#555">—</span>'
+      :'<span style="color:'+(mx>1?'#c44':mx>0.1?'#c84':'#4c4')+'">'+c.pcapDropPct+'%</span>';
+    const isHidden=c.clientId&&hiddenSet.has(c.clientId);
+    const visCell=isHidden?'<span style="color:#888;font-size:0.88em">hidden</span>':'<span style="color:#555">—</span>';
+    const lastSeen=c.reportedAt?fmtT(c.reportedAt):'<span style="color:#555">—</span>';
+    const needsUpd=c.platform&&latestByPlatform[c.platform]&&semverGt(latestByPlatform[c.platform].version,c.version||'0.0.0');
+    const rowBg=isExp?'background:#12121c':(needsUpd?'background:#1a1400':'');
+    const expBtn=c.clientId
+      ?'<button class="expand-btn" onclick="toggleDetail(\''+esc(c.clientId)+'\',\''+esc(c.name)+'\')">'+( isExp?'▼':'▶')+'</button>'
+      :'';
+    html+='<tr style="'+rowBg+'">'
+      +'<td style="padding:4px 4px;white-space:nowrap">'+expBtn+'</td>'
+      +'<td>'+esc(c.name)+'</td>'
+      +'<td>'+statusText+'</td>'
+      +'<td style="color:#aaa">'+verCell+'</td>'
+      +'<td>'+updCell+'</td>'
+      +'<td>'+wpCell+'</td>'
+      +'<td>'+dropCell+'</td>'
+      +'<td style="color:#888;font-size:0.88em">'+lastSeen+'</td>'
+      +'<td>'+visCell+'</td>'
+      +'</tr>';
+    if(isExp){
+      html+='<tr class="detail-row"><td colspan="9" style="padding:0">'
+        +detailPanelHtml(c,hiddenSet,cfgMap,majCfg)
+        +'</td></tr>';
+    }
+  }
+  tbody.innerHTML=html;
+  if(gExpId){
+    const c=clients.find(x=>x.clientId===gExpId);
+    if(c){selectedClient=c.name;selectedClientHexId=c.clientId;}
+  }
+}
+
+function detailPanelHtml(c,hiddenSet,cfgMap,majCfg){
+  const isHidden=c.clientId&&hiddenSet.has(c.clientId);
+  const cfgData=cfgMap[c.clientId];
+  const hasCfg=cfgData&&cfgData.config;
+
+  // Health block
+  let healthHtml='';
+  if(c.online||c.pcapRecv){
+    healthHtml='<div class="dkv">'
+      +'<span>pcap recv</span><span>'+c.pcapRecv.toLocaleString()+'</span>'
+      +'<span>kernel drop</span><span style="color:'+(parseFloat(c.pcapDropPct)>1?'#c44':parseFloat(c.pcapDropPct)>0.1?'#c84':'#ccc')+'">'+c.pcapDrop.toLocaleString()+' ('+c.pcapDropPct+'%)</span>'
+      +'<span>buf drop</span><span style="color:'+(parseFloat(c.bufDropPct)>1?'#c44':parseFloat(c.bufDropPct)>0.1?'#c84':'#ccc')+'">'+c.bufDrop.toLocaleString()+' ('+c.bufDropPct+'%)</span>';
+    if(c.aggIntervalMs){
+      const rate=Math.round(c.aggFlows/(c.aggIntervalMs/1000));
+      healthHtml+='<span>aggregation</span><span>~'+rate+'/s ('+( c.aggIntervalMs/1000).toFixed(1)+'s · '+c.aggFlows+' flows)</span>';
+    }
+    healthHtml+='</div>';
+  }
+  if(c.ifaces.length)healthHtml+='<div style="margin-top:6px;font-size:0.8em"><span style="color:#666">interfaces: </span>'+esc(c.ifaces.join(', '))+'</div>';
+  if(c.packets||c.bytes)healthHtml+='<div style="margin-top:4px;font-size:0.8em"><span style="color:#666">traffic: </span>'+c.packets.toLocaleString()+' pkts · '+fmtB(c.bytes)+'</div>';
+  if(!healthHtml)healthHtml='<span style="color:#555">No health data</span>';
+
+  // Config block
+  let cfgHtml='';
+  if(hasCfg){
+    const cv=cfgData.config;
+    function ccell(val,mk){
+      const amber=mk&&majCfg[mk]!==''&&String(val)!==majCfg[mk];
+      return'<span style="'+(amber?'color:#c84;font-weight:bold':'')+'">'+esc(String(val))+'</span>';
+    }
+    cfgHtml='<div class="dkv">'
+      +'<span>transport</span>'+ccell(cv.transport,'transport')
+      +'<span>compression</span>'+ccell(cv.compress?'on':'off','compress')
+      +'<span>auto-update</span>'+ccell(cv.auto_update?'on':'off','auto_update')
+      +'<span>agg target</span>'+ccell(cv.agg_target_lines+'/s','agg_target_lines')
+      +'<span>reconnect</span>'+ccell(cv.reconnect_attempts+'×'+cv.reconnect_interval+'s','reconnect_key')
+      +'<span>agg interval</span><span>'+cv.agg_min_ms+'–'+cv.agg_max_ms+' ms</span>'
+      +'<span>agg max flows</span><span>'+cv.agg_max_flows+'</span>'
+      +'<span>send buffer</span><span>'+(cv.send_buffer===0?'OS default':cv.send_buffer+' B')+'</span>'
+      +'</div>';
+    if(!cfgData.connected)cfgHtml+='<div style="font-size:0.78em;color:#666;margin-top:6px">Last known config (client offline)</div>';
+  }else{
+    cfgHtml='<span style="color:#555">'+(cfgData?'Config not yet received':'No config data')+'</span>';
+  }
+
+  // Logs panel skeleton (populated by loadLogs())
+  const logsPanel='<div id="logs_panel" style="display:none;margin-top:10px">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
+      +'<span style="font-size:0.85em;color:#7af">Logs &mdash; <span id="logs_client_name" style="color:#ccc;font-size:0.95em">'+esc(c.name)+'</span></span>'
+      +'<button onclick="loadLogs()" style="font-family:monospace;font-size:0.78em;padding:3px 10px;border-radius:3px;border:1px solid #3a5a8a;background:#0d1828;color:#7af;cursor:pointer">&#8635; Refresh</button>'
+    +'</div>'
+    +'<div id="logs_offline_msg" style="display:none;color:#a85;font-size:0.82em;padding:6px 0">Client offline — log management unavailable.</div>'
+    +'<div id="logs_level_row" style="display:none;align-items:center;gap:10px;margin-bottom:12px">'
+      +'<span style="font-size:0.82em;color:#aaa">Log level:</span>'
+      +'<select id="logs_level_sel" style="font-family:monospace;font-size:0.82em;padding:4px 8px;background:#0e0e14;color:#ccc;border:1px solid #3a3a5a;border-radius:3px">'
+        +'<option value="Info">Info</option><option value="Warn">Warn</option><option value="Err">Err</option>'
+      +'</select>'
+      +'<button id="logs_apply_btn" onclick="applyLogLevel()" style="font-family:monospace;font-size:0.82em;padding:4px 12px;border-radius:3px;border:1px solid #3a5a3a;background:#0d1808;color:#8c8;cursor:pointer">Apply</button>'
+      +'<span id="logs_level_msg" style="font-size:0.82em;font-weight:bold;transition:opacity 0.4s"></span>'
+    +'</div>'
+    +'<div id="logs_content" style="display:none">'
+      +'<div style="font-size:0.78em;color:#666;margin-bottom:6px">Log files (3 days retained, 50 MB max each):</div>'
+      +'<table id="logs_file_tbl" style="width:100%"><thead><tr><th style="text-align:left">File</th><th style="text-align:right">Size</th><th style="text-align:right">Actions</th></tr></thead>'
+      +'<tbody id="logs_file_body"><tr><td colspan="3" style="color:#555">Loading&#8230;</td></tr></tbody></table>'
+      +'<div style="margin-top:10px;display:flex;gap:10px">'
+        +'<button onclick="doDeleteAllLogs()" style="font-family:monospace;font-size:0.82em;padding:4px 12px;border-radius:3px;border:1px solid #5a3a3a;background:#180d0d;color:#c88;cursor:pointer">Delete ALL Files</button>'
+      +'</div>'
+    +'</div>'
+    +'<div id="logs_no_logging" style="display:none;font-size:0.82em;padding:6px 8px;border-radius:3px;background:#1a1400;border:1px solid #4a3a00;color:#c94">'
+      +'File logging not active on this client.<br>'
+      +'<span style="color:#888">Add <code style="color:#bba;font-size:0.95em">log_dir=/path/to/logs</code> to the client config and restart.</span>'
+    +'</div>'
+    +'<div class="err-msg" id="logs_err" style="margin-top:8px"></div>'
+    +'</div>';
+
+  const purgePanel='<div id="confirm_panel" style="display:none;margin-top:10px" class="panel">'
+    +'<div class="warn">&#9888;&nbsp; This permanently deletes all historical traffic records for this client.</div>'
+    +'<div class="panel-title">Purge all data for: <span style="color:#7af">'+esc(c.name)+'</span></div>'
+    +'<div class="btn-row">'
+      +'<button class="btn-cancel" onclick="hidePurgePanel()">Cancel</button>'
+      +'<button class="btn-purge" id="purge_btn" onclick="doPurge()">Purge Client Data</button>'
+    +'</div>'
+    +'<div class="err-msg" id="purge_error" style="margin-top:8px"></div>'
+    +'</div>';
+
+  const resultPanel='<div id="result_panel" style="display:none;margin-top:10px" class="ok-panel">'
+    +'<div class="ok-title">&#10003;&nbsp; '+esc(c.name)+' &mdash; data purged successfully.</div>'
+    +'<div class="ok-sub">Data will accumulate fresh from the next client connection.</div>'
+    +'<div class="btn-row"><button class="btn-back" onclick="hideResultPanel()">Done</button></div>'
+    +'</div>';
+
+  const isHiddenBtn=isHidden
+    ?'<button onclick="setHiddenClient(\''+esc(c.clientId)+'\',\'unhide\')" style="font-family:monospace;font-size:0.82em;padding:4px 12px;border-radius:3px;border:1px solid #5a3a3a;background:#180d0d;color:#c88;cursor:pointer">Unhide</button>'
+    :'<button onclick="setHiddenClient(\''+esc(c.clientId)+'\',\'hide\')" style="font-family:monospace;font-size:0.82em;padding:4px 12px;border-radius:3px;border:1px solid #3a5a3a;background:#0d1808;color:#8c8;cursor:pointer">Hide</button>';
+
+  const actionsHtml='<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'
+    +'<button onclick="showPurgePanel()" style="font-family:monospace;font-size:0.82em;padding:4px 12px;border-radius:3px;border:1px solid #5a2020;background:#3a1010;color:#c84;cursor:pointer">Purge Data</button>'
+    +(c.clientId?'<button onclick="toggleLogsPanel()" style="font-family:monospace;font-size:0.82em;padding:4px 12px;border-radius:3px;border:1px solid #3a5a8a;background:#0d1828;color:#7af;cursor:pointer">Logs</button>':'')
+    +(c.clientId?isHiddenBtn:'')
+    +'</div>';
+
+  return'<div class="detail-panel">'
+    +'<div style="display:flex;gap:28px;flex-wrap:wrap">'
+      +'<div style="min-width:200px;flex:1"><div class="detail-lbl">Health</div>'+healthHtml+'</div>'
+      +'<div style="min-width:220px;flex:1"><div class="detail-lbl">Configuration</div>'+cfgHtml+'</div>'
+    +'</div>'
+    +'<div style="margin-top:14px"><div class="detail-lbl">Actions</div>'+actionsHtml+'</div>'
+    +purgePanel+resultPanel+logsPanel
+    +'</div>';
+}
+
+function toggleDetail(clientId,name){
+  if(gExpId===clientId){
+    gExpId=null; selectedClient=null; selectedClientHexId='';
+    if(g_updPollers[clientId]){stopUpdPoller(clientId);}
+  }else{
+    gExpId=clientId; selectedClient=name; selectedClientHexId=clientId;
+  }
+  loadClientsSection();
+}
+function showPurgePanel(){
+  const cp=document.getElementById('confirm_panel');
+  if(cp){cp.style.display='';document.getElementById('result_panel').style.display='none';
+    document.getElementById('purge_btn').disabled=false;document.getElementById('purge_btn').textContent='Purge Client Data';
+    document.getElementById('purge_error').textContent='';}
+}
+function hidePurgePanel(){const cp=document.getElementById('confirm_panel');if(cp)cp.style.display='none';}
+function hideResultPanel(){gExpId=null;selectedClient=null;selectedClientHexId='';loadClientsSection();}
+function toggleLogsPanel(){
+  const p=document.getElementById('logs_panel');
+  if(!p)return;
+  if(p.style.display==='none'){p.style.display='';loadLogs();}
+  else p.style.display='none';
 }
 
 async function loadMonitors(){
@@ -2161,68 +2261,25 @@ async function loadMonitors(){
   }
 }
 
-function selectClient(name,hexId){
-  selectedClient=name;
-  selectedClientHexId=hexId||clientIdMap[name]||'';
-  document.querySelectorAll('#client_body tr').forEach(tr=>{
-    tr.className=tr.dataset.client===name?'selectable selected':'selectable';
-  });
-  document.getElementById('selected_name').textContent=name;
-  document.getElementById('confirm_panel').style.display='';
-  document.getElementById('result_panel').style.display='none';
-  document.getElementById('purge_error').textContent='';
-  document.getElementById('purge_btn').disabled=false;
-  document.getElementById('purge_btn').textContent='Purge Client Data';
-  // Show logs panel and load log state for this client.
-  document.getElementById('logs_panel').style.display='';
-  document.getElementById('logs_client_name').textContent=name;
-  loadLogs();
-}
-
-function cancelSelect(){
-  selectedClient=null;
-  selectedClientHexId='';
-  document.querySelectorAll('#client_body tr').forEach(tr=>tr.className='selectable');
-  document.getElementById('confirm_panel').style.display='none';
-  document.getElementById('logs_panel').style.display='none';
-}
-
 async function doPurge(){
   const btn=document.getElementById('purge_btn');
   btn.disabled=true;btn.textContent='Purging…';
   document.getElementById('purge_error').textContent='';
   try{
-    const r=await fetch('/api/admin/purge',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({client:selectedClient})
-    });
+    const r=await fetch('/api/admin/purge',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({client:selectedClient})});
     if(handleAdminExpiry(r.status)){btn.disabled=false;btn.textContent='Purge Client Data';return;}
     const d=await r.json();
     if(r.ok&&d.ok){
       document.getElementById('confirm_panel').style.display='none';
-      document.getElementById('result_client').textContent=selectedClient;
       document.getElementById('result_panel').style.display='';
-      loadClients();
     }else{
-      document.getElementById('purge_error').textContent=
-        r.status===404?'✗ Client not found':'✗ '+(d.error||'Unknown error');
+      document.getElementById('purge_error').textContent=r.status===404?'✗ Client not found':'✗ '+(d.error||'Unknown error');
       btn.disabled=false;btn.textContent='Purge Client Data';
     }
   }catch(e){
     document.getElementById('purge_error').textContent='✗ Request failed: '+e.message;
     btn.disabled=false;btn.textContent='Purge Client Data';
   }
-}
-
-function resetView(){
-  selectedClient=null;
-  selectedClientHexId='';
-  document.getElementById('result_panel').style.display='none';
-  document.getElementById('confirm_panel').style.display='none';
-  document.getElementById('logs_panel').style.display='none';
-  document.querySelectorAll('#client_body tr').forEach(tr=>tr.className='selectable');
-  loadClients();
 }
 
 // ── Log management ───────────────────────────────────────────────────────
@@ -2234,14 +2291,12 @@ function fmtFileSize(b){
   return(b/1073741824).toFixed(2)+' GB';
 }
 
-// Resolve the hex client_id for the currently selected client.
-// Priority: id stored at row-click time (from /api/summary client_id field),
-// then clientIdMap (health-based, connected clients only), then empty.
 function logsHexId(){
-  const id=selectedClientHexId||clientIdMap[selectedClient]||'';
-  if(!id)document.getElementById('logs_err').textContent=
-    '✗ Client ID not available — try refreshing the page';
-  return id;
+  if(!selectedClientHexId){
+    const el=document.getElementById('logs_err');
+    if(el)el.textContent='✗ Client ID not available — try refreshing the page';
+  }
+  return selectedClientHexId;
 }
 
 async function loadLogs(){
@@ -2531,7 +2586,7 @@ async function doScanManifest(){
     const d=await r.json();
     if(r.ok&&d.ok){
       document.getElementById('scan_msg').textContent='Found '+d.count+' binary(ies).';
-      loadClients();
+      loadClientsSection();
     }else{
       document.getElementById('scan_msg').textContent='✗ '+(d.error||'Scan failed');
     }
@@ -2541,246 +2596,18 @@ async function doScanManifest(){
   document.getElementById('scan_btn').disabled=false;
 }
 
-let gAllClients=[];  // [{client_id, nickname}] from /api/admin/clients
-
-async function loadHiddenEntities(){
-  try{
-    const [hRes,cRes]=await Promise.all([
-      fetch('/api/admin/hidden'),
-      fetch('/api/admin/clients')
-    ]);
-    if(hRes.status===404||cRes.status===404) return; // feature disabled on this server
-    handleAdminExpiry(hRes.status);
-    handleAdminExpiry(cRes.status);
-    const h=await hRes.json();
-    const c=await cRes.json();
-    gAllClients=c.clients||[];
-
-    // Populate hidden clients table
-    const hcBody=document.getElementById('hidden_clients_body');
-    if(h.hidden_clients&&h.hidden_clients.length){
-      hcBody.innerHTML=h.hidden_clients.map(function(id){
-        const nick=gAllClients.find(function(x){return x.client_id===id;});
-        const label=nick?esc(nick.nickname||id):esc(id.substring(0,16)+'…');
-        return '<tr><td title="'+esc(id)+'">'+label+'</td>'
-          +'<td><button onclick="doUnhideClient(\''+esc(id)+'\')" style="font-family:monospace;font-size:0.78em;padding:3px 10px;border-radius:3px;border:1px solid #5a3a3a;background:#180d0d;color:#c88;cursor:pointer">Unhide</button></td></tr>';
-      }).join('');
-    } else {
-      hcBody.innerHTML='<tr><td colspan="2" style="color:#555">None</td></tr>';
-    }
-
-    // Populate hidden interfaces table
-    const hiBody=document.getElementById('hidden_ifaces_body');
-    if(h.hidden_interfaces&&h.hidden_interfaces.length){
-      hiBody.innerHTML=h.hidden_interfaces.map(function(p){
-        const nick=gAllClients.find(function(x){return x.client_id===p.client_id;});
-        const label=nick?esc(nick.nickname||p.client_id):esc(p.client_id.substring(0,16)+'…');
-        return '<tr><td title="'+esc(p.client_id)+'">'+label+'</td>'
-          +'<td>'+esc(p.iface)+'</td>'
-          +'<td><button onclick="doUnhideIface(\''+esc(p.client_id)+'\',\''+esc(p.iface)+'\')" style="font-family:monospace;font-size:0.78em;padding:3px 10px;border-radius:3px;border:1px solid #5a3a3a;background:#180d0d;color:#c88;cursor:pointer">Unhide</button></td></tr>';
-      }).join('');
-    } else {
-      hiBody.innerHTML='<tr><td colspan="3" style="color:#555">None</td></tr>';
-    }
-
-    // Populate dropdowns
-    const cSel=document.getElementById('hide_client_sel');
-    const prevC=cSel.value;
-    cSel.innerHTML='<option value="">— select client to hide —</option>'
-      +gAllClients.map(function(x){
-        const hidden=h.hidden_clients&&h.hidden_clients.includes(x.client_id);
-        return '<option value="'+esc(x.client_id)+'"'+(hidden?' disabled':'')+'>'+esc(x.nickname||x.client_id.substring(0,16)+'…')+(hidden?' (hidden)':'')+'</option>';
-      }).join('');
-    if(prevC) cSel.value=prevC;
-
-    const ifSel=document.getElementById('hide_iface_client_sel');
-    const prevI=ifSel.value;
-    ifSel.innerHTML='<option value="">— select client —</option>'
-      +gAllClients.map(function(x){
-        return '<option value="'+esc(x.client_id)+'">'+esc(x.nickname||x.client_id.substring(0,16)+'…')+'</option>';
-      }).join('');
-    if(prevI) ifSel.value=prevI;
-  } catch(e) {
-    // Silently ignore — hidden entities feature may not be configured on this server.
-  }
-}
-
-function onHideIfaceClientChange(){
-  // Auto-fill the iface input if a common interface name is known (optional UX aid)
-}
-
-async function doHideClient(){
-  const id=document.getElementById('hide_client_sel').value;
-  if(!id) return;
-  await setHiddenClient(id,'hide');
-}
-async function doUnhideClient(id){
-  await setHiddenClient(id,'unhide');
-}
 async function setHiddenClient(id,action){
-  const errEl=document.getElementById('hidden_err');
-  errEl.textContent='';
   try{
     const r=await fetch('/api/admin/hidden/client',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({client_id:id,action:action})});
     handleAdminExpiry(r.status);
-    if(!r.ok){const j=await r.json();errEl.textContent='Error: '+(j.error||r.status);return;}
-    await loadHiddenEntities();
-  } catch(e){ errEl.textContent='Request failed: '+esc(e.message); }
-}
-async function doHideIface(){
-  const id=document.getElementById('hide_iface_client_sel').value;
-  const iface=document.getElementById('hide_iface_name').value.trim();
-  if(!id||!iface) return;
-  await setHiddenIface(id,iface,'hide');
-}
-async function doUnhideIface(id,iface){
-  await setHiddenIface(id,iface,'unhide');
-}
-async function setHiddenIface(id,iface,action){
-  const errEl=document.getElementById('hidden_err');
-  errEl.textContent='';
-  try{
-    const r=await fetch('/api/admin/hidden/interface',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({client_id:id,iface:iface,action:action})});
-    handleAdminExpiry(r.status);
-    if(!r.ok){const j=await r.json();errEl.textContent='Error: '+(j.error||r.status);return;}
-    document.getElementById('hide_iface_name').value='';
-    await loadHiddenEntities();
-  } catch(e){ errEl.textContent='Request failed: '+esc(e.message); }
+    if(!r.ok){const j=await r.json();document.getElementById('msg').textContent='Error: '+(j.error||r.status);return;}
+    await loadClientsSection();
+  }catch(e){document.getElementById('msg').textContent='Request failed: '+esc(e.message);}
 }
 
-// ── Client Configuration ────────────────────────────────────────────────────
-
-let gCfgSelectedId = null;
-
-async function loadClientConfigs(){
-  try{
-    const cRes = await fetch('/api/admin/clients');
-    if(cRes.status === 404) return;
-    handleAdminExpiry(cRes.status);
-    if(!cRes.ok) return;
-    const {clients} = await cRes.json();
-    if(!clients || !clients.length){
-      document.getElementById('cfg_tbl_body').innerHTML='<tr><td colspan="7" style="color:#555">No registered clients</td></tr>';
-      return;
-    }
-    const cfgResults = await Promise.all(clients.map(function(c){
-      return fetch('/api/admin/client/config?client_id='+encodeURIComponent(c.client_id))
-        .then(function(r){ return r.ok ? r.json() : null; })
-        .catch(function(){ return null; });
-    }));
-
-    // Compute majority value per config column (connected clients only)
-    const cols = ['transport','compress','auto_update','agg_target_lines','reconnect_key'];
-    const counts = {};
-    cols.forEach(function(k){ counts[k] = {}; });
-    cfgResults.forEach(function(r){
-      if(!r || !r.connected || !r.config) return;
-      const c = r.config;
-      const vals = {
-        transport: c.transport,
-        compress: String(c.compress),
-        auto_update: String(c.auto_update),
-        agg_target_lines: String(c.agg_target_lines),
-        reconnect_key: c.reconnect_attempts + 'x' + c.reconnect_interval + 's'
-      };
-      cols.forEach(function(k){
-        counts[k][vals[k]] = (counts[k][vals[k]] || 0) + 1;
-      });
-    });
-    function majority(k){
-      const m = counts[k]; let best='', bestN=0;
-      Object.keys(m).forEach(function(v){ if(m[v]>bestN){ bestN=m[v]; best=v; } });
-      return best;
-    }
-    const maj = {};
-    cols.forEach(function(k){ maj[k] = majority(k); });
-
-    function cell(val, majVal){
-      const amber = val !== majVal && majVal !== '';
-      return '<td style="'+(amber?'color:#c84;font-weight:bold':'')+'">'+esc(String(val))+'</td>';
-    }
-    function boolCell(val, majVal){
-      const s = val ? '✓' : '✗';
-      const amber = String(val) !== majVal && majVal !== '';
-      return '<td style="'+(amber?'color:#c84;font-weight:bold':'')+'">'+s+'</td>';
-    }
-
-    const tbody = document.getElementById('cfg_tbl_body');
-    tbody.innerHTML = cfgResults.map(function(r, i){
-      const client = clients[i];
-      const nick = esc(client.nickname || client.client_id.substring(0,16)+'…');
-      const id = client.client_id;
-      const connected = r && r.connected;
-      const cfg = r && r.config;
-      const dot = connected ? '<span style="color:#4c4">●</span>' : '<span style="color:#555">○</span>';
-      const rowStyle = connected ? '' : 'color:#555;font-style:italic;';
-      const clickAttr = 'onclick="selectCfgClient(\''+esc(id)+'\')" style="cursor:pointer;'+rowStyle+'" class="selectable"';
-      if(!cfg){
-        return '<tr '+clickAttr+'><td title="'+esc(id)+'">'+nick+'</td>'
-          +'<td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>'+dot+'</td></tr>';
-      }
-      const reconnKey = cfg.reconnect_attempts + 'x' + cfg.reconnect_interval + 's';
-      return '<tr '+clickAttr+'><td title="'+esc(id)+'">'+nick+'</td>'
-        + cell(cfg.transport, maj.transport)
-        + boolCell(cfg.compress, maj.compress)
-        + boolCell(cfg.auto_update, maj.auto_update)
-        + cell(cfg.agg_target_lines+'/s', '')
-        + cell(reconnKey, maj.reconnect_key)
-        + '<td>'+dot+'</td></tr>';
-    }).join('');
-
-    // Restore expand if a client was selected
-    if(gCfgSelectedId){
-      const r = cfgResults.find(function(x){ return x && x.client_id === gCfgSelectedId; });
-      if(r) renderCfgDetail(r);
-    }
-  } catch(e){
-    // Silent: config feature may not be enabled on this server.
-  }
-}
-
-function selectCfgClient(id){
-  gCfgSelectedId = id;
-  fetch('/api/admin/client/config?client_id='+encodeURIComponent(id))
-    .then(function(r){ return r.ok ? r.json() : null; })
-    .then(function(data){ if(data) renderCfgDetail(data); })
-    .catch(function(){});
-}
-
-function renderCfgDetail(r){
-  const panel = document.getElementById('cfg_detail');
-  const title = document.getElementById('cfg_detail_title');
-  const body  = document.getElementById('cfg_detail_body');
-  title.textContent = (r.nickname || r.client_id.substring(0,16)+'…')
-    + (r.connected ? '' : ' (offline)');
-  if(!r.config){
-    body.innerHTML = '<span style="color:#555">Config not yet received</span>';
-  } else {
-    const c = r.config;
-    const rows = [
-      ['Transport',        c.transport],
-      ['Compression',      c.compress ? 'enabled' : 'disabled'],
-      ['Auto-update',      c.auto_update ? 'enabled' : 'disabled'],
-      ['Send buffer',      c.send_buffer === 0 ? 'OS default' : c.send_buffer+' bytes'],
-      ['Reconnect',        c.reconnect_attempts+' attempts × '+c.reconnect_interval+'s'],
-      ['Agg target',       c.agg_target_lines+' lines/s'],
-      ['Agg interval',     c.agg_min_ms+'–'+c.agg_max_ms+' ms'],
-      ['Agg max flows',    String(c.agg_max_flows)]
-    ];
-    body.innerHTML = rows.map(function(kv){
-      return '<span style="color:#888">'+esc(kv[0])+'</span><span>'+esc(String(kv[1]))+'</span>';
-    }).join('');
-  }
-  panel.style.display = 'block';
-}
-
-async function refreshCfgDetail(){
-  if(!gCfgSelectedId) return;
-  selectCfgClient(gCfgSelectedId);
-}
 
 async function loadAll(){
-  await Promise.all([loadClients(),loadMonitors(),loadHiddenEntities(),loadClientConfigs()]);
+  await Promise.all([loadClientsSection(),loadMonitors()]);
 }
 
 // ---------------------------------------------------------------------------
