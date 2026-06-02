@@ -601,12 +601,12 @@ private:
                 const bool healthDue =
                     (nowEpochSec - lastHealthReportSec_.load(std::memory_order_relaxed)) >=
                     static_cast<std::int64_t>(kHealthIntervalSec);
-                if (flushBuffer_.empty() && !netChanged && !healthDue) continue;
-
                 std::lock_guard<std::mutex> connLock(connectionMutex_);
                 const bool connected = transport_ && transport_->isConnected();
                 if (!connected)
                 {
+                    if (flushBuffer_.empty() && !netChanged && !healthDue) continue;
+
                     const auto now = std::chrono::steady_clock::now();
                     const bool waitInterval = reconnectFailures_ > 0 &&
                         std::chrono::duration_cast<std::chrono::seconds>(
@@ -642,6 +642,8 @@ private:
                 }
 
                 // Wire-proto v3: poll for incoming C-lines (server→client control cmds).
+                // This runs unconditionally so commands like C update_now are processed
+                // on every sender-loop wake, not only when data is pending.
                 if (transport_ && transport_->isConnected())
                 {
                     std::vector<std::string> ctrlLines;
@@ -655,6 +657,10 @@ private:
                             processCtrlLine(cl);
                     }
                 }
+
+                // Skip D-line and H-line sends when there is nothing to flush and no
+                // periodic tasks are due. Ctrl-line polling above always runs first.
+                if (flushBuffer_.empty() && !netChanged && !healthDue) continue;
 
                 if (transport_ && transport_->isConnected() && netChanged)
                 {
