@@ -12,7 +12,7 @@ workflow mechanics. If the two documents ever conflict, **this file wins**.
 consisting of an `ntm-server` (C++, Linux), an `ntm-client` (C++, Linux and
 Windows), two iOS companion apps (NTMDashboard and NTMClient), and a
 browser-based admin dashboard embedded in the server binary. Three Claude Code
-agents collaborate in parallel: the Arch Linux Agent owns server/client C++
+agents collaborate in parallel: the Fedora Linux Agent owns server/client C++
 and shared headers; the Swift Agent owns iOS code; the Windows Agent owns
 Windows-specific client code and the Windows build.
 
@@ -29,7 +29,7 @@ identify your role.
 
 ```bash
 uname -s                        # must return "Linux"
-[ -f /etc/arch-release ] && echo "Arch Linux" || echo "other Linux"
+[ -f /etc/fedora-release ] && echo "Fedora Linux" || echo "other Linux"
 ```
 
 **On macOS:**
@@ -48,11 +48,11 @@ $env:OS                         # returns "Windows_NT"
 
 | Environment | Detection | Role | Branch prefix | Code ownership |
 |---|---|---|---|---|
-| Arch Linux | `uname -s` = `Linux` **and** `/etc/arch-release` exists | **Arch Linux Agent** | `linux/` | `src/` server + Linux client · shared headers · CMake (Linux) · `docs/` · config files · Linux/server deployment guides |
+| Fedora Linux | `uname -s` = `Linux` **and** `/etc/fedora-release` exists | **Fedora Linux Agent** | `linux/` | `src/` server + Linux client · shared headers · CMake (Linux) · `docs/` · config files · Linux/server deployment guides |
 | macOS | `uname -s` = `Darwin` | **Swift Agent** | `ios/` | `ios/` · XcodeGen · Swift/iOS code |
 | Windows | `$env:OS` = `Windows_NT` | **Windows Agent** | `win/` | `src/` Windows-specific client code · `cmake/toolchain-mingw64.cmake` · Windows CMake config · Windows deployment guide · Npcap/WinSock integration |
 
-### 2.3 Arch Linux Agent
+### 2.3 Fedora Linux Agent
 
 **Owns:** C++ server code, Linux client code, and all shared/protocol headers
 in `src/`; CMake build system (Linux targets); `docs/`; config file examples;
@@ -107,7 +107,7 @@ integration.
 - Manages Npcap SDK, WinSock2, and any other Windows-only dependencies.
 - Applies Windows-side protocol lockstep changes when a protocol version lands
   on `main`.
-- **Does not** build the Linux server or Linux client — the Arch Linux Agent
+- **Does not** build the Linux server or Linux client — the Fedora Linux Agent
   owns that.
 - **Does not** write Swift code — use PR handoff instead.
 
@@ -151,8 +151,8 @@ of them. (See `docs/agent-framework.md §6` for the governance rules.)
 
 | Protocol | Lockstep modules | Responsible agents |
 |---|---|---|
-| Wire (`kWireProtoVersion`) | `ntm-server`, `ntm-client` (Linux), `ntm-client` (Windows), `NTMClient` (iOS) | Arch Linux Agent · Windows Agent · Swift Agent |
-| API (`kApiVersion`) | `ntm-server`, `NTMDashboard` (iOS), embedded web dashboard | Arch Linux Agent · Swift Agent |
+| Wire (`kWireProtoVersion`) | `ntm-server`, `ntm-client` (Linux), `ntm-client` (Windows), `NTMClient` (iOS) | Fedora Linux Agent · Windows Agent · Swift Agent |
+| API (`kApiVersion`) | `ntm-server`, `NTMDashboard` (iOS), embedded web dashboard | Fedora Linux Agent · Swift Agent |
 
 ---
 
@@ -209,13 +209,13 @@ src/client_types.hpp            (ClientConfig struct)
 followed by a cross-agent handoff PR to the other client agent(s) to rebuild
 and push their binary.** Specifically:
 
-- **Arch Linux Agent** modifies a shared file → open a `[WINDOWS AGENT]`
+- **Fedora Linux Agent** modifies a shared file → open a `[WINDOWS AGENT]`
   handoff PR asking the Windows Agent to rebuild
   `ntm-client-windows-amd64-<version>.exe` and push it to the server's
   `update_dir` via `push-client.sh --confirm`.
 
 - **Windows Agent** modifies a shared file → open a `[LINUX AGENT]` handoff
-  PR asking the Arch Linux Agent to rebuild `ntm-client-linux-amd64-<version>`
+  PR asking the Fedora Linux Agent to rebuild `ntm-client-linux-amd64-<version>`
   and push it.
 
 **Why this matters:** Clients on both platforms auto-update from the same
@@ -341,7 +341,7 @@ To generate or regenerate the key pair:
 ./scripts/manage-build-keys.sh
 ```
 
-### Linux client + server *(Arch Linux Agent)*
+### Linux client + server *(Fedora Linux Agent)*
 
 ```bash
 rm -f build-linux/ntm-server-linux-amd64-*
