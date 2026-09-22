@@ -795,7 +795,7 @@ to force a reinstall.
 
 ## 15. Server Auto-Upgrade Endpoints
 
-These endpoints allow the Arch Linux build agent to push a new signed ntm-server
+These endpoints allow the Fedora Linux build agent to push a new signed ntm-server
 binary directly to the live server. They are authenticated via ML-DSA-65
 challenge-response (same build key pair used for binary signing) and are only
 registered when WebAuthn is configured (`webauthn_rp_id` set).
@@ -850,7 +850,7 @@ Rate-limited to 1 request/minute per IP.
 
 ## 16. Client Binary Push Endpoints *(api_version 8+)*
 
-These endpoints allow the Arch Linux build agent to push signed ntm-client
+These endpoints allow the Fedora Linux build agent to push signed ntm-client
 binaries into the server's `update_dir`. Connected clients then receive them
 automatically on their next update check. Registered only when both `update_dir`
 and `webauthn_rp_id` are configured.
