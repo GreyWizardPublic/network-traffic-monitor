@@ -12,9 +12,12 @@ workflow mechanics. If the two documents ever conflict, **this file wins**.
 consisting of an `ntm-server` (C++, Linux), an `ntm-client` (C++, Linux and
 Windows), two iOS companion apps (NTMDashboard and NTMClient), and a
 browser-based admin dashboard embedded in the server binary. Three Claude Code
-agents collaborate in parallel: the Fedora Linux Agent owns server/client C++
-and shared headers; the Swift Agent owns iOS code; the Windows Agent owns
-Windows-specific client code and the Windows build.
+agents collaborate in parallel under a **hub-and-spoke** model
+(`docs/agent-framework.md §0`): the Fedora Linux Agent is the **Architect** (the
+hub) and also owns server/client C++ and shared headers; the Swift Agent owns
+iOS code; the Windows Agent owns Windows-specific client code and the Windows
+build. All cross-agent work is brokered by the Architect, and **only the
+Architect merges PRs into `main`**.
 
 ---
 
@@ -46,11 +49,26 @@ $env:OS                         # returns "Windows_NT"
 
 ### 2.2 Role and ownership table
 
-| Environment | Detection | Role | Branch prefix | Code ownership |
-|---|---|---|---|---|
-| Fedora Linux | `uname -s` = `Linux` **and** `/etc/fedora-release` exists | **Fedora Linux Agent** | `linux/` | `src/` server + Linux client · shared headers · CMake (Linux) · `docs/` · config files · Linux/server deployment guides |
-| macOS | `uname -s` = `Darwin` | **Swift Agent** | `ios/` | `ios/` · XcodeGen · Swift/iOS code |
-| Windows | `$env:OS` = `Windows_NT` | **Windows Agent** | `win/` | `src/` Windows-specific client code · `cmake/toolchain-mingw64.cmake` · Windows CMake config · Windows deployment guide · Npcap/WinSock integration |
+| Environment | Detection | Role | Branch prefix | **Recipient tag** | Code ownership | Merges to `main`? |
+|---|---|---|---|---|---|---|
+| Fedora Linux | `uname -s` = `Linux` **and** `/etc/fedora-release` exists | **Fedora Linux Agent** — also the **Architect** | `linux/` | **`[ARCHITECT]`** | `src/` server + Linux client · shared headers · CMake (Linux) · `docs/` · config files · Linux/server deployment guides · `CLAUDE.md` | **Yes** — and docs-only direct commits |
+| macOS | `uname -s` = `Darwin` | **Swift Agent** | `ios/` | **`[SWIFT AGENT]`** | `ios/` · XcodeGen · Swift/iOS code | No — PR only |
+| Windows | `$env:OS` = `Windows_NT` | **Windows Agent** | `win/` | **`[WINDOWS AGENT]`** | `src/` Windows-specific client code · `cmake/toolchain-mingw64.cmake` · Windows CMake config · Windows deployment guide · Npcap/WinSock integration | No — PR only |
+
+> ### The **Recipient tag** column is the closed set that framework §4.4 points at
+>
+> The tag is the **role name, uppercased** — never the branch prefix. Those are
+> deliberately different spellings of the same role and must never be substituted.
+> `[ARCHITECT]` is the one abbreviation (never `[ARCHITECT AGENT]`).
+>
+> ⚠️ **A wrong tag is worse than a missing one.** `gh issue list --search 'in:title
+> "[LINUX AGENT]"'` returns **0 by construction** and reads *identically* to a
+> genuinely empty inbox — no error, no warning. The title tag is the only live
+> routing mechanism in this repo; issue assignees are not used.
+
+> **Merge vs. commit.** The last column is about *direct commits*. **Merging PRs**
+> is separate and **Architect-only** (framework §3.5) — no agent in this table may
+> merge any PR to `main`, or prompt a human to merge on its behalf.
 
 ### 2.3 Fedora Linux Agent
 
@@ -79,7 +97,10 @@ native code.
   adding new model fields) when a protocol version lands on `main`.
 - Runs XcodeGen (`xcodegen generate`) and builds in Xcode (⌘B).
 - Runs on-device and simulator tests; handles App Store / TestFlight publishing.
-- **Does not** write C++ code — use PR handoff instead.
+- **Does not** write C++ code — it files an `[ARCHITECT]` request instead
+  (framework §4.0a).
+- **Does not merge** its own PR, and does not ask a human to merge it
+  (framework §3.5).
 
 **One-time git hook setup (run once per clone):**
 
@@ -109,7 +130,61 @@ integration.
   on `main`.
 - **Does not** build the Linux server or Linux client — the Fedora Linux Agent
   owns that.
-- **Does not** write Swift code — use PR handoff instead.
+- **Does not** write Swift code — it files an `[ARCHITECT]` request instead
+  (framework §4.0a).
+- **Does not merge** its own PR, and does not ask a human to merge it
+  (framework §3.5).
+
+---
+
+### 2.6 Architect Agent (held by the Fedora Linux Agent)
+
+The Architect is the hub of framework §0. In this project the role is **not a
+separate session** — it is held by the Fedora Linux Agent, which keeps the code
+ownership listed in §2.2 unchanged.
+
+**Architect duties, in addition to its own domain:**
+
+- **Dispatches all cross-agent work** (`[<RECIPIENT>] [<KIND>]` Issues, framework
+  §4.1). No other agent may create a work order.
+- **Merges every PR into `main`** (framework §3.5), closes the dispatching Issue
+  with an outcome comment, and deletes the branch.
+- **Rules on dissent** (framework §4.3) and escalates to the human when it cannot
+  converge with the owning agent.
+- **Is the only agent that talks to the maintainer** (framework §7.0, §7.2), and
+  records every human authorisation on the thread with its exact scope.
+- **Lands protocol changes directly on `main`** (§4, framework §6.1).
+- **Owns the governance docs** — `CLAUDE.md`, `docs/agent-framework.md`,
+  `docs/project-rules.md`. The documents that constrain the agents are not
+  writable by the agents they constrain.
+- **Runs the board sweep** (framework §12.4) and the stop condition (§12.5).
+
+> ⚠️ **This is a working Architect, and that is a known weakening.** It also owns
+> the C++ server, the Linux client and `docs/`, so the hub cannot be kept
+> empty-handed. The mitigations in framework §0 are binding: dispatch to the Swift
+> and Windows lanes *before* starting a long local build, announce a blocking
+> execution on the board, and never start one while a dispatch is unanswered or a
+> dissent is unruled.
+
+### 2.12 Peer messaging roster (project-specific)
+
+The doorbell transport of framework §4.0b. **GitHub remains the system of
+record** — nothing here may *be* the record.
+
+| Role | Session name | Host | Transport |
+|---|---|---|---|
+| Architect / Fedora Linux Agent | `NTM-Linux` | Fedora (this machine) | local |
+| Swift Agent | `NTM-Swift` | macOS | Remote Control |
+| Windows Agent | *(not yet registered — add when it first appears in `ListAgents`)* | Windows | Remote Control |
+
+**Roster hygiene.** `ListAgents` shows no host and lists stale rows from ended
+sessions, so a name is a *label*, not proof. Prefer replying with the incoming
+message's `from=` copied verbatim. A send to a Remote Control session **reports
+nothing back** — silence is not agreement, and delivery is unconfirmed until the
+recipient says so.
+
+**Session naming.** Each agent session is named `NTM-<role>` so the roster above
+resolves. Set it with `/rename` at session start if it is not already.
 
 ---
 
@@ -209,24 +284,26 @@ src/client_types.hpp            (ClientConfig struct)
 followed by a cross-agent handoff PR to the other client agent(s) to rebuild
 and push their binary.** Specifically:
 
-- **Fedora Linux Agent** modifies a shared file → open a `[WINDOWS AGENT]`
-  handoff PR asking the Windows Agent to rebuild
-  `ntm-client-windows-amd64-<version>.exe` and push it to the server's
-  `update_dir` via `push-client.sh --confirm`.
+- **Fedora Linux Agent (Architect)** modifies a shared file → it **dispatches**
+  a `[WINDOWS AGENT] [CODE]` Issue asking the Windows Agent to rebuild
+  `ntm-client-windows-amd64-<version>.exe`. The push itself is human-gated (§10,
+  §11) and is authorised through the Architect (framework §7.0).
 
-- **Windows Agent** modifies a shared file → open a `[LINUX AGENT]` handoff
-  PR asking the Fedora Linux Agent to rebuild `ntm-client-linux-amd64-<version>`
-  and push it.
+- **Windows Agent** modifies a shared file → it files an **`[ARCHITECT]`
+  request** (framework §4.0a) stating that the Linux client needs a matching
+  rebuild. It does **not** open a work order for another agent, and it does not
+  open a handoff PR — that branch class is retired.
 
 **Why this matters:** Clients on both platforms auto-update from the same
 `update_dir`. If only one platform ships a bug fix or feature, the other
 platform's users are left on broken or outdated code indefinitely. Both
 binaries must ship together.
 
-The handoff PR must include:
+The dispatch (or request) must include:
 - The specific version to build (`ntm-client X.Y.Z.R`)
 - A one-line summary of what changed and why
-- A request to push with `push-client.sh --confirm` once built and tested
+- Whether a push is being asked for — and if so, that it awaits a recorded human
+  authorisation (framework §7.0), never the agent's own initiative
 
 ---
 
