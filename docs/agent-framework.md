@@ -1129,6 +1129,17 @@ never about facts the branch already holds.
 ### 12.5 The stop condition
 
 > **The Architect may not end a turn while the board is stalled.**
+> **`scripts/board.sh` decides.** Silent when clear; every line it prints is an
+> action §12.1a says to take now.
+
+Run it before ending any turn. It is bound to the *stop decision*, not to
+anyone's memory — which is the whole point: in the sibling project §12.1a and
+§12.4 both already forbade this failure and both failed, because nothing fired at
+the moment of stopping.
+
+**Two things this is not.** It is not a to-do list — every line is an action you
+already know how to take. And it is not permission to absorb agent work: the fix
+for `IDLE` is almost always to **dispatch**, not to do it yourself (§12.1).
 
 **Every agent-addressed issue is in exactly one of these states:**
 
