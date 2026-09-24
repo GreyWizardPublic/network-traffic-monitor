@@ -4,8 +4,10 @@ Design decision record for how NTM establishes the authenticity of `ntm-server` 
 `ntm-client` binaries, and how signing keys are rotated **without recompiling or
 reinstalling deployed binaries**.
 
-- **Status:** Accepted (design). Implementation pending.
-- **Date:** 2026-09-23
+- **Status:** Implemented — ntm-server 3.0.0.0 / ntm-client 2.0.0.0 (#133).
+- **Date:** 2026-09-23; **amended 2026-09-25** by three maintainer rulings recorded on
+  #133 (delegation bundled in each `.sig`; expiry gates new artifacts only; strict text
+  format instead of JSON). §4, §5, §6, §9 and §11 reflect the amendment.
 - **Decided by:** project owner, with review from the Swift Agent.
 - **Supersedes:** the single compiled-in build key described in
   `docs/project-rules.md §9` (Binary signing).
@@ -60,13 +62,13 @@ manual redeploy this design exists to prevent from recurring.
 root keys (3, offline, threshold 2)
     │  sign
     ▼
-delegation.json  ──  names the current build key(s), versioned, expiring
+delegation.txt   ──  names the current build key(s), versioned, expiring
     │  authorises
     ▼
 build key (one per agent, in that agent's OS keyring)
     │  signs
     ▼
-ntm-server / ntm-client binaries  (.sig, unchanged format)
+ntm-server / ntm-client binaries  (.sig = NTMSIG 2 bundle, §4)
 ```
 
 Only the **root public keys** are compiled into binaries. Rotating a build key means
@@ -82,7 +84,7 @@ implementation, because ML-DSA support across TUF tooling is still draft-stage.
 - Signatures remain **raw ML-DSA over whole file bytes** — `openssl pkeyutl -sign -rawin`
   on the signing side, `EVP_DigestVerify` with a NULL digest on the verifying side.
   No pre-hashing, no CMS, no X.509 in the trust path.
-- The `<binary>.sig` naming convention and the "always deploy the `.sig` with the binary"
+- The `<binary>.sig` file name (its content is now an NTMSIG 2 bundle, §4) and the "always deploy the `.sig` with the binary"
   rule.
 - `verifySignatureWithKey()` / `verifySignatureWithKeyBytes()` in `src/server_signing.hpp`
   are reused **unchanged** as the innermost primitive; they already take the public key
@@ -124,56 +126,83 @@ is discarded after generation.
 
 ## 4. The delegation document
 
-Canonical JSON: keys sorted, no insignificant whitespace, UTF-8. Signed over the exact
-canonical bytes.
+**Strict line-based text**, not JSON (maintainer ruling 3: no JSON parser in the C++
+trust path). ASCII, `\n` line endings, final newline, no empty lines. The roots sign
+these exact bytes. `scripts/trust/make-delegation.sh` writes it; `src/trust.hpp`
+parses it and rejects any deviation.
 
-```json
-{
-  "_type": "delegation",
-  "version": 1,
-  "expires": "2027-03-23T00:00:00Z",
-  "keys": [
-    {"id": "linux-build",   "platform": "linux-amd64",   "alg": "ML-DSA-65", "spki_b64": "..."},
-    {"id": "windows-build", "platform": "windows-amd64", "alg": "ML-DSA-65", "spki_b64": "..."}
-  ]
-}
+```
+ntm-delegation 1
+version: 1
+expires: 2027-04-23T00:00:00Z
+key: linux-build linux-amd64 ML-DSA-65 <base64 SPKI DER, unwrapped>
+key: windows-build windows-amd64 ML-DSA-65 <base64 SPKI DER, unwrapped>
 ```
 
-Distributed as `delegation.json` + `delegation.json.sig` (a concatenation of the
-signatures of the signing roots, with their key ids). Costs roughly 6 KB on the wire.
+`version` is decimal without leading zeros; `expires` is exactly `YYYY-MM-DDTHH:MM:SSZ`;
+1–8 `key:` lines with unique ids (`[a-z0-9-]{1,32}`) and a known platform.
+
+**Distribution: bundled in every `.sig`** (maintainer ruling 1). There is no separate
+`delegation.json`, no new endpoint and no API version change. Each `<binary>.sig` is a
+self-contained **NTMSIG 2** bundle (~20 KB):
+
+```
+NTMSIG 2
+delegation: <base64 of the delegation document>
+root-sig: r1 <base64 ML-DSA-65 signature over the document>      (1..3, ids ascending)
+root-sig: r2 <base64 ...>
+key-id: linux-build
+signature: <base64 raw ML-DSA-65 signature over the whole binary>
+```
+
+The committed files are `signing/delegation.txt` plus one `signing/delegation.txt.rN.sig`
+per root that signed it. A new delegation reaches the fleet with the next binary signed
+under it.
 
 **Rules enforced by every verifier:**
 
-- `version` is **monotonic**. A delegation whose version is ≤ the highest previously seen
-  is rejected. This is rollback protection.
-- `expires` in the past ⇒ rejected.
 - At least `threshold` (2) valid signatures from **distinct** compiled-in root keys.
+  Unknown root ids do not count; repeated ids are a parse error.
 - A build key is only valid for the `platform` it is scoped to. A compromised Windows
   build machine cannot sign a Linux server binary.
+- **Expiry** and **rollback** apply when accepting a *new* artifact — see §5.
 
 ## 5. Verification algorithm
 
-Roughly 200 lines of C++, no new dependency. Inserted as a resolver in front of the
-existing primitive:
+`src/trust.hpp`, pure logic, no new dependency. `verifyBundleWithRoots()`:
 
-1. Load `delegation.json` from disk beside the binary (or from the update payload).
-2. Verify ≥2 signatures against the **compiled-in root keys**. Reject on threshold
-   failure, expiry, or non-monotonic `version`.
-3. Select the build key for the relevant platform.
-4. Verify the artifact with `verifySignatureWithKeyBytes(binary, sig, build_key)` —
-   **existing code, unchanged**.
+1. Parse the NTMSIG 2 bundle (size-capped, strict grammar; a legacy raw `.sig` fails
+   with a clear message).
+2. Count valid root signatures over the embedded document against the **compiled-in
+   roots** (`src/trust_roots.hpp`). Reject below threshold.
+3. Parse the document.
+4. If the policy checks expiry: reject when `now >= expires`.
+5. Reject if `version` is below the policy's rollback floor.
+6. Select `key-id`; reject if absent or scoped to another platform.
+7. Verify the binary with `verifySignatureWithKeyBytes(binary, sig, build_key)` —
+   **existing primitive, unchanged**.
 
-Persist the highest verified delegation `version` (alongside other state the server
-already keeps; the client persists it next to its binary).
+**Policy (maintainer ruling 2).**
 
-**Push authentication uses the same resolution.** The server accepts a challenge signed
-by whatever key the current delegation names for that platform, so rotating a build key
-rotates push auth for free. The auth message format (`nonce || SHA3-256(binary)`,
-`src/server_upgrade.hpp:255`) is unchanged.
+| Path | Expiry | Rollback floor |
+|---|---|---|
+| Startup self-check (server, client) | **not checked** | none |
+| Updater download, server/client push, `update_dir` scan | checked | delegation version of the running binary's **own** `.sig` |
+
+The floor needs no extra state: the startup self-check records its own delegation
+version, and nothing older is accepted afterwards. A binary already installed keeps
+running past its delegation's expiry (no bricking of unattended hosts or hosts with a
+bad clock); it simply cannot *accept* anything signed under an expired delegation.
+
+**Push authentication uses the same resolution.** The pushed `.sig` is verified first;
+the auth proof must then verify under the build key *that bundle's delegation* names for
+the platform. Rotating a build key therefore rotates push auth for free. The auth
+message format (`nonce || SHA3-256(binary)`, `src/server_upgrade.hpp`) is unchanged.
+Consequence: a Windows client push is run on the Windows build host.
 
 **Failure modes are unchanged:** a verification failure still means the binary refuses to
-start, the update is discarded, or the push returns 403. A **missing or unverifiable
-delegation is a hard failure** — never fall back to trusting an unsigned artifact.
+start, the update is discarded, or the push returns 403. A missing or unverifiable
+delegation is a hard failure — never fall back to trusting an unsigned artifact.
 
 ## 6. Build keys: one per agent
 
@@ -183,14 +212,15 @@ key never crosses a machine boundary.
 This replaces the current arrangement, in which the same private key must be copied to the
 Windows machine to sign Windows clients.
 
-| Agent | Keyring | Mechanism |
+| Agent | Key id | Store (as implemented) |
 |---|---|---|
-| Fedora Linux Agent | gnome-keyring / libsecret | `secret-tool store --label=...` |
-| Swift Agent (macOS) | Keychain | `security add-generic-password` |
-| Windows Agent | DPAPI | PowerShell SecretManagement + SecretStore |
+| Fedora Linux Agent | `linux-build` | `systemd-creds encrypt --user --name=ntm-linux-build` → `~/.config/ntm/linux-build.cred` (host- and user-bound; the agent host runs no gnome-keyring) |
+| Windows Agent | `windows-build` | DPAPI CurrentUser → `%USERPROFILE%\.ntm\windows-build.dpapi`, released by `scripts/trust/windows-build-seed.ps1` |
+| Swift Agent (macOS) | — | none needed (iOS exception below) |
 
-If a headless Linux box makes libsecret impractical, use **`pass`** (GPG-backed, packaged
-in Fedora) or `systemd-creds`. Do not invent a bespoke encrypted file.
+`scripts/trust/lib.sh` fetches the seed, refuses to sign if the derived public key does
+not match the delegation, signs with the private key only ever in a pipe
+(`openssl genpkey … | openssl pkeyutl -inkey /dev/stdin`), and self-verifies.
 
 **Rules for every agent:**
 
@@ -212,8 +242,8 @@ Agent only needs a build key if it ever signs a non-App-Store artifact.
 1. The agent generates a new key, stores the seed in its keyring, exports the SPKI.
 2. The agent sends the **public** SPKI to the root holder (a PR or issue is fine — it is
    not secret).
-3. The root holder signs `delegation.json` version N+1 with two root keys.
-4. The new delegation ships with the next release, or is pushed to `update_dir`.
+3. The root holder signs `signing/delegation.txt` version N+1 with two root keys (`scripts/trust/root-sign.sh`).
+4. The new delegation ships inside the `.sig` of the next binaries signed under it (§4).
 5. **Nothing is recompiled.**
 
 ### Rotating a root key (rare)
@@ -269,18 +299,19 @@ one now-unavailable key, and no signature can be produced that it will accept. T
 security property working as designed. Kali Linux hit this exact situation in April 2025
 and every user had to fetch a new keyring by hand.
 
-Do it **once**, and install this mechanism in the same redeploy:
+Done once, tracked on #133:
 
-1. Generate `r1`, `r2`, `r3`; store seeds per §3 and §8. Test recovery.
-2. Each agent generates its build key (§6) and publishes its SPKI.
-3. Sign `delegation.json` v1.
-4. Implement §5, replace `src/build_pubkey.hpp` with the three root keys, bump the server
-   and client versions (the pre-commit hook requires both for changes under `src/`).
+1. ✅ Owner generated `r1`, `r2`, `r3`; seeds stored per §3/§8; r1 SLIP-39 recovery and
+   r2/r3 cards verified. Public keys in `signing/roots/`.
+2. ✅ Each agent generated its build key (§6) and published its SPKI (`signing/keys/`).
+3. Owner signs `signing/delegation.txt` v1 with r1 + r2 (`scripts/trust/root-sign.sh`).
+4. ✅ §5 implemented; `src/build_pubkey.hpp` replaced by `src/trust_roots.hpp`;
+   ntm-server 3.0.0.0, ntm-client 2.0.0.0.
 5. Build and sign server + clients.
 6. Install the new server by hand — `push-upgrade.sh` cannot work, because the live server
    still trusts the old key.
 7. Reinstall each client by hand, binary **and** `.sig` together.
-8. Publish the new root fingerprints over more than one channel.
+8. Publish the root fingerprints over more than one channel.
 
 After this, both build-key and single-root-key rotation are routine.
 
@@ -304,14 +335,12 @@ After this, both build-key and single-root-key rotation are routine.
   certificate or the EdDSA key, but not both, so losing one is recoverable. We should
   consider a second independent anchor for the Windows and iOS clients, which already have
   platform-rooted identities. It only helps if set up *before* a loss.
-- **Per-artifact revocation list.** A root-signed `revoked.json` of binary SHA-256 hashes,
-  checked before install — a kill switch for one bad build without revoking a key. Apple
-  does this with notarization tickets.
-- **API version.** Distributing `delegation.json` through the update endpoints needs a
-  `kApiVersion` bump and the lockstep updates in `docs/project-rules.md §4`.
-- **`manage-build-keys.sh` version gate** claims ML-DSA-65 exists in OpenSSL "3.3+" and
-  gates on it; ML-DSA landed in **3.5**, so the gate is too permissive and should be fixed.
-- **Windows OpenSSL floor.** The Windows toolchain pins no minimum
-  (`cmake/toolchain-windows-mingw64.cmake:30-33`, "OpenSSL 3.x"). It must be ≥3.5; the
-  Windows client already performs ML-DSA verification, so this is a documentation gap
-  rather than a defect.
+- **Per-artifact revocation list.** A root-signed list of binary SHA-256 hashes, checked
+  before install — a kill switch for one bad build without revoking a key. With bundling
+  it would ride in the NTMSIG envelope.
+- **Expiry reminder.** Delegation v1 expires 2027-04-23. Re-sign (v2) before then or no
+  new artifact will be accepted anywhere (§5). Build keys are due for rotation at 180 days.
+
+*Resolved by the 2026-09-25 amendment:* the API-version item (no endpoint change with
+bundling); the `manage-build-keys.sh` 3.3 gate (script removed; OpenSSL ≥ 3.5 is the
+floor everywhere); the Windows OpenSSL floor (project-rules §9 lists 3.6.4 on A8).
