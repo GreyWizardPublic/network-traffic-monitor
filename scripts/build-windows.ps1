@@ -95,14 +95,21 @@ if ($RunTests) {
         Write-Host "ERROR: test binary not found at $testExe" -ForegroundColor Red
         exit 1
     }
-    # Redirect stderr to stdout before passing to Write-Host so PowerShell does
-    # not wrap native-exe stderr lines as NativeCommandError objects, which
-    # would set $? = $false and trigger $ErrorActionPreference = "Stop" even
-    # when the test binary actually exits 0 (the false-positive bug).
-    & $testExe 2>&1 | Write-Host
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "ERROR: tests failed (exit $LASTEXITCODE)" -ForegroundColor Red
-        exit $LASTEXITCODE
+    # In Windows PowerShell 5.1, `2>&1` on a native exe wraps each stderr line
+    # in an ErrorRecord (NativeCommandError); under $ErrorActionPreference =
+    # "Stop" the first one aborts the script before the pass/fail counts print.
+    # Relax to Continue for the native call only and judge by $LASTEXITCODE.
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $testExe 2>&1 | ForEach-Object { Write-Host "$_" }
+        $testExit = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevEAP
+    }
+    if ($testExit -ne 0) {
+        Write-Host "ERROR: tests failed (exit $testExit)" -ForegroundColor Red
+        exit $testExit
     }
     Write-Host "[test] All tests passed." -ForegroundColor Green
 }

@@ -173,21 +173,49 @@ if(WIN32)
     # Configure-time key existence check — same policy as the Linux build block below.
     # cmake is normally invoked from PowerShell on Windows (HOME may not be set);
     # try USERPROFILE first (native Windows), then HOME (MSYS2 bash invocation).
+    # NTM_SIGN_HOME records which one won, so POST_BUILD signs from the same file.
     if(DEFINED ENV{USERPROFILE} AND EXISTS "$ENV{USERPROFILE}/.ntm/privatebuildkey.secret")
         # key found via USERPROFILE
+        file(TO_CMAKE_PATH "$ENV{USERPROFILE}" NTM_SIGN_HOME)
     elseif(DEFINED ENV{HOME} AND EXISTS "$ENV{HOME}/.ntm/privatebuildkey.secret")
         # key found via HOME (MSYS2 environment)
+        file(TO_CMAKE_PATH "$ENV{HOME}" NTM_SIGN_HOME)
     else()
         message(WARNING
             "\n*** ntm-client signing key NOT FOUND at ~/.ntm/privatebuildkey.secret ***\n"
             "    The build will FAIL at the POST_BUILD signing step.\n"
             "    Run:  ./scripts/manage-build-keys.sh\n"
             "    Then re-run cmake --build.\n")
+        file(TO_CMAKE_PATH "$ENV{USERPROFILE}" NTM_SIGN_HOME)
     endif()
 
+    # sign-client.sh must run under MSYS2 bash, invoked explicitly. cmd.exe cannot
+    # execute a .sh: it dispatches via the file association, which on a typical
+    # dev box is Git-for-Windows' git-bash.exe — a GUI launcher that returns 0
+    # immediately, so signing was a silent no-op (#129/#132).
+    #
+    # NO_DEFAULT_PATH is deliberate: on a stock Windows PATH the first bash.exe is
+    # usually C:\Windows\System32\bash.exe (WSL — signs inside Linux against a
+    # different $HOME) or Git-for-Windows bash, neither of which is the toolchain.
+    # Override with -DNTM_BASH=<path> if MSYS2 lives elsewhere.
+    find_program(NTM_BASH bash PATHS "C:/msys64/usr/bin" NO_DEFAULT_PATH)
+    if(NOT NTM_BASH)
+        message(FATAL_ERROR
+            "MSYS2 bash not found at C:/msys64/usr/bin — required for POST_BUILD signing.\n"
+            "Install MSYS2 (winget install MSYS2.MSYS2) or pass -DNTM_BASH=<path-to-msys2-bash.exe>.")
+    endif()
+    get_filename_component(NTM_BASH_DIR "${NTM_BASH}" DIRECTORY)
+
     # POST_BUILD: sign the Windows client binary with ML-DSA-65.
+    # HOME is pinned because MSYS2 otherwise defaults it to /home/<user> under
+    # C:\msys64, not the USERPROFILE the configure check above looked in.
+    # PATH is pinned to the MSYS2 bin dir so openssl/grep/wc resolve to the
+    # toolchain's own copies — a non-login bash inherits no /usr/bin.
     add_custom_command(TARGET ntm-client POST_BUILD
-        COMMAND "${CMAKE_SOURCE_DIR}/scripts/sign-client.sh"
+        COMMAND "${CMAKE_COMMAND}" -E env
+                "HOME=${NTM_SIGN_HOME}"
+                "PATH=${NTM_BASH_DIR}"
+                "${NTM_BASH}" "${CMAKE_SOURCE_DIR}/scripts/sign-client.sh"
                 "$<TARGET_FILE:ntm-client>"
         COMMENT "Signing ntm-client (Windows) with ML-DSA-65 (scripts/sign-client.sh)"
         VERBATIM

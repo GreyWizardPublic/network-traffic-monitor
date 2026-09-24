@@ -12,13 +12,51 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <vector>
 
 namespace
 {
 
-bool shell(const std::string &cmd) { return std::system(cmd.c_str()) == 0; }
+bool shell(const std::string &cmd)
+{
+#ifdef _WIN32
+    // cmd.exe /c strips the first and last quote of a command that starts with
+    // one — wrap the whole line so quoted paths survive.
+    return std::system(("\"" + cmd + "\"").c_str()) == 0;
+#else
+    return std::system(cmd.c_str()) == 0;
+#endif
+}
+
+#ifdef _WIN32
+const std::string kNoStderr = " 2>NUL";
+#else
+const std::string kNoStderr = " 2>/dev/null";
+#endif
+
+std::string quotePath(const std::string &s) { return "\"" + s + "\""; }
+
+std::string tmpPath(const std::string &name)
+{
+    return (std::filesystem::temp_directory_path() / name).string();
+}
+
+// openssl from PATH; on Windows fall back to the MSYS2 toolchain copy, since
+// ntm-tests-windows.exe is often run directly without mingw64\bin on PATH.
+const std::string &openssl()
+{
+    static const std::string cmd = [] {
+#ifdef _WIN32
+        const char *msys = "C:/msys64/mingw64/bin/openssl.exe";
+        if (std::system("where openssl >NUL 2>NUL") != 0 && std::filesystem::exists(msys))
+            return quotePath(msys);
+#endif
+        return std::string("openssl");
+    }();
+    return cmd;
+}
 
 std::string readFileStr(const std::string &path)
 {
@@ -36,12 +74,12 @@ static int g_cpushKeyIdx = 0;
 bool makeTmpKeyPair(std::string &privPath, std::vector<std::uint8_t> &pubDer)
 {
     int idx = g_cpushKeyIdx++;
-    privPath = "/tmp/ntm_test_cpush_priv_" + std::to_string(idx) + ".pem";
-    std::string pubDerPath = "/tmp/ntm_test_cpush_pub_" + std::to_string(idx) + ".der";
-    if (!shell("openssl genpkey -algorithm ML-DSA-65 -out " + privPath + " 2>/dev/null"))
+    privPath = tmpPath("ntm_test_cpush_priv_" + std::to_string(idx) + ".pem");
+    std::string pubDerPath = tmpPath("ntm_test_cpush_pub_" + std::to_string(idx) + ".der");
+    if (!shell(openssl() + " genpkey -algorithm ML-DSA-65 -out " + quotePath(privPath) + kNoStderr))
         return false;
-    if (!shell("openssl pkey -in " + privPath
-               + " -pubout -outform DER -out " + pubDerPath + " 2>/dev/null"))
+    if (!shell(openssl() + " pkey -in " + quotePath(privPath)
+               + " -pubout -outform DER -out " + quotePath(pubDerPath) + kNoStderr))
         return false;
     auto raw = readFileStr(pubDerPath);
     pubDer.assign(raw.begin(), raw.end());
@@ -51,12 +89,12 @@ bool makeTmpKeyPair(std::string &privPath, std::vector<std::uint8_t> &pubDer)
 std::vector<std::uint8_t> signMsg(const std::string &privPath,
                                    const std::vector<std::uint8_t> &msg)
 {
-    const std::string msgPath = "/tmp/ntm_test_cpush_msg.bin";
-    const std::string sigPath = "/tmp/ntm_test_cpush_sig.bin";
+    const std::string msgPath = tmpPath("ntm_test_cpush_msg.bin");
+    const std::string sigPath = tmpPath("ntm_test_cpush_sig.bin");
     FILE *f = std::fopen(msgPath.c_str(), "wb");
     if (f) { std::fwrite(msg.data(), 1, msg.size(), f); std::fclose(f); }
-    shell("openssl pkeyutl -sign -inkey " + privPath
-          + " -in " + msgPath + " -out " + sigPath + " -rawin 2>/dev/null");
+    shell(openssl() + " pkeyutl -sign -inkey " + quotePath(privPath)
+          + " -in " + quotePath(msgPath) + " -out " + quotePath(sigPath) + " -rawin" + kNoStderr);
     auto raw = readFileStr(sigPath);
     return std::vector<std::uint8_t>(raw.begin(), raw.end());
 }
