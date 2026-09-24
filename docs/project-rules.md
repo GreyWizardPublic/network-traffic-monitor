@@ -53,7 +53,7 @@ $env:OS                         # returns "Windows_NT"
 |---|---|---|---|---|---|---|
 | Fedora Linux | `uname -s` = `Linux` **and** `/etc/fedora-release` exists | **Fedora Linux Agent** — also the **Architect** | `linux/` | **`[ARCHITECT]`** | `src/` server + Linux client · shared headers · CMake (Linux) · `docs/` · config files · Linux/server deployment guides · `CLAUDE.md` | **Yes** — and docs-only direct commits |
 | macOS | `uname -s` = `Darwin` | **Swift Agent** | `ios/` | **`[SWIFT AGENT]`** | `ios/` · XcodeGen · Swift/iOS code | No — PR only |
-| Windows | `$env:OS` = `Windows_NT` | **Windows Agent** | `win/` | **`[WINDOWS AGENT]`** | `src/` Windows-specific client code · `cmake/toolchain-mingw64.cmake` · Windows CMake config · Windows deployment guide · Npcap/WinSock integration | No — PR only |
+| Windows | `$env:OS` = `Windows_NT` | **Windows Agent** | `win/` | **`[WINDOWS AGENT]`** | `src/` Windows-specific client code · `cmake/toolchain-windows-mingw64.cmake` (native, used by §9) · `cmake/toolchain-mingw64.cmake` (legacy Linux cross-compile) · Windows CMake config · Windows deployment guide · Npcap/WinSock integration | No — PR only |
 
 > ### The **Recipient tag** column is the closed set that framework §4.4 points at
 >
@@ -116,7 +116,7 @@ enforcement is silently absent for iOS commits.
 
 **Owns:** all Windows-specific C++ client code in `src/` (files conditionally
 compiled for Windows, `#ifdef _WIN32` blocks, and any `*_windows*`-named
-files); `cmake/toolchain-mingw64.cmake`; Windows-specific CMake variables and
+files); `cmake/toolchain-windows-mingw64.cmake` (native build, §9) and `cmake/toolchain-mingw64.cmake` (legacy cross-compile); Windows-specific CMake variables and
 targets; `CLIENT_DEPLOYMENT.md` Windows sections; Npcap SDK and WinSock
 integration.
 
