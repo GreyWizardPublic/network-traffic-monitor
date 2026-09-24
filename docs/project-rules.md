@@ -479,7 +479,11 @@ cmake --build build-windows -j $env:NUMBER_OF_PROCESSORS
 | Ninja | `C:\msys64\mingw64\bin\ninja.exe` — installed by setup script |
 | OpenSSL 3.x static | `C:\msys64\mingw64\lib\libssl.a` — installed by setup script |
 | Npcap SDK 1.13 | `C:\npcap-sdk` — downloaded and extracted by setup script |
+| MSYS2 `diffutils` (`cmp`) | `C:\msys64\usr\bin\cmp.exe` — `pacman -S --needed diffutils`; required by key/signing verification steps (not in the MSYS2 base install; found in #135) |
+| MSYS2 `gdb` | `C:\msys64\mingw64\bin\gdb.exe` — `mingw-w64-x86_64-gdb`; debugging |
 | Native toolchain file | `cmake/toolchain-windows-mingw64.cmake` |
+
+> **PowerShell 5.1 procedures must be ASCII-only** (no em dashes or curly quotes). Without a UTF-8 BOM, PS 5.1 reads a `.ps1` as ANSI, and a mis-decoded `—` yields a byte PowerShell parses as a quote, so the whole script fails to parse (#135). Native calls do not throw on failure. Check `$LASTEXITCODE` explicitly.
 
 ---
 
