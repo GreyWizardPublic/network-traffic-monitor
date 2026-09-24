@@ -174,18 +174,20 @@ if(WIN32)
     # cmake is normally invoked from PowerShell on Windows (HOME may not be set);
     # try USERPROFILE first (native Windows), then HOME (MSYS2 bash invocation).
     # NTM_SIGN_HOME records which one won, so POST_BUILD signs from the same file.
-    if(DEFINED ENV{USERPROFILE} AND EXISTS "$ENV{USERPROFILE}/.ntm/privatebuildkey.secret")
+    # Trust v2 (#133): the Windows build key is a DPAPI-held ML-DSA-65 seed,
+    # released at sign time by scripts/trust/windows-build-seed.ps1.
+    if(DEFINED ENV{USERPROFILE} AND EXISTS "$ENV{USERPROFILE}/.ntm/windows-build.dpapi")
         # key found via USERPROFILE
         file(TO_CMAKE_PATH "$ENV{USERPROFILE}" NTM_SIGN_HOME)
-    elseif(DEFINED ENV{HOME} AND EXISTS "$ENV{HOME}/.ntm/privatebuildkey.secret")
+    elseif(DEFINED ENV{HOME} AND EXISTS "$ENV{HOME}/.ntm/windows-build.dpapi")
         # key found via HOME (MSYS2 environment)
         file(TO_CMAKE_PATH "$ENV{HOME}" NTM_SIGN_HOME)
     else()
         message(WARNING
-            "\n*** ntm-client signing key NOT FOUND at ~/.ntm/privatebuildkey.secret ***\n"
+            "\n*** ntm-client Windows build key NOT FOUND at %USERPROFILE%\\.ntm\\windows-build.dpapi ***\n"
             "    The build will FAIL at the POST_BUILD signing step.\n"
-            "    Run:  ./scripts/manage-build-keys.sh\n"
-            "    Then re-run cmake --build.\n")
+            "    The key is a DPAPI-encrypted seed generated once per host (#135).\n"
+            "    Do NOT run manage-build-keys.sh; ask the Architect.\n")
         file(TO_CMAKE_PATH "$ENV{USERPROFILE}" NTM_SIGN_HOME)
     endif()
 

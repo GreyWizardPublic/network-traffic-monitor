@@ -32,7 +32,7 @@ Write-Host "  OK: MSYS2 found" -ForegroundColor Green
 
 # ── 2. MinGW-w64 packages ─────────────────────────────────────────────────────
 Write-Host "[2/4] Checking MinGW-w64 packages..." -ForegroundColor Yellow
-$required = @("gcc.exe", "g++.exe", "ninja.exe", "cmake.exe", "windres.exe")
+$required = @("gcc.exe", "g++.exe", "ninja.exe", "cmake.exe", "windres.exe", "gdb.exe")
 $missing  = @()
 foreach ($exe in $required) {
     if (Test-Path "$MINGW64_BIN\$exe") {
@@ -42,10 +42,18 @@ foreach ($exe in $required) {
         $missing += $exe
     }
 }
+# cmp (MSYS2 diffutils) lives in usr\bin, not mingw64\bin; the build-key
+# verification steps need it (#135).
+if (Test-Path "C:\msys64\usr\bin\cmp.exe") {
+    Write-Host "  OK: cmp.exe (diffutils)" -ForegroundColor Green
+} else {
+    Write-Host "  MISSING: cmp.exe (diffutils)" -ForegroundColor Red
+    $missing += "cmp.exe"
+}
 if ($missing.Count -gt 0) {
     Write-Host ""
     Write-Host "  Installing missing packages via pacman..." -ForegroundColor Yellow
-    & $MSYS2_BIN -lc "pacman -S --noconfirm --needed mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja mingw-w64-x86_64-openssl mingw-w64-x86_64-make"
+    & $MSYS2_BIN -lc "pacman -S --noconfirm --needed mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja mingw-w64-x86_64-openssl mingw-w64-x86_64-make mingw-w64-x86_64-gdb diffutils"
     Write-Host "  Done." -ForegroundColor Green
 }
 
