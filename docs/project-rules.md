@@ -173,9 +173,9 @@ record** — nothing here may *be* the record.
 
 | Role | Session name | Host | Transport |
 |---|---|---|---|
-| Architect / Fedora Linux Agent | `NTM-Linux` | Fedora (this machine) | local |
+| Architect / Fedora Linux Agent | `NTM-Architect` | Fedora (this machine) | local |
 | Swift Agent | `NTM-Swift` | macOS | Remote Control |
-| Windows Agent | *(not yet registered — add when it first appears in `ListAgents`)* | Windows | Remote Control |
+| Windows Agent | `NTM-Windows` | Windows (host `A8`) | Remote Control |
 
 **Roster hygiene.** `ListAgents` shows no host and lists stale rows from ended
 sessions, so a name is a *label*, not proof. Prefer replying with the incoming
