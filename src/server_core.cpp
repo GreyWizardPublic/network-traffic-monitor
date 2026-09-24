@@ -5,7 +5,7 @@
 #include "proto_client_server.hpp"
 #include "ntm_types.hpp"
 #include "server_version.hpp"
-#include "server_signing.hpp"    // ML-DSA-65 binary signature verification
+#include "trust.hpp"             // root → delegation → build-key binary verification
 #include "server_upgrade.hpp"    // auto-upgrade nonce store + helpers
 #include "web_auth.hpp"          // isTrustedProxyCatchAll, cookieFromHeader helpers
 #include "web_dashboard.hpp"     // transitively includes webauthn.hpp
@@ -3244,7 +3244,9 @@ int main(int argc, char *argv[])
             sigPath = binaryPath + ".sig";
 
         std::string sigErr;
-        if (!ntm::signing::verifyServerSignature(binaryPath, sigPath, sigErr))
+        ntm::trust::Verified selfTrust;
+        if (!ntm::trust::verifyArtifactFiles(binaryPath, sigPath, ntm::trust::kServerPlatform,
+                                             ntm::trust::startupPolicy(), selfTrust, sigErr))
         {
             std::fprintf(stderr,
                 "ntm-server: FATAL — binary signature verification failed.\n"
@@ -3257,7 +3259,13 @@ int main(int argc, char *argv[])
                 sigErr.c_str(), binaryPath.c_str(), sigPath.c_str());
             return 1;
         }
-        std::fprintf(stderr, "ntm-server: binary signature verified OK (ML-DSA-65)\n");
+        // Everything this server accepts later (pushes, update_dir) must carry a
+        // delegation at least this new — the rollback floor.
+        ntm::trust::selfDelegationVersion().store(selfTrust.delegationVersion);
+        std::fprintf(stderr,
+            "ntm-server: binary signature verified OK (ML-DSA-65, key %s, delegation v%llu)\n",
+            selfTrust.keyId.c_str(),
+            static_cast<unsigned long long>(selfTrust.delegationVersion));
     }
 
     bool daemonMode = false;

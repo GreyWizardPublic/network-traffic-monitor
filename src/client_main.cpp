@@ -2,6 +2,7 @@
 #include "client_filelog.hpp"
 #include "client_platform.hpp"
 #include "client_signing.hpp"
+#include "trust.hpp"
 #include "client_version.hpp"
 #ifdef _WIN32
 #  include "client_windows_service.hpp"
@@ -32,7 +33,9 @@ int main(int argc, char *argv[])
                 "cannot verify signature. Refusing to start.\n");
             return 1;
         }
-        if (!ntm::signing::verifyClientSignature(selfPath, sigPath, sigErr))
+        ntm::trust::Verified selfTrust;
+        if (!ntm::trust::verifyArtifactFiles(selfPath, sigPath, kClientPlatform,
+                                             ntm::trust::startupPolicy(), selfTrust, sigErr))
         {
             std::fprintf(stderr,
                 "ntm-client: FATAL — binary signature verification failed.\n"
@@ -45,7 +48,12 @@ int main(int argc, char *argv[])
                 sigErr.c_str(), selfPath.c_str(), sigPath.c_str());
             return 1;
         }
-        std::fprintf(stderr, "ntm-client: binary signature verified OK (ML-DSA-65)\n");
+        // Updates must carry a delegation at least this new (rollback floor).
+        ntm::trust::selfDelegationVersion().store(selfTrust.delegationVersion);
+        std::fprintf(stderr,
+            "ntm-client: binary signature verified OK (ML-DSA-65, key %s, delegation v%llu)\n",
+            selfTrust.keyId.c_str(),
+            static_cast<unsigned long long>(selfTrust.delegationVersion));
     }
 
     // Defaults; then overridden by config file (if --config), then by CLI.
