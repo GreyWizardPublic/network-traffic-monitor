@@ -1,0 +1,6 @@
+# Byte-exact trust material: root-signed documents must not be EOL-converted
+# on any checkout (a CRLF delegation fails every root signature — #139).
+signing/** -text
+
+# Shell scripts run under bash on every platform (incl. MSYS2): always LF.
+*.sh text eol=lf

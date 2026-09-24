@@ -10,7 +10,10 @@
 #
 # Prerequisites:
 #   ~/.ntm/ntmserver.info   — server=<host>  port=<port>  (one key per line)
-#   ~/.ntm/privatebuildkey.secret — ML-DSA-65 private key (PEM, mode 600)
+#   This host's build key for the binary's platform (trust v2, docs/signing-trust-model.md §6):
+#     linux-amd64   ~/.config/ntm/linux-build.cred (systemd-creds)
+#     windows-amd64 %USERPROFILE%\.ntm\windows-build.dpapi — so Windows client
+#                   pushes run from the Windows build host (MSYS2 bash)
 #
 # Usage:
 #   ./scripts/push-client.sh <binary>            # dry-run (validates, no push)
@@ -21,8 +24,10 @@
 # The filename must match: ntm-client-<platform>-<version>[.exe]
 #
 # The server-side endpoint verifies:
-#   1. ML-DSA-65 auth proof (RAND nonce + SHA3-256(binary), signed with build key)
-#   2. ML-DSA-65 binary signature (same key)
+#   1. NTMSIG 2 bundle: 2-of-3 roots over the delegation, platform-scoped build
+#      key, ML-DSA-65 binary signature, expiry and rollback floor
+#   2. ML-DSA-65 auth proof (RAND nonce + SHA3-256(binary)) signed with that same
+#      delegated build key
 #   3. Version is strictly newer than the current version in update_dir for this platform
 # If any check fails the server rejects the push; no file is written.
 
@@ -115,18 +120,16 @@ info "Version:  $VERSION"
 
 [ -x "$BINARY" ] || die "binary is not executable: $BINARY"
 
-PRIV_KEY="$HOME/.ntm/privatebuildkey.secret"
-[ -f "$PRIV_KEY" ] || die "private key not found: $PRIV_KEY"
-[ "$(stat -c '%a' "$PRIV_KEY")" = "600" ] \
-    || warn "private key permissions are not 600 — tighten with: chmod 600 $PRIV_KEY"
+# shellcheck source=trust/lib.sh
+NTM_TOOL=$(basename "$0" .sh)
+source "$(dirname "${BASH_SOURCE[0]}")/trust/lib.sh"
+PUSH_PLATFORM="$PLATFORM"
+[ "$(ntm_host_platform)" = "$PUSH_PLATFORM" ] \
+    || die "the auth proof must be signed with the $PUSH_PLATFORM build key; run this on that platform's build host"
 
-info "Verifying binary signature locally..."
-openssl pkeyutl -verify \
-    -inkey "$PRIV_KEY" \
-    -in "$BINARY" \
-    -sigfile "$SIG_FILE" \
-    -rawin >/dev/null 2>&1 \
-    || die "local signature verification FAILED — binary or .sig file is corrupted"
+info "Verifying NTMSIG 2 bundle locally (roots, delegation, $PUSH_PLATFORM key, binary)..."
+"$(dirname "${BASH_SOURCE[0]}")/trust/verify-bundle.sh" "$BINARY" "$SIG_FILE" "$PUSH_PLATFORM" \
+    || die "local bundle verification FAILED — do not push"
 info "Local signature verification: OK"
 
 # ---------------------------------------------------------------------------
@@ -195,12 +198,7 @@ echo -n "$NONCE" | xxd -r -p > "$AUTH_MSG_FILE"
 echo -n "$BINARY_HASH" | xxd -r -p >> "$AUTH_MSG_FILE"
 
 info "Signing auth message with ML-DSA-65 ..."
-openssl pkeyutl -sign \
-    -inkey "$PRIV_KEY" \
-    -in "$AUTH_MSG_FILE" \
-    -out "$AUTH_PROOF_FILE" \
-    -rawin \
-    || die "failed to sign auth message"
+ntm_build_sign "$PUSH_PLATFORM" "$AUTH_MSG_FILE" "$AUTH_PROOF_FILE"
 
 # Strip both \r and \n: on MSYS2/MinGW, openssl base64 emits CRLF line endings;
 # tr -d '\n' alone leaves stray \r chars that produce invalid base64 (length mod 4 != 0).

@@ -7,7 +7,7 @@
 #include "proto_client_server.hpp"
 #include "server_version.hpp"
 #include "server_upgrade.hpp"
-#include "server_signing.hpp"
+#include "trust.hpp"
 #include "client_push.hpp"
 #include "ip_range_resolver.hpp"   // IPDataUpdater::get() for overhead entity resolution
 
@@ -215,14 +215,13 @@ static std::size_t scanUpdateDir(const std::string &dir)
         fs::path sigPath = fs::path(dir) / (name + ".sig");
         if (!fs::exists(sigPath, ec) || ec) continue;
 
-        // Verify ML-DSA-65 signature
+        // Verify the NTMSIG 2 bundle: root threshold, expiry, rollback floor,
+        // platform-scoped build key, then the ML-DSA-65 binary signature.
         std::string sigErr;
-        if (!ntm::signing::verifySignatureWithKey(
-                entry.path().string(),
-                sigPath.string(),
-                ntm::signing::kBuildPublicKeyDer.data(),
-                ntm::signing::kBuildPublicKeyDer.size(),
-                sigErr))
+        ntm::trust::Verified binTrust;
+        if (!ntm::trust::verifyArtifactFiles(entry.path().string(), sigPath.string(),
+                                             info.platform, ntm::trust::acceptPolicy(),
+                                             binTrust, sigErr))
         {
             serverLog(LogLevel::Warn,
                 "ntm-server: update_dir: signature verification failed for '%s': %s",
@@ -4293,12 +4292,29 @@ void registerWebHandlers(NtmHttpServer &svr,
                     return;
                 }
 
-                // (c) Verify ML-DSA-65 auth proof: proves sender holds the private key
+                // (c) Verify the binary's NTMSIG 2 bundle. This resolves which build
+                //     key the current delegation authorises for the server platform.
+                std::string sigErr;
+                ntm::trust::Verified pushTrust;
+                if (!ntm::trust::verifyArtifactBytes(binaryBytes, sigBytes,
+                                                     ntm::trust::kServerPlatform,
+                                                     ntm::trust::acceptPolicy(),
+                                                     pushTrust, sigErr))
+                {
+                    res.status = 403;
+                    res.set_content(
+                        "{\"error\":\"binary signature verification failed\"}\n",
+                        "application/json");
+                    return;
+                }
+
+                // (d) Verify ML-DSA-65 auth proof with that same delegated key:
+                //     proves the sender holds the build key's private half.
                 std::string authErr;
                 if (!ntm::upgrade::verifyUpgradeAuth(
                         nonceBytes, binaryHash, authProof,
-                        ntm::signing::kBuildPublicKeyDer.data(),
-                        ntm::signing::kBuildPublicKeyDer.size(),
+                        pushTrust.keySpki.data(),
+                        pushTrust.keySpki.size(),
                         authErr))
                 {
                     res.status = 403;
@@ -4310,7 +4326,7 @@ void registerWebHandlers(NtmHttpServer &svr,
                     return;
                 }
 
-                // (d) Version check — warn and discard if not strictly newer
+                // (e) Version check — warn and discard if not strictly newer
                 const ntm::upgrade::Semver newVer  = ntm::upgrade::parseSemver(versionStr);
                 const ntm::upgrade::Semver curVer  =
                     ntm::upgrade::parseSemver(config.upgrade_server_version);
@@ -4329,17 +4345,6 @@ void registerWebHandlers(NtmHttpServer &svr,
                         "{\"error\":\"uploaded binary v" + newVer.str()
                         + " is not newer than current v" + curVer.str()
                         + "; discarding\"}\n",
-                        "application/json");
-                    return;
-                }
-
-                // (e) Verify new binary + sig using embedded build public key
-                std::string sigErr;
-                if (!ntm::signing::verifyServerSignatureBytes(binaryBytes, sigBytes, sigErr))
-                {
-                    res.status = 403;
-                    res.set_content(
-                        "{\"error\":\"binary signature verification failed\"}\n",
                         "application/json");
                     return;
                 }
@@ -4491,21 +4496,7 @@ void registerWebHandlers(NtmHttpServer &svr,
                     return;
                 }
 
-                // (c) Verify ML-DSA-65 auth proof
-                std::string authErr;
-                if (!ntm::upgrade::verifyUpgradeAuth(
-                        nonceBytes, binaryHash, authProof,
-                        ntm::signing::kBuildPublicKeyDer.data(),
-                        ntm::signing::kBuildPublicKeyDer.size(),
-                        authErr))
-                {
-                    res.status = 403;
-                    res.set_content("{\"error\":\"auth proof verification failed\"}\n",
-                                    "application/json");
-                    return;
-                }
-
-                // (d) Validate platform
+                // (c) Validate platform — it selects which delegated key may sign
                 if (!ntm::client::isKnownClientPlatform(platformStr))
                 {
                     res.status = 400;
@@ -4514,7 +4505,35 @@ void registerWebHandlers(NtmHttpServer &svr,
                     return;
                 }
 
-                // (e) Validate version string is parseable
+                // (d) Verify the binary's NTMSIG 2 bundle for that platform. This
+                //     resolves the build key the current delegation authorises.
+                std::string sigErr;
+                ntm::trust::Verified pushTrust;
+                if (!ntm::trust::verifyArtifactBytes(binaryBytes, sigBytes, platformStr,
+                                                     ntm::trust::acceptPolicy(),
+                                                     pushTrust, sigErr))
+                {
+                    res.status = 403;
+                    res.set_content("{\"error\":\"binary signature verification failed\"}\n",
+                                    "application/json");
+                    return;
+                }
+
+                // (e) Verify ML-DSA-65 auth proof with that same delegated key
+                std::string authErr;
+                if (!ntm::upgrade::verifyUpgradeAuth(
+                        nonceBytes, binaryHash, authProof,
+                        pushTrust.keySpki.data(),
+                        pushTrust.keySpki.size(),
+                        authErr))
+                {
+                    res.status = 403;
+                    res.set_content("{\"error\":\"auth proof verification failed\"}\n",
+                                    "application/json");
+                    return;
+                }
+
+                // (f) Validate version string is parseable
                 const ntm::upgrade::Semver newVer = ntm::upgrade::parseSemver(versionStr);
                 if (!newVer.valid)
                 {
@@ -4524,7 +4543,7 @@ void registerWebHandlers(NtmHttpServer &svr,
                     return;
                 }
 
-                // (f) Version check: reject if not strictly newer than current for this platform
+                // (g) Version check: reject if not strictly newer than current for this platform
                 {
                     std::lock_guard<std::mutex> lk(g_manifestMtx);
                     for (const auto &m : g_manifest)
@@ -4545,16 +4564,6 @@ void registerWebHandlers(NtmHttpServer &svr,
                             break;
                         }
                     }
-                }
-
-                // (g) Verify ML-DSA-65 binary signature
-                std::string sigErr;
-                if (!ntm::signing::verifyServerSignatureBytes(binaryBytes, sigBytes, sigErr))
-                {
-                    res.status = 403;
-                    res.set_content("{\"error\":\"binary signature verification failed\"}\n",
-                                    "application/json");
-                    return;
                 }
 
                 // (h) Construct filename and write to update_dir atomically

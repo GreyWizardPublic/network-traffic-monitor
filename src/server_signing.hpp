@@ -1,5 +1,5 @@
 #pragma once
-// server_signing.hpp — ML-DSA-65 binary signature verification for ntm-server startup.
+// server_signing.hpp — ML-DSA-65 signature verification primitives.
 //
 // ALL functions here are pure logic: file I/O + OpenSSL EVP only.
 // No syslog, no global state, no platform singletons.
@@ -7,17 +7,14 @@
 //
 // Algorithm: ML-DSA-65 (CRYSTALS-Dilithium Level 3, NIST FIPS 204)
 // Key format: SubjectPublicKeyInfo DER (d2i_PUBKEY compatible)
-// OpenSSL 3.3+ required (ML-DSA-65 in default provider since 3.3).
+// OpenSSL 3.5+ required (ML-DSA-65 in the default provider since 3.5).
 //
-// Production entry point:
-//   verifyServerSignature(binaryPath, sigPath, errOut)
-//   — uses the embedded public key from build_pubkey.hpp
+// These take the public key as a parameter. Which key to trust is decided by
+// trust.hpp (root keys → delegation → build key); production code verifies
+// artifacts through ntm::trust, never by calling these with a fixed key.
 //
-// Test entry point:
 //   verifySignatureWithKey(binaryPath, sigPath, derPubKey, derLen, errOut)
-//   — accepts any DER public key, allowing tests to use their own key pairs
-
-#include "build_pubkey.hpp"
+//   verifySignatureWithKeyBytes(binData, sigData, derPubKey, derLen, errOut)
 
 #include <cstdint>
 #include <cstdio>
@@ -211,37 +208,6 @@ inline bool verifySignatureWithKeyBytes(
     EVP_MD_CTX_free(ctx);
     EVP_PKEY_free(pkey);
     return ok;
-}
-
-// Convenience: verify using the embedded build public key (bytes in RAM).
-inline bool verifyServerSignatureBytes(
-    const std::vector<std::uint8_t> &binData,
-    const std::vector<std::uint8_t> &sigData,
-    std::string                     &errOut)
-{
-    return verifySignatureWithKeyBytes(
-        binData, sigData,
-        kBuildPublicKeyDer.data(),
-        kBuildPublicKeyDer.size(),
-        errOut);
-}
-
-// ---------------------------------------------------------------------------
-// Production entry point — uses the embedded build public key
-// ---------------------------------------------------------------------------
-
-// Verify the server binary at binaryPath against its ML-DSA-65 signature.
-// The signature file is binaryPath + ".sig" unless sigPath is specified.
-// Returns true if the signature is valid; errOut describes the failure otherwise.
-inline bool verifyServerSignature(const std::string &binaryPath,
-                                   const std::string &sigPath,
-                                   std::string       &errOut)
-{
-    return verifySignatureWithKey(
-        binaryPath, sigPath,
-        kBuildPublicKeyDer.data(),
-        kBuildPublicKeyDer.size(),
-        errOut);
 }
 
 } // namespace ntm::signing

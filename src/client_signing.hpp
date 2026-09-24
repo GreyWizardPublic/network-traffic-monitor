@@ -1,8 +1,7 @@
 #pragma once
-// client_signing.hpp — ML-DSA-65 client binary verification.
-// Wraps server_signing.hpp for use by:
-//   1. client_main.cpp  — startup self-verification
-//   2. updater.cpp      — verify downloaded binary before applying
+// client_signing.hpp — client-side helpers for binary verification.
+// Artifact trust (startup self-check, updater) goes through trust.hpp;
+// this header supplies the running binary's own path and a keyed test hook.
 //
 // clientSelfPath() resolves the running binary's absolute path:
 //   Linux:   /proc/self/exe via readlink
@@ -47,35 +46,6 @@ inline std::string clientSelfPath()
     buf[n] = '\0';
     return std::string(buf);
 #endif
-}
-
-// Verify the client binary at binaryPath against its .sig file.
-// Uses the embedded kBuildPublicKeyDer (same key as server).
-// sigPath defaults to binaryPath + ".sig" when empty.
-inline bool verifyClientSignature(const std::string &binaryPath,
-                                   const std::string &sigPath,
-                                   std::string       &errOut)
-{
-    const std::string sp = sigPath.empty() ? binaryPath + ".sig" : sigPath;
-    return verifySignatureWithKey(
-        binaryPath, sp,
-        kBuildPublicKeyDer.data(),
-        kBuildPublicKeyDer.size(),
-        errOut);
-}
-
-// In-memory variant — verify binary + signature already loaded into RAM.
-// Used by updater.cpp to verify a downloaded binary before writing to disk.
-inline bool verifyClientSignatureBytes(
-    const std::vector<std::uint8_t> &binData,
-    const std::vector<std::uint8_t> &sigData,
-    std::string                     &errOut)
-{
-    return verifySignatureWithKeyBytes(
-        binData, sigData,
-        kBuildPublicKeyDer.data(),
-        kBuildPublicKeyDer.size(),
-        errOut);
 }
 
 // Testable overload — accepts any DER public key (for unit tests with generated key pairs).

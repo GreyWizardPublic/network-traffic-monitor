@@ -247,7 +247,8 @@ inline std::string opensslErrors()
 // Verify the ML-DSA-65 auth proof.
 // auth_message = nonce_bytes || binary_sha3  (64 bytes total for 32-byte nonce + SHA3-256)
 // auth_proof is the ML-DSA-65 signature over auth_message, produced by the push script.
-// der_pubkey is the SubjectPublicKeyInfo DER bytes (e.g. kBuildPublicKeyDer).
+// der_pubkey is the SubjectPublicKeyInfo DER bytes of the delegated build key
+// (ntm::trust::Verified::keySpki from the pushed binary's own bundle).
 //
 // Returns true if the proof is valid; errOut describes failure.
 inline bool verifyUpgradeAuth(

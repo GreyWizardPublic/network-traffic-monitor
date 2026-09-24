@@ -7,6 +7,7 @@
 #include "client_platform.hpp"
 #include "client_version.hpp"
 #include "client_signing.hpp"
+#include "trust.hpp"
 #include "client_http_util.hpp"
 
 #include <openssl/evp.h>
@@ -819,7 +820,9 @@ void doOneCheckCycle(const ClientConfig &config,
         }
 
         std::string sigVerErr;
-        if (!ntm::signing::verifyClientSignatureBytes(binData, sigData, sigVerErr))
+        ntm::trust::Verified updTrust;
+        if (!ntm::trust::verifyArtifactBytes(binData, sigData, kClientPlatform,
+                                             ntm::trust::acceptPolicy(), updTrust, sigVerErr))
         {
             log(LogLevel::Err, "ntm-client: updater: ML-DSA-65 verification FAILED — "
                 "discarding update (" + sigVerErr + ")");

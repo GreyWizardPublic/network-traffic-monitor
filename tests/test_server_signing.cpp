@@ -3,7 +3,7 @@
 // Tests the ML-DSA-65 binary signature verification logic.
 // Each test generates a fresh temporary key pair using the OpenSSL CLI so
 // no pre-committed test keys are needed.  The production public key embedded
-// in build_pubkey.hpp is NOT used here; tests supply their own key pair.
+// is never used here; tests supply their own key pair (trust chain: test_trust.cpp).
 //
 // Tests cover:
 //   - valid signature verifies successfully

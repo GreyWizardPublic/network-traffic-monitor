@@ -64,23 +64,24 @@ if(NOT WIN32)
     )
 
     # ---------------------------------------------------------------------------
-    # POST_BUILD: sign the server binary with ML-DSA-65.
-    # Requires the private key at ~/.ntm/privatebuildkey.secret.
-    # If the key is absent, the build FAILS with a clear error message.
-    # Unsigned server binaries are never produced — this step is mandatory.
+    # POST_BUILD: sign the server binary into an NTMSIG 2 bundle.
+    # Needs the linux-build key (systemd-creds, ~/.config/ntm/linux-build.cred)
+    # and a root-signed signing/delegation.txt. If either is missing the build
+    # FAILS — unsigned server binaries are never produced.
+    # docs/signing-trust-model.md §6.
     # ---------------------------------------------------------------------------
-    if(NOT EXISTS "$ENV{HOME}/.ntm/privatebuildkey.secret")
+    set(NTM_LINUX_BUILD_CRED "$ENV{HOME}/.config/ntm/linux-build.cred")
+    if(NOT EXISTS "${NTM_LINUX_BUILD_CRED}")
         message(WARNING
-            "\n*** ntm-server signing key NOT FOUND at ~/.ntm/privatebuildkey.secret ***\n"
-            "    The build will FAIL at the signing step.\n"
-            "    Run:  ./scripts/manage-build-keys.sh\n"
-            "    Then re-run cmake --build.\n")
+            "\n*** linux-build signing key NOT FOUND at ~/.config/ntm/linux-build.cred ***\n"
+            "    The build will FAIL at the POST_BUILD signing step.\n"
+            "    See docs/signing-trust-model.md §6 (build keys) — do not improvise a key.\n")
     endif()
 
     add_custom_command(TARGET ntm-server POST_BUILD
         COMMAND "${CMAKE_SOURCE_DIR}/scripts/sign-server.sh"
                 "$<TARGET_FILE:ntm-server>"
-        COMMENT "Signing ntm-server with ML-DSA-65 (scripts/sign-server.sh)"
+        COMMENT "Signing ntm-server (NTMSIG 2, linux-build key)"
         VERBATIM
     )
 endif()
@@ -248,6 +249,7 @@ if(WIN32)
         tests/test_zlib_stream.cpp          # uses zlib_stream.hpp → miniz on Windows
         tests/test_client_signing.cpp
         tests/test_client_push.cpp
+        tests/test_trust.cpp
         src/client_core.cpp
         src/client_windows.cpp
         src/client_filelog.cpp              # required by client_windows.cpp (dual-sink ntmLog)
@@ -293,19 +295,13 @@ else()
             Threads::Threads
     )
 
-    # POST_BUILD: sign the client binary with ML-DSA-65.
-    if(NOT EXISTS "$ENV{HOME}/.ntm/privatebuildkey.secret")
-        message(WARNING
-            "\n*** ntm-client signing key NOT FOUND at ~/.ntm/privatebuildkey.secret ***\n"
-            "    The build will FAIL at the signing step.\n"
-            "    Run:  ./scripts/manage-build-keys.sh\n"
-            "    Then re-run cmake --build.\n")
-    endif()
+    # POST_BUILD: sign the client binary into an NTMSIG 2 bundle (linux-build key).
+    # The key check lives in the ntm-server block above (same key, same host).
 
     add_custom_command(TARGET ntm-client POST_BUILD
         COMMAND "${CMAKE_SOURCE_DIR}/scripts/sign-client.sh"
                 "$<TARGET_FILE:ntm-client>"
-        COMMENT "Signing ntm-client with ML-DSA-65 (scripts/sign-client.sh)"
+        COMMENT "Signing ntm-client (NTMSIG 2, linux-build key)"
         VERBATIM
     )
 endif()
@@ -368,6 +364,7 @@ if(NOT WIN32)
         tests/test_client_filelog.cpp
         src/client_filelog.cpp              # filelog impl for test binary (POSIX-only)
         tests/test_update_push.cpp
+        tests/test_trust.cpp
     )
     target_include_directories(ntm-tests PRIVATE src tests)
     target_compile_definitions(ntm-tests PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
