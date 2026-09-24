@@ -60,7 +60,7 @@ ntm_build_seed() {
 ntm_require_delegation() {
     [[ -f "$NTM_DELEGATION" ]] || ntm_die "delegation not found: $NTM_DELEGATION"
     if grep -q $'\r' "$NTM_DELEGATION"; then
-        ntm_die "$NTM_DELEGATION has CRLF line endings (EOL-converted checkout); root signatures cover the LF bytes. Re-checkout: git rm -rq --cached signing && git checkout -- signing  (see .gitattributes)"
+        ntm_die "$NTM_DELEGATION has CRLF line endings (EOL-converted checkout); root signatures cover the LF bytes. Re-checkout: git rm -rq --cached signing && git checkout HEAD -- signing  (see .gitattributes)"
     fi
     local valid=0 n
     for n in 1 2 3; do
