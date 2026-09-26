@@ -1,0 +1,2 @@
+# systemd-sysusers(8): system account for ntm-server (created by rpm at install).
+u ntm-server - "Network Traffic Monitor server" /var/lib/ntm-server /usr/sbin/nologin

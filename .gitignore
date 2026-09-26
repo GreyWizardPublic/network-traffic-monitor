@@ -76,3 +76,4 @@ coverage/
 
 # Misc OS noise
 Thumbs.db
+build-rpm/

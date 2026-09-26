@@ -1,0 +1,9 @@
+[ntm]
+name=Network Traffic Monitor (Code One) - Fedora $releasever - $basearch
+baseurl=https://dl.code1one.com/rpm/ntm/fedora/$releasever/$basearch/
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=https://dl.code1one.com/RPM-GPG-KEY-code1one
+metadata_expire=6h
+skip_if_unavailable=False

@@ -1,0 +1,2 @@
+# systemd-sysusers(8): system account for ntm-client (created by rpm at install).
+u ntmclient - "Network Traffic Monitor client" - /usr/sbin/nologin
